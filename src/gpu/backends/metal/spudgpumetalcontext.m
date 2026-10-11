@@ -101,6 +101,10 @@ static void spudgpumetal___internal_make_device_properties(
 	// SPUDGPU_MEMORY_KIND_DEVICE_MAPPABLE is Shared storage, which is the
 	// device's own memory only where that memory is the system's.
 	device->_properties.device_mappable_memory  = unified;
+	// MTLRenderPassDescriptor.renderTargetArrayLength, by Metal's feature
+	// set tables.
+	device->_properties.layered_rendering =
+	    [device->_device_mtl supportsFamily:MTLGPUFamilyApple5] || [device->_device_mtl supportsFamily:MTLGPUFamilyMac2];
 }
 
 static SPUDRESULT spudgpumetal___internal_create_command_queue_family(

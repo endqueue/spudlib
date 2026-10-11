@@ -210,8 +210,8 @@ at compile time; the table is at the top of `spudaudio.h`.
   each backend (plain `VkFence`s on Vulkan, since acquire can't take a
   timeline semaphore) and are not `spudgpu_fence`s: a submission reaches them
   through `spudgpu_submit_desc::swap_chain`, which is also all that
-  `spudgpu_submit_command_lists_synced` is. Written 2026-10-10, not compiled
-  on any backend. `spudgpu_semaphore` is still binary on Vulkan and a hidden
+  `spudgpu_submit_command_lists_synced` is. Written 2026-10-10, compiled
+  for Metal only. `spudgpu_semaphore` is still binary on Vulkan and a hidden
   counter on D3D12 and Metal.
 - **A buffer's memory is one `SPUDGPU_MEMORY_KIND`, a contract and not a
   set of Vulkan property bits.** `DEVICE`, `UPLOAD`, `READBACK` and
@@ -228,8 +228,8 @@ at compile time; the table is at the top of `spudaudio.h`.
   `DEVICE_MAPPABLE` is the one kind a device may lack, reported by
   `SPUDGPU_DEVICE_PROPERTIES::device_mappable_memory` and refused with
   `SPUDRESULT_GPU_MEMORY_KIND_NOT_SUPPORTED`; it has no `SPUDGPU_EXT_*`
-  macro because every backend implements it. Written 2026-10-10, not
-  compiled on any backend; D3D12's custom heap for it has never run.
+  macro because every backend implements it. Written 2026-10-10, compiled
+  for Metal only; D3D12's custom heap for it has never run.
 - **A buffer or image desc carries no flag only one API acts on.**
   `SPUDGPU_HEAP_FLAGS` (D3D12's heap flags under another name) and
   `SPUDGPU_RESOURCE_FLAGS` (one D3D12 resource flag) were removed on

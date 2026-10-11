@@ -420,6 +420,19 @@ typedef struct SPUDGPU_DEVICE_PROPERTIES {
 	 * `VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT`.
 	 */
 	bool device_mappable_memory;
+	/**
+	 * Whether a rendering pass can render to several layers at once, with
+	 * the vertex shader choosing the layer each primitive is drawn to. False
+	 * means spudgpu_rendering_begin_desc::layer_count must be 0 on this
+	 * device.
+	 *
+	 * Vulkan: `VkPhysicalDeviceVulkan12Features::shaderOutputLayer`, which
+	 * is then enabled on the device. D3D12:
+	 * `D3D12_FEATURE_DATA_D3D12_OPTIONS::VPAndRTArrayIndexFromAnyShaderFeedingRasterizerSupportedWithoutGSEmulation`,
+	 * false if the query fails. Metal: the device is in
+	 * `MTLGPUFamilyApple5` or `MTLGPUFamilyMac2`.
+	 */
+	bool layered_rendering;
 } SPUDGPU_DEVICE_PROPERTIES;
 
 /**
@@ -1412,11 +1425,14 @@ enum {
 	SPUDGPU_IMAGE_TYPE_NONE = 0,
 	/** One dimension: `height` and `depth` are 1. */
 	SPUDGPU_IMAGE_TYPE_1D   = 1 << 0,
-	/** Two dimensions: `depth` is 1. Also the type of a cube's image. */
+	/**
+	 * Two dimensions: `depth` is 1. Also the type of a cube's image: a cube
+	 * is not an image type but a way of viewing six layers of a 2D image
+	 * created with spudgpu_image_desc::cube_capable.
+	 */
 	SPUDGPU_IMAGE_TYPE_2D   = 1 << 1,
 	/** Three dimensions. */
 	SPUDGPU_IMAGE_TYPE_3D   = 1 << 2
-	// SPUDGPU_IMAGE_TYPE_CUBE = 1 << 3
 };
 
 /**
@@ -1592,6 +1608,21 @@ typedef struct spudgpu_image_desc {
 	 * full-resolution image data.
 	 */
 	uint32_t mip_levels;
+	/**
+	 * @brief Whether the image's layers can be viewed as the faces of cubes.
+	 *
+	 * Required for a view of SPUDGPU_IMAGE_VIEW_TYPE_CUBE or
+	 * SPUDGPU_IMAGE_VIEW_TYPE_CUBE_ARRAY, and it is the same rule on every
+	 * backend, though only one graphics API has to be told when the image is
+	 * created: a cube view of an image created without it is refused
+	 * everywhere. Such an image is SPUDGPU_IMAGE_TYPE_2D, has `width` equal
+	 * to `height`, and has `array_layers` a multiple of six, each six in a
+	 * row being the +X, -X, +Y, -Y, +Z and -Z faces of one cube. It is
+	 * otherwise an ordinary layered 2D image: one layer can still be viewed
+	 * as SPUDGPU_IMAGE_VIEW_TYPE_2D, to render a face, and several as
+	 * SPUDGPU_IMAGE_VIEW_TYPE_2D_ARRAY.
+	 */
+	bool cube_capable;
 #if _DEBUG
 	/** @brief A string identifier used for diagnostic tracking. */
 	const char *debug_name;
@@ -1619,6 +1650,11 @@ typedef struct spudgpu_image_desc {
  *         SPUDGPU_IMAGE_USAGE_NONE, or combines
  *         SPUDGPU_IMAGE_USAGE_TRANSIENT_ATTACHMENT with usages it does not
  *         allow.
+ * @retval SPUDRESULT_GPU_INVALID_IMAGE_TYPE `desc->cube_capable` is set and
+ *         `desc->type` is not SPUDGPU_IMAGE_TYPE_2D.
+ * @retval SPUDRESULT_DESC_INVALID_PARAMETERS `desc->cube_capable` is set and
+ *         `desc->width` is not `desc->height`, or `desc->array_layers` is not
+ *         a multiple of six.
  * @retval SPUDRESULT_GPU_INVALID_FORMAT `desc->format` is
  *         SPUDGPU_FORMAT_UNKNOWN.
  * @return Another SPUDRESULT if the backend fails, such as
@@ -1671,14 +1707,45 @@ enum {
 	SPUDGPU_IMAGE_VIEW_TYPE_2D         = 1 << 1,
 	/** A 3D image. */
 	SPUDGPU_IMAGE_VIEW_TYPE_3D         = 1 << 2,
-	/** Six layers of a 2D image, as the faces of a cube. */
+	/**
+	 * Six layers of a 2D image, as the faces of a cube. The image is
+	 * spudgpu_image_desc::cube_capable, and the view's range is exactly
+	 * layers 0 to 5: `base_array_layer` 0 and `array_layer_count` 6. One
+	 * cube out of several is reached with SPUDGPU_IMAGE_VIEW_TYPE_CUBE_ARRAY,
+	 * since not every graphics API can start a single cube's view at
+	 * another layer.
+	 */
 	SPUDGPU_IMAGE_VIEW_TYPE_CUBE       = 1 << 3,
 	/** Several layers of a 1D image. */
 	SPUDGPU_IMAGE_VIEW_TYPE_1D_ARRAY   = 1 << 4,
 	/** Several layers of a 2D image. */
 	SPUDGPU_IMAGE_VIEW_TYPE_2D_ARRAY   = 1 << 5,
-	/** A multiple of six layers of a 2D image, as an array of cubes. */
+	/**
+	 * A multiple of six layers of a 2D image, as an array of cubes. The
+	 * image is spudgpu_image_desc::cube_capable, and `array_layer_count` is
+	 * a multiple of six and not 0.
+	 */
 	SPUDGPU_IMAGE_VIEW_TYPE_CUBE_ARRAY = 1 << 6
+};
+
+/**
+ * @brief The aspects an image's format can have, for
+ * spudgpu_image_view_desc_subresource_range::aspect_mask.
+ *
+ * The values are `VkImageAspectFlagBits`' (Vulkan). D3D12 reaches the
+ * stencil as plane 1 of the resource through a view format of its own, and
+ * Metal through a view in a stencil pixel format.
+ */
+typedef uint64_t SPUDGPU_IMAGE_ASPECT;
+enum {
+	/** No aspect. Refused wherever an aspect mask is taken. */
+	SPUDGPU_IMAGE_ASPECT_NONE    = 0,
+	/** The color of a color format. */
+	SPUDGPU_IMAGE_ASPECT_COLOR   = 1,
+	/** The depth of a depth format, or of a depth and stencil format. */
+	SPUDGPU_IMAGE_ASPECT_DEPTH   = 2,
+	/** The stencil of a depth and stencil format. */
+	SPUDGPU_IMAGE_ASPECT_STENCIL = 4
 };
 
 /**
@@ -1690,11 +1757,29 @@ enum {
  */
 typedef struct spudgpu_image_view_desc_subresource_range {
 	/**
-	 * @brief Bitmask determining which structural aspect of the texture is
-	 * targeted.
+	 * @brief Which aspects of the image the range covers, as
+	 * SPUDGPU_IMAGE_ASPECT bits.
 	 *
-	 * Typically maps to flags like `COLOR`, `DEPTH`, or `STENCIL`. Tells the
-	 * driver whether to look at pixel data or depth/stencil metadata buffers.
+	 * For a view (spudgpu_create_image_view()) these rules hold on every
+	 * backend, whatever the graphics API underneath would also accept:
+	 *
+	 * - Never 0, and never an aspect the image's format lacks: a color
+	 *   format has SPUDGPU_IMAGE_ASPECT_COLOR alone, a depth format
+	 *   SPUDGPU_IMAGE_ASPECT_DEPTH alone, and a depth and stencil format
+	 *   SPUDGPU_IMAGE_ASPECT_DEPTH and SPUDGPU_IMAGE_ASPECT_STENCIL. A view
+	 *   that breaks this is refused.
+	 * - A view given to spudgpu_cmd_begin_rendering() as the depth/stencil
+	 *   attachment covers every aspect of its format.
+	 * - A view written into a descriptor set covers exactly one aspect. Of
+	 *   a depth and stencil format that is the depth, read as a float in
+	 *   the first component, or the stencil, read as an unsigned integer
+	 *   in the first component. What a shader reads through a view of both
+	 *   aspects is undefined.
+	 * - What a shader reads from the components after the first, through a
+	 *   depth or a stencil view, is undefined.
+	 *
+	 * So a depth and stencil image that is rendered to and sampled has a
+	 * view for each use.
 	 */
 	uint64_t aspect_mask;
 
@@ -1759,6 +1844,17 @@ typedef struct spudgpu_image_view_desc {
  * @retval SPUDRESULT_GPU_INVALID_IMAGE `image` is NULL.
  * @retval SPUDRESULT_NULL_DESC `desc` is NULL.
  * @retval SPUDRESULT_NULL_OUTPUT_PARAMETER `out_image_view` is NULL.
+ * @retval SPUDRESULT_GPU_INVALID_IMAGE_VIEW_TYPE `desc->type` is
+ *         SPUDGPU_IMAGE_VIEW_TYPE_CUBE or SPUDGPU_IMAGE_VIEW_TYPE_CUBE_ARRAY
+ *         and the image was not created with
+ *         spudgpu_image_desc::cube_capable.
+ * @retval SPUDRESULT_GPU_BUFFER_OR_IMAGE_VIEW_RANGE_OUT_OF_SCOPE `desc->type`
+ *         is SPUDGPU_IMAGE_VIEW_TYPE_CUBE and the range is not layers 0 to
+ *         5, or it is SPUDGPU_IMAGE_VIEW_TYPE_CUBE_ARRAY and
+ *         `array_layer_count` is 0 or not a multiple of six.
+ * @retval SPUDRESULT_DESC_INVALID_PARAMETERS
+ *         `desc->subresource_range.aspect_mask` is 0 or names an aspect the
+ *         image's format lacks.
  * @return Another SPUDRESULT if the backend fails, such as
  *         SPUDRESULT_OUT_OF_MEMORY or SPUDRESULT_API_SPECIFIC_FAILURE.
  *
@@ -1810,7 +1906,17 @@ enum {
 	 * says the image's contents need not be kept.
 	 */
 	SPUDGPU_IMAGE_LAYOUT_UNDEFINED                        = 0,
-	/** Usable for anything; what a storage image is read and written in. */
+	/**
+	 * What a storage image is read and written in through a storage slot.
+	 * That is all it promises: one graphics API lets an image in this layout
+	 * be used for anything, and another has no such state, so a caller that
+	 * samples it, renders to it or copies it moves it to the layout for
+	 * that first. For an image created without SPUDGPU_IMAGE_USAGE_STORAGE
+	 * it is only a layout with nothing in particular allowed.
+	 *
+	 * A barrier whose old and new layouts are both this is not a no-op: see
+	 * spudgpu_cmd_image_barrier().
+	 */
 	SPUDGPU_IMAGE_LAYOUT_GENERAL                          = 1,
 	/** Rendered into as a color attachment. */
 	SPUDGPU_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL         = 2,
@@ -1838,6 +1944,22 @@ enum {
  * Call before spudgpu_cmd_begin_rendering() to move a swap chain image from
  * UNDEFINED/PRESENT_SRC to COLOR_ATTACHMENT_OPTIMAL, and after
  * spudgpu_cmd_end_rendering() to move it back to PRESENT_SRC.
+ *
+ * Three rules hold on every backend, for this call and its two variants:
+ *
+ * - It moves every mip level and array layer of the image. To move some of
+ *   them, use spudgpu_cmd_image_barrier_subresource(); once that has left
+ *   them in different layouts, this call's `old_layout` can no longer be
+ *   true of all of them, and the caller moves each range from its own.
+ * - `old_layout` is the layout the image is in, or
+ *   SPUDGPU_IMAGE_LAYOUT_UNDEFINED to say its contents need not be kept.
+ * - A barrier from SPUDGPU_IMAGE_LAYOUT_GENERAL to
+ *   SPUDGPU_IMAGE_LAYOUT_GENERAL is not a no-op. It moves the image
+ *   nowhere and orders its accesses: every write a shader made to it
+ *   through a storage slot before the barrier is complete before any read
+ *   or write after it. It is the caller's to record between two draws or
+ *   dispatches when the second reads or overwrites what the first wrote.
+ *   A barrier between any other two equal layouts does nothing.
  *
  * @param[in] cmd        Command list being recorded.
  * @param[in] image      Image whose layout is changed.
@@ -4683,6 +4805,40 @@ typedef struct spudgpu_rendering_begin_desc {
 
 	/** Render area height in pixels. Usually the attachments' height. */
 	uint32_t height;
+
+	/**
+	 * Number of layers the pass renders to, or 0 for a pass that is not
+	 * layered.
+	 *
+	 * These rules hold on every backend, whatever the graphics API
+	 * underneath would also accept:
+	 *
+	 * - 0: every attachment's view covers one array layer, and every
+	 *   primitive is drawn to it. What a shader's layer output does is
+	 *   undefined.
+	 * - Not 0: SPUDGPU_DEVICE_PROPERTIES::layered_rendering is true for the
+	 *   device, and every attachment's view, depth/stencil included, is
+	 *   SPUDGPU_IMAGE_VIEW_TYPE_2D_ARRAY over one mip level and exactly
+	 *   this many array layers. 1 is a layered pass of one layer, not the
+	 *   same as 0.
+	 * - In a layered pass the vertex shader (or the mesh shader, per
+	 *   primitive) writes the layer a primitive is drawn to, counted from
+	 *   the view's first layer. A primitive whose layer is not written is
+	 *   drawn to layer 0; one written as this count or more is undefined.
+	 *   No other stage chooses the layer.
+	 * - A load operation of SPUDGPU_LOAD_OP_CLEAR clears every layer, and
+	 *   the store operation applies to every layer.
+	 * - The image layout each attachment must be in applies to every layer
+	 *   its view covers.
+	 *
+	 * Maps to `VkRenderingInfo::layerCount` (1 for a pass that is not
+	 * layered) and the `Layer` built-in (Vulkan), the array size of the
+	 * render target and depth stencil views and
+	 * `SV_RenderTargetArrayIndex` (D3D12), and
+	 * `MTLRenderPassDescriptor.renderTargetArrayLength` and
+	 * `[[render_target_array_index]]` (Metal).
+	 */
+	uint32_t layer_count;
 
 	/**
 	 * Set true only if a bundle (SPUDGPU_COMMAND_LIST_TYPE_BUNDLE, see

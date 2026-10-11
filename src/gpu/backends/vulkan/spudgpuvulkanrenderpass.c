@@ -36,6 +36,11 @@ static VkImageLayout spud_layout_to_vk(SPUDGPU_IMAGE_LAYOUT layout) {
 // so callers don't have to spell it out every time.
 static VkAccessFlags layout_to_access(VkImageLayout layout) {
 	switch (layout) {
+	// The storage image layout (spudgpu.h): a shader reads and writes it.
+	// With no access here a barrier into, out of or within GENERAL would
+	// order nothing, and GENERAL to GENERAL is the header's ordering barrier.
+	case VK_IMAGE_LAYOUT_GENERAL:
+		return VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
 	case VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL:
 		return VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
 	case VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL:
@@ -55,6 +60,10 @@ static VkAccessFlags layout_to_access(VkImageLayout layout) {
 
 static VkPipelineStageFlags layout_to_stage(VkImageLayout layout) {
 	switch (layout) {
+	// The stages a storage slot can be used from, as
+	// spudgpu_cmd_pipeline_barrier uses for SPUDGPU_RESOURCE_STATE_UNORDERED_ACCESS.
+	case VK_IMAGE_LAYOUT_GENERAL:
+		return VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_VERTEX_SHADER_BIT;
 	case VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL:
 		return VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
 	case VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL:
@@ -157,10 +166,11 @@ void spudgpu_cmd_image_barrier(
 
 	VkImageSubresourceRange range = {0};
 	range.aspectMask              = spud_format_aspect(image->_format_vk);
+	// Every mip level and array layer: the whole image, as the header says.
 	range.baseMipLevel            = 0;
-	range.levelCount              = 1;
+	range.levelCount              = VK_REMAINING_MIP_LEVELS;
 	range.baseArrayLayer          = 0;
-	range.layerCount              = 1;
+	range.layerCount              = VK_REMAINING_ARRAY_LAYERS;
 
 	spudgpuvulkan___cmd_image_barrier_raw(cmd->_command_buffer_vk, image->_image_vk, vk_old, vk_new, range);
 }
@@ -185,10 +195,11 @@ void spudgpu_cmd_image_barrier_view(
 
 	VkImageSubresourceRange range = {0};
 	range.aspectMask              = spud_format_aspect(view->_desc.parent_image->_format_vk);
+	// Every mip level and array layer: the whole image, as the header says.
 	range.baseMipLevel            = 0;
-	range.levelCount              = 1;
+	range.levelCount              = VK_REMAINING_MIP_LEVELS;
 	range.baseArrayLayer          = 0;
-	range.layerCount              = 1;
+	range.layerCount              = VK_REMAINING_ARRAY_LAYERS;
 
 	// Pull the raw VkImage out of the parent image stored in the view struct.
 	spudgpuvulkan___cmd_image_barrier_raw(cmd->_command_buffer_vk, view->_desc.parent_image->_image_vk, vk_old, vk_new, range);
@@ -449,7 +460,8 @@ void spudgpu_cmd_begin_rendering(
 	rendering_info.renderArea.offset.y      = 0;
 	rendering_info.renderArea.extent.width  = desc->width;
 	rendering_info.renderArea.extent.height = desc->height;
-	rendering_info.layerCount               = 1;
+	// A pass that is not layered is one layer to Vulkan.
+	rendering_info.layerCount               = desc->layer_count ? desc->layer_count : 1;
 	rendering_info.colorAttachmentCount     = color_count;
 	rendering_info.pColorAttachments        = color_infos;
 	rendering_info.pDepthAttachment         = has_depth ? &depth_info : NULL;
@@ -468,6 +480,7 @@ void spudgpu_cmd_begin_rendering(
     // take the vkCmdClearAttachments fast path below instead of nesting a
     // redundant (and invalid) begin/end pair.
     cmd->_rendering_active = true;
+    cmd->_bound_layer_count = rendering_info.layerCount;
     cmd->_bound_color_attachment_count = color_count;
     for (uint32_t i = 0; i < color_count; ++i)
         cmd->_bound_color_attachments[i] = color_infos[i].imageView;
@@ -584,7 +597,8 @@ void spudgpu_cmd_clear_color_attachment(
             VkClearRect clear_rect = {0};
             clear_rect.rect.extent.width = width;
             clear_rect.rect.extent.height = height;
-            clear_rect.layerCount = 1;
+            // Every layer of the pass, as a clear load operation does.
+            clear_rect.layerCount = cmd->_bound_layer_count;
 
             vkCmdClearAttachments(cmd->_command_buffer_vk, 1, &clear_attachment, 1, &clear_rect);
             return;
@@ -644,7 +658,8 @@ void spudgpu_cmd_clear_depth_attachment(
             VkClearRect clear_rect = {0};
             clear_rect.rect.extent.width = width;
             clear_rect.rect.extent.height = height;
-            clear_rect.layerCount = 1;
+            // Every layer of the pass, as a clear load operation does.
+            clear_rect.layerCount = cmd->_bound_layer_count;
 
             vkCmdClearAttachments(cmd->_command_buffer_vk, 1, &clear_attachment, 1, &clear_rect);
         }

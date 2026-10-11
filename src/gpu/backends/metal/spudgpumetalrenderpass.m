@@ -341,6 +341,8 @@ void spudgpu_cmd_begin_rendering(
 
 	pass_desc.renderTargetWidth  = desc->width;
 	pass_desc.renderTargetHeight = desc->height;
+	// 0 is Metal's own value for a pass that is not layered.
+	pass_desc.renderTargetArrayLength = desc->layer_count;
 
 	// -renderCommandEncoderWithDescriptor: returns an autoreleased encoder
 	// (same as -nextDrawable in spudgpumetalswapchain.m) - retain it so it

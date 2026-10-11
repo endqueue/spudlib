@@ -176,6 +176,19 @@ VkFormat convert_spud_to_vulkan_format(SPUDGPU_FORMAT format) {
 }
 
 
+// Whether a vertex shader may write the Layer built-in on this device
+// (SPUDGPU_DEVICE_PROPERTIES::layered_rendering). Asked twice: once to
+// enable the feature when the logical device is created, once to report it.
+static bool spudgpuvulkan___internal_shader_output_layer(VkPhysicalDevice physicalDevice) {
+    VkPhysicalDeviceVulkan12Features available = {0};
+    available.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
+    VkPhysicalDeviceFeatures2 features2 = {0};
+    features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+    features2.pNext = &available;
+    vkGetPhysicalDeviceFeatures2(physicalDevice, &features2);
+    return available.shaderOutputLayer == VK_TRUE;
+}
+
 static VkDevice spudgpuvulkan___initialize_vk_logical_device_internal(
     spudgpu_device_vulkan *device) {
     VkDevice result = VK_NULL_HANDLE;
@@ -236,6 +249,10 @@ static VkDevice spudgpuvulkan___initialize_vk_logical_device_internal(
     vk12Features.bufferDeviceAddress = VK_TRUE;
     // spudgpu_fence is a timeline semaphore (spudgpuvulkansync.c).
     vk12Features.timelineSemaphore = VK_TRUE;
+    // Layered rendering with the layer chosen in the vertex shader. Not
+    // every device has it, so it is enabled only where it is reported.
+    vk12Features.shaderOutputLayer =
+        spudgpuvulkan___internal_shader_output_layer(physicalDevice) ? VK_TRUE : VK_FALSE;
 
     // Bindless / descriptor indexing (see spudgpuvulkandescriptors.c's
     // bindless section) — core in 1.2, no extension needed.
@@ -537,6 +554,9 @@ static void spudgpuvulkan___internal_make_device_properties(
     }
     device->_properties.device_mappable_memory =
         device->_properties.unified_memory && deviceLocalHostVisibleType;
+
+    device->_properties.layered_rendering =
+        spudgpuvulkan___internal_shader_output_layer(device->_physical_device_vk);
 }
 
 SPUDRESULT spudgpu_enumerate_devices(

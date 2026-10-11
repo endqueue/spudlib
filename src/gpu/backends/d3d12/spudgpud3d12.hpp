@@ -285,6 +285,14 @@ typedef struct spudgpu_image_t {
 	// updated after every barrier -- never re-derived from a static
 	// usage-based guess.
 	D3D12_RESOURCE_STATES _current_state;
+	// Empty while every subresource is in _current_state, which is nearly
+	// always. Once spudgpu_cmd_image_barrier_subresource has moved part of
+	// the image somewhere else, it holds the state of each (mip, layer),
+	// at index mip + layer * mip_levels, and _current_state is not read
+	// until the states agree again and this is emptied. A single state for
+	// the whole image can't describe mip N in one layout and mip N + 1 in
+	// another, which is what that call exists for.
+	std::vector<D3D12_RESOURCE_STATES> _subresource_states;
 } spudgpu_image_d3d12;
 
 typedef struct spudgpu_image_view_t {
@@ -293,7 +301,14 @@ typedef struct spudgpu_image_view_t {
 #endif
 	spudgpu_image_d3d12 *_image;
 	spudgpu_image_view_desc _desc;
+	// What a render pass reads (_rtv, _dsv), and what
+	// spudgpu_get_d3d12_image_view hands out: one desc, the first of depth
+	// stencil, render target, unordered access and shader resource that the
+	// image's usage allows.
 	SPUDGPU_D3D12_IMAGE_VIEW _d3d_view_desc;
+	// What a descriptor write reads, whatever else the image is used for.
+	D3D12_SHADER_RESOURCE_VIEW_DESC _d3d_srv;
+	D3D12_UNORDERED_ACCESS_VIEW_DESC _d3d_uav;
 } spudgpu_image_view_d3d12;
 
 typedef struct spudgpu_shader_module_t {

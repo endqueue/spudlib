@@ -3,6 +3,167 @@
 
 #include "spudgpud3d12.hpp"
 
+// The aspects [format] has (SPUDGPU_IMAGE_ASPECT). The same table in every
+// backend: it decides which views spudgpu_create_image_view refuses.
+static uint64_t spudgpu_d3d12_format_aspects(SPUDGPU_FORMAT format) {
+	switch (format) {
+	case SPUDGPU_FORMAT_D24_UNORM_S8_UINT:
+	case SPUDGPU_FORMAT_D32_FLOAT_S8X24_UINT:
+		return SPUDGPU_IMAGE_ASPECT_DEPTH | SPUDGPU_IMAGE_ASPECT_STENCIL;
+	case SPUDGPU_FORMAT_D16_UNORM:
+	case SPUDGPU_FORMAT_D32_FLOAT:
+		return SPUDGPU_IMAGE_ASPECT_DEPTH;
+	default:
+		return SPUDGPU_IMAGE_ASPECT_COLOR;
+	}
+}
+
+// The format a shader reads [aspect_mask] of an image of [format] in. A
+// depth format is not a shader resource format: each has a readable one in
+// its family, and a second for the stencil.
+static DXGI_FORMAT spudgpu_d3d12_srv_format(SPUDGPU_FORMAT format, uint64_t aspect_mask) {
+	const bool stencil = aspect_mask == SPUDGPU_IMAGE_ASPECT_STENCIL;
+	switch (format) {
+	case SPUDGPU_FORMAT_D16_UNORM:
+		return DXGI_FORMAT_R16_UNORM;
+	case SPUDGPU_FORMAT_D32_FLOAT:
+		return DXGI_FORMAT_R32_FLOAT;
+	case SPUDGPU_FORMAT_D24_UNORM_S8_UINT:
+		return stencil ? DXGI_FORMAT_X24_TYPELESS_G8_UINT : DXGI_FORMAT_R24_UNORM_X8_TYPELESS;
+	case SPUDGPU_FORMAT_D32_FLOAT_S8X24_UINT:
+		return stencil ? DXGI_FORMAT_X32_TYPELESS_G8X24_UINT : DXGI_FORMAT_R32_FLOAT_X8X24_TYPELESS;
+	default:
+		return spudgpu_d3d12_get_dxgi_format(format);
+	}
+}
+
+// The typeless format of a depth format's family, or [format] itself for any
+// other. See spudgpu_d3d12_create_resource_desc_from_image.
+static DXGI_FORMAT spudgpu_d3d12_depth_typeless_format(DXGI_FORMAT format) {
+	switch (format) {
+	case DXGI_FORMAT_D16_UNORM:
+		return DXGI_FORMAT_R16_TYPELESS;
+	case DXGI_FORMAT_D32_FLOAT:
+		return DXGI_FORMAT_R32_TYPELESS;
+	case DXGI_FORMAT_D24_UNORM_S8_UINT:
+		return DXGI_FORMAT_R24G8_TYPELESS;
+	case DXGI_FORMAT_D32_FLOAT_S8X24_UINT:
+		return DXGI_FORMAT_R32G8X24_TYPELESS;
+	default:
+		return format;
+	}
+}
+
+// Fills the unordered access view desc of [desc] over an image of [format].
+static void spudgpu_d3d12_fill_uav(
+    D3D12_UNORDERED_ACCESS_VIEW_DESC &uav,
+    SPUDGPU_FORMAT format,
+    const spudgpu_image_view_desc *desc) {
+	const spudgpu_image_view_desc_subresource_range &sr = desc->subresource_range;
+	uav.Format = spudgpu_d3d12_get_dxgi_format(format);
+	switch (desc->type) {
+	case SPUDGPU_IMAGE_VIEW_TYPE_1D:
+		uav.ViewDimension      = D3D12_UAV_DIMENSION_TEXTURE1D;
+		uav.Texture1D.MipSlice = (UINT)sr.base_mip_level;
+		break;
+	case SPUDGPU_IMAGE_VIEW_TYPE_1D_ARRAY:
+		uav.ViewDimension                  = D3D12_UAV_DIMENSION_TEXTURE1DARRAY;
+		uav.Texture1DArray.MipSlice        = (UINT)sr.base_mip_level;
+		uav.Texture1DArray.FirstArraySlice = (UINT)sr.base_array_layer;
+		uav.Texture1DArray.ArraySize       = (UINT)sr.array_layer_count;
+		break;
+	case SPUDGPU_IMAGE_VIEW_TYPE_3D:
+		uav.ViewDimension         = D3D12_UAV_DIMENSION_TEXTURE3D;
+		uav.Texture3D.MipSlice    = (UINT)sr.base_mip_level;
+		uav.Texture3D.FirstWSlice = (UINT)sr.base_array_layer;
+		uav.Texture3D.WSize       = (UINT)sr.array_layer_count;
+		break;
+	case SPUDGPU_IMAGE_VIEW_TYPE_2D_ARRAY:
+		uav.ViewDimension                  = D3D12_UAV_DIMENSION_TEXTURE2DARRAY;
+		uav.Texture2DArray.MipSlice        = (UINT)sr.base_mip_level;
+		uav.Texture2DArray.FirstArraySlice = (UINT)sr.base_array_layer;
+		uav.Texture2DArray.ArraySize       = (UINT)sr.array_layer_count;
+		break;
+	default:
+		uav.ViewDimension      = D3D12_UAV_DIMENSION_TEXTURE2D;
+		uav.Texture2D.MipSlice = (UINT)sr.base_mip_level;
+		break;
+	}
+}
+
+// Fills the shader resource view desc of [desc] over an image of [format]:
+// the format and the plane are the ones its aspect is read through.
+static void spudgpu_d3d12_fill_srv(
+    D3D12_SHADER_RESOURCE_VIEW_DESC &srv,
+    SPUDGPU_FORMAT format,
+    const spudgpu_image_view_desc *desc) {
+	const spudgpu_image_view_desc_subresource_range &sr = desc->subresource_range;
+	const bool stencil                                  = sr.aspect_mask == SPUDGPU_IMAGE_ASPECT_STENCIL;
+	const UINT plane                                    = stencil ? 1 : 0;
+	srv.Format                  = spudgpu_d3d12_srv_format(format, sr.aspect_mask);
+	// The stencil is the second component of its view format. It is
+	// handed to the shader as the first, where spudgpu.h says a stencil view
+	// is read.
+	srv.Shader4ComponentMapping = stencil ? D3D12_ENCODE_SHADER_4_COMPONENT_MAPPING(
+	                                            D3D12_SHADER_COMPONENT_MAPPING_FROM_MEMORY_COMPONENT_1,
+	                                            D3D12_SHADER_COMPONENT_MAPPING_FORCE_VALUE_0,
+	                                            D3D12_SHADER_COMPONENT_MAPPING_FORCE_VALUE_0,
+	                                            D3D12_SHADER_COMPONENT_MAPPING_FORCE_VALUE_1)
+	                                      : D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+	switch (desc->type) {
+	case SPUDGPU_IMAGE_VIEW_TYPE_1D:
+		srv.ViewDimension                 = D3D12_SRV_DIMENSION_TEXTURE1D;
+		srv.Texture1D.MostDetailedMip     = (UINT)sr.base_mip_level;
+		srv.Texture1D.MipLevels           = (UINT)sr.mip_level_count;
+		srv.Texture1D.ResourceMinLODClamp = 0.0f;
+		break;
+	case SPUDGPU_IMAGE_VIEW_TYPE_1D_ARRAY:
+		srv.ViewDimension                      = D3D12_SRV_DIMENSION_TEXTURE1DARRAY;
+		srv.Texture1DArray.MostDetailedMip     = (UINT)sr.base_mip_level;
+		srv.Texture1DArray.MipLevels           = (UINT)sr.mip_level_count;
+		srv.Texture1DArray.FirstArraySlice     = (UINT)sr.base_array_layer;
+		srv.Texture1DArray.ArraySize           = (UINT)sr.array_layer_count;
+		srv.Texture1DArray.ResourceMinLODClamp = 0.0f;
+		break;
+	case SPUDGPU_IMAGE_VIEW_TYPE_3D:
+		srv.ViewDimension                 = D3D12_SRV_DIMENSION_TEXTURE3D;
+		srv.Texture3D.MostDetailedMip     = (UINT)sr.base_mip_level;
+		srv.Texture3D.MipLevels           = (UINT)sr.mip_level_count;
+		srv.Texture3D.ResourceMinLODClamp = 0.0f;
+		break;
+	case SPUDGPU_IMAGE_VIEW_TYPE_CUBE:
+		srv.ViewDimension                   = D3D12_SRV_DIMENSION_TEXTURECUBE;
+		srv.TextureCube.MostDetailedMip     = (UINT)sr.base_mip_level;
+		srv.TextureCube.MipLevels           = (UINT)sr.mip_level_count;
+		srv.TextureCube.ResourceMinLODClamp = 0.0f;
+		break;
+	case SPUDGPU_IMAGE_VIEW_TYPE_2D_ARRAY:
+		srv.ViewDimension                       = D3D12_SRV_DIMENSION_TEXTURE2DARRAY;
+		srv.Texture2DArray.MostDetailedMip      = (UINT)sr.base_mip_level;
+		srv.Texture2DArray.MipLevels            = (UINT)sr.mip_level_count;
+		srv.Texture2DArray.FirstArraySlice      = (UINT)sr.base_array_layer;
+		srv.Texture2DArray.ArraySize            = (UINT)sr.array_layer_count;
+		srv.Texture2DArray.PlaneSlice           = plane;
+		srv.Texture2DArray.ResourceMinLODClamp  = 0.0f;
+		break;
+	case SPUDGPU_IMAGE_VIEW_TYPE_CUBE_ARRAY:
+		srv.ViewDimension                          = D3D12_SRV_DIMENSION_TEXTURECUBEARRAY;
+		srv.TextureCubeArray.MostDetailedMip       = (UINT)sr.base_mip_level;
+		srv.TextureCubeArray.MipLevels             = (UINT)sr.mip_level_count;
+		srv.TextureCubeArray.First2DArrayFace      = (UINT)sr.base_array_layer;
+		srv.TextureCubeArray.NumCubes              = (UINT)(sr.array_layer_count / 6);
+		srv.TextureCubeArray.ResourceMinLODClamp   = 0.0f;
+		break;
+	default:
+		srv.ViewDimension                  = D3D12_SRV_DIMENSION_TEXTURE2D;
+		srv.Texture2D.MostDetailedMip      = (UINT)sr.base_mip_level;
+		srv.Texture2D.MipLevels            = (UINT)sr.mip_level_count;
+		srv.Texture2D.PlaneSlice           = plane;
+		srv.Texture2D.ResourceMinLODClamp  = 0.0f;
+		break;
+	}
+}
+
 static SPUDRESULT spudgpu_d3d12_create_resource_desc_from_image(
     const spudgpu_image_desc *desc,
     D3D12_RESOURCE_DESC *out_d3d_resource_desc) {
@@ -13,6 +174,12 @@ static SPUDRESULT spudgpu_d3d12_create_resource_desc_from_image(
 	D3D12_RESOURCE_FLAGS d3dResourceFlags =
 	    spudgpu_d3d12_get_image_resource_flags(desc->usage);
 	DXGI_FORMAT dxgiFmt = spudgpu_d3d12_get_dxgi_format(desc->format);
+	// A depth image that a shader also reads is created in the typeless
+	// format of its family, so that both a depth stencil view (in the depth
+	// format) and a shader resource view (in the family's readable format)
+	// can be made of it. The clear value and the views keep the typed one.
+	if (desc->usage & SPUDGPU_IMAGE_USAGE_SAMPLED)
+		dxgiFmt = spudgpu_d3d12_depth_typeless_format(dxgiFmt);
 	CD3DX12_RESOURCE_DESC result;
 	switch (desc->type) {
 	case SPUDGPU_IMAGE_TYPE_1D:
@@ -75,6 +242,15 @@ SPUDRESULT spudgpu_create_image(
 		                   SPUDGPU_IMAGE_USAGE_TRANSFER_SRC | SPUDGPU_IMAGE_USAGE_TRANSFER_DST |
 		                   SPUDGPU_IMAGE_USAGE_PRESENTABLE))
 			return SPUDRESULT_GPU_INVALID_IMAGE_USAGE;
+	}
+	// spudgpu_image_desc::cube_capable's contract (see spudgpu.h) is the
+	// same on every backend, though only Vulkan acts on it at creation: a
+	// D3D12 cube is a view of a Texture2D with six array slices.
+	if (desc->cube_capable) {
+		if (desc->type != SPUDGPU_IMAGE_TYPE_2D)
+			return SPUDRESULT_GPU_INVALID_IMAGE_TYPE;
+		if (desc->width != desc->height || desc->array_layers % 6 != 0)
+			return SPUDRESULT_DESC_INVALID_PARAMETERS;
 	}
 	if (desc->format == SPUDGPU_FORMAT_UNKNOWN)
 		return SPUDRESULT_GPU_INVALID_FORMAT;
@@ -168,6 +344,24 @@ SPUDRESULT spudgpu_create_image_view(
 		return SPUDRESULT_NULL_DESC;
 	if (!out_image_view)
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
+	// The cube view rules of spudgpu.h, the same on every backend. The
+	// range rule for a single cube is this API's: a TEXTURECUBE view has no
+	// first face to give, so it is always array slices 0 to 5.
+	if (desc->type == SPUDGPU_IMAGE_VIEW_TYPE_CUBE || desc->type == SPUDGPU_IMAGE_VIEW_TYPE_CUBE_ARRAY) {
+		if (!image->_desc.cube_capable)
+			return SPUDRESULT_GPU_INVALID_IMAGE_VIEW_TYPE;
+		if (desc->type == SPUDGPU_IMAGE_VIEW_TYPE_CUBE &&
+		    (desc->subresource_range.base_array_layer != 0 || desc->subresource_range.array_layer_count != 6))
+			return SPUDRESULT_GPU_BUFFER_OR_IMAGE_VIEW_RANGE_OUT_OF_SCOPE;
+		if (desc->type == SPUDGPU_IMAGE_VIEW_TYPE_CUBE_ARRAY &&
+		    (desc->subresource_range.array_layer_count == 0 || desc->subresource_range.array_layer_count % 6 != 0))
+			return SPUDRESULT_GPU_BUFFER_OR_IMAGE_VIEW_RANGE_OUT_OF_SCOPE;
+	}
+	// The aspect rule of spudgpu.h, the same on every backend.
+	if (desc->subresource_range.aspect_mask == SPUDGPU_IMAGE_ASPECT_NONE)
+		return SPUDRESULT_DESC_INVALID_PARAMETERS;
+	if (desc->subresource_range.aspect_mask & ~spudgpu_d3d12_format_aspects(image->_desc.format))
+		return SPUDRESULT_DESC_INVALID_PARAMETERS;
 
 	spudgpu_image_view_d3d12 *pResult = (spudgpu_image_view_d3d12 *)calloc(
 	    1, sizeof(spudgpu_image_view_d3d12));
@@ -238,93 +432,16 @@ SPUDRESULT spudgpu_create_image_view(
 			break;
 		}
 	} else if (usage & SPUDGPU_IMAGE_USAGE_STORAGE) {
-		D3D12_UNORDERED_ACCESS_VIEW_DESC &uav = pResult->_d3d_view_desc._uav;
-		uav.Format = dxgiFmt;
-		switch (desc->type) {
-		case SPUDGPU_IMAGE_VIEW_TYPE_1D:
-			uav.ViewDimension      = D3D12_UAV_DIMENSION_TEXTURE1D;
-			uav.Texture1D.MipSlice = (UINT)sr.base_mip_level;
-			break;
-		case SPUDGPU_IMAGE_VIEW_TYPE_1D_ARRAY:
-			uav.ViewDimension                  = D3D12_UAV_DIMENSION_TEXTURE1DARRAY;
-			uav.Texture1DArray.MipSlice        = (UINT)sr.base_mip_level;
-			uav.Texture1DArray.FirstArraySlice = (UINT)sr.base_array_layer;
-			uav.Texture1DArray.ArraySize       = (UINT)sr.array_layer_count;
-			break;
-		case SPUDGPU_IMAGE_VIEW_TYPE_3D:
-			uav.ViewDimension         = D3D12_UAV_DIMENSION_TEXTURE3D;
-			uav.Texture3D.MipSlice    = (UINT)sr.base_mip_level;
-			uav.Texture3D.FirstWSlice = (UINT)sr.base_array_layer;
-			uav.Texture3D.WSize       = (UINT)sr.array_layer_count;
-			break;
-		case SPUDGPU_IMAGE_VIEW_TYPE_2D_ARRAY:
-			uav.ViewDimension                  = D3D12_UAV_DIMENSION_TEXTURE2DARRAY;
-			uav.Texture2DArray.MipSlice        = (UINT)sr.base_mip_level;
-			uav.Texture2DArray.FirstArraySlice = (UINT)sr.base_array_layer;
-			uav.Texture2DArray.ArraySize       = (UINT)sr.array_layer_count;
-			break;
-		default:
-			uav.ViewDimension      = D3D12_UAV_DIMENSION_TEXTURE2D;
-			uav.Texture2D.MipSlice = (UINT)sr.base_mip_level;
-			break;
-		}
+		spudgpu_d3d12_fill_uav(pResult->_d3d_view_desc._uav, image->_desc.format, desc);
 	} else {
-		D3D12_SHADER_RESOURCE_VIEW_DESC &srv = pResult->_d3d_view_desc._srv;
-		srv.Format                  = dxgiFmt;
-		srv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-		switch (desc->type) {
-		case SPUDGPU_IMAGE_VIEW_TYPE_1D:
-			srv.ViewDimension                 = D3D12_SRV_DIMENSION_TEXTURE1D;
-			srv.Texture1D.MostDetailedMip     = (UINT)sr.base_mip_level;
-			srv.Texture1D.MipLevels           = (UINT)sr.mip_level_count;
-			srv.Texture1D.ResourceMinLODClamp = 0.0f;
-			break;
-		case SPUDGPU_IMAGE_VIEW_TYPE_1D_ARRAY:
-			srv.ViewDimension                      = D3D12_SRV_DIMENSION_TEXTURE1DARRAY;
-			srv.Texture1DArray.MostDetailedMip     = (UINT)sr.base_mip_level;
-			srv.Texture1DArray.MipLevels           = (UINT)sr.mip_level_count;
-			srv.Texture1DArray.FirstArraySlice     = (UINT)sr.base_array_layer;
-			srv.Texture1DArray.ArraySize           = (UINT)sr.array_layer_count;
-			srv.Texture1DArray.ResourceMinLODClamp = 0.0f;
-			break;
-		case SPUDGPU_IMAGE_VIEW_TYPE_3D:
-			srv.ViewDimension                 = D3D12_SRV_DIMENSION_TEXTURE3D;
-			srv.Texture3D.MostDetailedMip     = (UINT)sr.base_mip_level;
-			srv.Texture3D.MipLevels           = (UINT)sr.mip_level_count;
-			srv.Texture3D.ResourceMinLODClamp = 0.0f;
-			break;
-		case SPUDGPU_IMAGE_VIEW_TYPE_CUBE:
-			srv.ViewDimension                   = D3D12_SRV_DIMENSION_TEXTURECUBE;
-			srv.TextureCube.MostDetailedMip     = (UINT)sr.base_mip_level;
-			srv.TextureCube.MipLevels           = (UINT)sr.mip_level_count;
-			srv.TextureCube.ResourceMinLODClamp = 0.0f;
-			break;
-		case SPUDGPU_IMAGE_VIEW_TYPE_2D_ARRAY:
-			srv.ViewDimension                       = D3D12_SRV_DIMENSION_TEXTURE2DARRAY;
-			srv.Texture2DArray.MostDetailedMip      = (UINT)sr.base_mip_level;
-			srv.Texture2DArray.MipLevels            = (UINT)sr.mip_level_count;
-			srv.Texture2DArray.FirstArraySlice      = (UINT)sr.base_array_layer;
-			srv.Texture2DArray.ArraySize            = (UINT)sr.array_layer_count;
-			srv.Texture2DArray.PlaneSlice           = 0;
-			srv.Texture2DArray.ResourceMinLODClamp  = 0.0f;
-			break;
-		case SPUDGPU_IMAGE_VIEW_TYPE_CUBE_ARRAY:
-			srv.ViewDimension                          = D3D12_SRV_DIMENSION_TEXTURECUBEARRAY;
-			srv.TextureCubeArray.MostDetailedMip       = (UINT)sr.base_mip_level;
-			srv.TextureCubeArray.MipLevels             = (UINT)sr.mip_level_count;
-			srv.TextureCubeArray.First2DArrayFace      = (UINT)sr.base_array_layer;
-			srv.TextureCubeArray.NumCubes              = (UINT)(sr.array_layer_count / 6);
-			srv.TextureCubeArray.ResourceMinLODClamp   = 0.0f;
-			break;
-		default:
-			srv.ViewDimension                  = D3D12_SRV_DIMENSION_TEXTURE2D;
-			srv.Texture2D.MostDetailedMip      = (UINT)sr.base_mip_level;
-			srv.Texture2D.MipLevels            = (UINT)sr.mip_level_count;
-			srv.Texture2D.PlaneSlice           = 0;
-			srv.Texture2D.ResourceMinLODClamp  = 0.0f;
-			break;
-		}
+		spudgpu_d3d12_fill_srv(pResult->_d3d_view_desc._srv, image->_desc.format, desc);
 	}
+	// The view descs a descriptor write reads. An image with several usages
+	// (rendered to and sampled, or sampled and written as a storage image)
+	// has one view object for all of them, and _d3d_view_desc above is a
+	// union that holds only the first that applies.
+	spudgpu_d3d12_fill_srv(pResult->_d3d_srv, image->_desc.format, desc);
+	spudgpu_d3d12_fill_uav(pResult->_d3d_uav, image->_desc.format, desc);
 
 	*out_image_view = pResult;
     return SPUD_SUCCESS;

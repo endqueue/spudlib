@@ -117,6 +117,13 @@ SPUDRESULT spudgpu_create_image(
                                 SPUDGPU_IMAGE_USAGE_PRESENTABLE))
                 return SPUDRESULT_GPU_INVALID_IMAGE_USAGE;
         }
+        // spudgpu_image_desc::cube_capable's contract (see spudgpu.h) is the
+        // same on every backend, though only Vulkan acts on it at creation.
+        if (desc->cube_capable) {
+            if (desc->type != SPUDGPU_IMAGE_TYPE_2D) return SPUDRESULT_GPU_INVALID_IMAGE_TYPE;
+            if (desc->width != desc->height || desc->array_layers % 6 != 0)
+                return SPUDRESULT_DESC_INVALID_PARAMETERS;
+        }
         if (desc->format == SPUDGPU_FORMAT_UNKNOWN) return SPUDRESULT_GPU_INVALID_FORMAT;
     }
 
@@ -134,7 +141,10 @@ SPUDRESULT spudgpu_create_image(
     VkImageCreateInfo imageInfo = {0};
     imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
     imageInfo.pNext = NULL;
-    imageInfo.flags = 0;
+    // A cube view can only be made of an image created with this bit. It is
+    // the one thing here the caller's cube_capable changes: Vulkan is the
+    // API that has to be told at creation.
+    imageInfo.flags = result._desc.cube_capable ? VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT : 0;
     imageInfo.mipLevels = result._desc.mip_levels;
     imageInfo.arrayLayers = result._desc.array_layers;
     imageInfo.format = result._format_vk;
@@ -232,6 +242,21 @@ void spudgpu_destroy_image(
     free(image);
 }
 
+// The aspects [format] has (SPUDGPU_IMAGE_ASPECT). The same table in every
+// backend: it decides which views spudgpu_create_image_view refuses.
+static uint64_t spudgpuvulkan___internal_format_aspects(SPUDGPU_FORMAT format) {
+    switch (format) {
+    case SPUDGPU_FORMAT_D24_UNORM_S8_UINT:
+    case SPUDGPU_FORMAT_D32_FLOAT_S8X24_UINT:
+        return SPUDGPU_IMAGE_ASPECT_DEPTH | SPUDGPU_IMAGE_ASPECT_STENCIL;
+    case SPUDGPU_FORMAT_D16_UNORM:
+    case SPUDGPU_FORMAT_D32_FLOAT:
+        return SPUDGPU_IMAGE_ASPECT_DEPTH;
+    default:
+        return SPUDGPU_IMAGE_ASPECT_COLOR;
+    }
+}
+
 SPUDRESULT spudgpu_create_image_view(
     spudgpu_image image,
     const spudgpu_image_view_desc *desc,
@@ -239,6 +264,20 @@ SPUDRESULT spudgpu_create_image_view(
     if (!image) return SPUDRESULT_GPU_INVALID_IMAGE;
     if (!desc) return SPUDRESULT_NULL_DESC;
     if (!out_image_view) return SPUDRESULT_NULL_OUTPUT_PARAMETER;
+    // The cube view rules of spudgpu.h, the same on every backend.
+    if (desc->type == SPUDGPU_IMAGE_VIEW_TYPE_CUBE || desc->type == SPUDGPU_IMAGE_VIEW_TYPE_CUBE_ARRAY) {
+        if (!image->_desc.cube_capable) return SPUDRESULT_GPU_INVALID_IMAGE_VIEW_TYPE;
+        if (desc->type == SPUDGPU_IMAGE_VIEW_TYPE_CUBE &&
+            (desc->subresource_range.base_array_layer != 0 || desc->subresource_range.array_layer_count != 6))
+            return SPUDRESULT_GPU_BUFFER_OR_IMAGE_VIEW_RANGE_OUT_OF_SCOPE;
+        if (desc->type == SPUDGPU_IMAGE_VIEW_TYPE_CUBE_ARRAY &&
+            (desc->subresource_range.array_layer_count == 0 || desc->subresource_range.array_layer_count % 6 != 0))
+            return SPUDRESULT_GPU_BUFFER_OR_IMAGE_VIEW_RANGE_OUT_OF_SCOPE;
+    }
+    // The aspect rule of spudgpu.h, the same on every backend.
+    if (desc->subresource_range.aspect_mask == SPUDGPU_IMAGE_ASPECT_NONE) return SPUDRESULT_DESC_INVALID_PARAMETERS;
+    if (desc->subresource_range.aspect_mask & ~spudgpuvulkan___internal_format_aspects(image->_desc.format))
+        return SPUDRESULT_DESC_INVALID_PARAMETERS;
 
     spudgpu_image_view_vulkan result = {0};
     result._desc = *desc;
@@ -260,9 +299,9 @@ SPUDRESULT spudgpu_create_image_view(
     viewInfo.components.a = VK_COMPONENT_SWIZZLE_IDENTITY;
 
     // Subresource range — which mip levels and array layers this view covers.
-    // aspect_mask values are deliberately Vulkan-aligned (COLOR=1, DEPTH=2,
-    // STENCIL=4 — see spudgpu.h) so this is a direct passthrough, not a
-    // choice SpudGPU makes on the caller's behalf.
+    // SPUDGPU_IMAGE_ASPECT's values are VkImageAspectFlagBits', so this is
+    // a direct passthrough. A view of the stencil alone is what a shader
+    // samples the stencil through.
     viewInfo.subresourceRange.aspectMask = (VkImageAspectFlags)desc->subresource_range.aspect_mask;
     viewInfo.subresourceRange.baseMipLevel = desc->subresource_range.base_mip_level;
     viewInfo.subresourceRange.levelCount = desc->subresource_range.mip_level_count;

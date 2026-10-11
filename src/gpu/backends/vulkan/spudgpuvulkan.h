@@ -128,6 +128,8 @@ typedef struct spudgpu_command_list_t {
     // be called while a rendering instance is already active on this command
     // buffer.
     bool _rendering_active;
+    // VkRenderingInfo::layerCount of the pass being recorded.
+    uint32_t _bound_layer_count;
     VkImageView _bound_color_attachments[SPUDGPU_MAX_COLOR_ATTACHMENTS];
     uint32_t _bound_color_attachment_count;
     VkImageView _bound_depth_attachment_view; // VK_NULL_HANDLE if none bound

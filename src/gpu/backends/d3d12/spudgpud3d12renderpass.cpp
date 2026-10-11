@@ -46,14 +46,112 @@ static D3D12_RESOURCE_STATES spudgpu_d3d12_layout_to_state(SPUDGPU_IMAGE_LAYOUT 
 // change on a spudgpu_image goes through these functions, so the tracked
 // value is always accurate as long as the caller doesn't also mutate the
 // resource state via the native escape hatch (spudgpu_d3d12_natives.h).
+//
+// The tracked state is one value for the whole image until
+// spudgpu_cmd_image_barrier_subresource moves part of it, and one for each
+// (mip, layer) from then until they agree again: see
+// spudgpu_image_d3d12::_subresource_states.
+
+// The state [layout] is for [image]. GENERAL is the storage image layout
+// (spudgpu.h): for an image that can be a storage image that is
+// UNORDERED_ACCESS, the one state a shader can write a texture in. For any
+// other image GENERAL allows nothing in particular, and stays COMMON.
+static D3D12_RESOURCE_STATES spudgpu_d3d12_image_layout_state(
+    const spudgpu_image_d3d12 *image,
+    SPUDGPU_IMAGE_LAYOUT layout) {
+	if (layout == SPUDGPU_IMAGE_LAYOUT_GENERAL && (image->_desc.usage & SPUDGPU_IMAGE_USAGE_STORAGE))
+		return D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+	return spudgpu_d3d12_layout_to_state(layout);
+}
+
+// The header's ordering barrier for a storage image: nothing to transition,
+// and writes before it must be complete before accesses after it. D3D12's
+// UAV barrier is for the resource, not for one subresource of it.
+static D3D12_RESOURCE_BARRIER spudgpu_d3d12_uav_barrier(spudgpu_image_d3d12 *image) {
+	D3D12_RESOURCE_BARRIER barrier = {};
+	barrier.Type                   = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+	barrier.Flags                  = D3D12_RESOURCE_BARRIER_FLAG_NONE;
+	barrier.UAV.pResource          = image->_d3d_resource.Get();
+	return barrier;
+}
+
+// How many planes each (mip, layer) of [format] has: a depth format with
+// stencil keeps the two in separate planes, and so in separate subresources.
+static UINT spudgpu_d3d12_format_plane_count(DXGI_FORMAT format) {
+	switch (format) {
+	case DXGI_FORMAT_D24_UNORM_S8_UINT:
+	case DXGI_FORMAT_R24G8_TYPELESS:
+	case DXGI_FORMAT_D32_FLOAT_S8X24_UINT:
+	case DXGI_FORMAT_R32G8X24_TYPELESS:
+		return 2;
+	default:
+		return 1;
+	}
+}
+
+// One transition barrier for every plane of (mip, layer) of [image].
+static void spudgpu_d3d12_push_subresource_barriers(
+    std::vector<D3D12_RESOURCE_BARRIER> &barriers,
+    spudgpu_image_d3d12 *image,
+    UINT mip,
+    UINT layer,
+    D3D12_RESOURCE_STATES stateBefore,
+    D3D12_RESOURCE_STATES stateAfter) {
+	const UINT mipLevels = image->_desc.mip_levels;
+	const UINT arraySize = image->_desc.array_layers;
+	const UINT planes    = spudgpu_d3d12_format_plane_count(image->_d3d_resource_desc.Format);
+	for (UINT plane = 0; plane < planes; ++plane) {
+		D3D12_RESOURCE_BARRIER barrier = {};
+		barrier.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+		barrier.Flags                  = D3D12_RESOURCE_BARRIER_FLAG_NONE;
+		barrier.Transition.pResource   = image->_d3d_resource.Get();
+		barrier.Transition.StateBefore = stateBefore;
+		barrier.Transition.StateAfter  = stateAfter;
+		barrier.Transition.Subresource = D3D12CalcSubresource(mip, layer, plane, mipLevels, arraySize);
+		barriers.push_back(barrier);
+	}
+}
+
 static void spudgpu_d3d12_resource_barrier(
     ID3D12GraphicsCommandList *cmdList,
     spudgpu_image_d3d12 *image,
     SPUDGPU_IMAGE_LAYOUT new_layout) {
-	D3D12_RESOURCE_STATES stateBefore = image->_current_state;
-	D3D12_RESOURCE_STATES stateAfter  = spudgpu_d3d12_layout_to_state(new_layout);
-	if (stateBefore == stateAfter)
+	D3D12_RESOURCE_STATES stateAfter = spudgpu_d3d12_image_layout_state(image, new_layout);
+	// Already there and staying: for the storage state that is the ordering
+	// barrier, for any other state it is nothing.
+	const bool is_storage_state = stateAfter == D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+
+	if (!image->_subresource_states.empty()) {
+		// The subresources are in different states: each that isn't in the
+		// new one already is moved from its own, and the image is whole
+		// again afterwards.
+		const UINT mipLevels = image->_desc.mip_levels;
+		const UINT arraySize = image->_desc.array_layers;
+		std::vector<D3D12_RESOURCE_BARRIER> barriers;
+		for (UINT layer = 0; layer < arraySize; ++layer) {
+			for (UINT mip = 0; mip < mipLevels; ++mip) {
+				const D3D12_RESOURCE_STATES stateBefore = image->_subresource_states[mip + (size_t)layer * mipLevels];
+				if (stateBefore != stateAfter)
+					spudgpu_d3d12_push_subresource_barriers(barriers, image, mip, layer, stateBefore, stateAfter);
+			}
+		}
+		if (barriers.empty() && is_storage_state)
+			barriers.push_back(spudgpu_d3d12_uav_barrier(image));
+		if (!barriers.empty())
+			cmdList->ResourceBarrier((UINT)barriers.size(), barriers.data());
+		image->_subresource_states.clear();
+		image->_current_state = stateAfter;
 		return;
+	}
+
+	D3D12_RESOURCE_STATES stateBefore = image->_current_state;
+	if (stateBefore == stateAfter) {
+		if (is_storage_state) {
+			D3D12_RESOURCE_BARRIER barrier = spudgpu_d3d12_uav_barrier(image);
+			cmdList->ResourceBarrier(1, &barrier);
+		}
+		return;
+	}
 
 	D3D12_RESOURCE_BARRIER barrier           = {};
 	barrier.Type                             = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
@@ -100,39 +198,82 @@ void spudgpu_cmd_image_barrier_subresource(
 	if (!cmd || !image || !range)
 		return;
 
-	D3D12_RESOURCE_STATES stateBefore = image->_current_state;
-	D3D12_RESOURCE_STATES stateAfter  = spudgpu_d3d12_layout_to_state(new_layout);
-	if (stateBefore == stateAfter)
+	const D3D12_RESOURCE_STATES stateAfter = spudgpu_d3d12_image_layout_state(image, new_layout);
+	const UINT mipLevels                   = image->_desc.mip_levels;
+	const UINT arraySize                   = image->_desc.array_layers;
+
+	// A range past the end of the image has nothing to move. Checked before
+	// any arithmetic, so an oversized count can't wrap.
+	if (range->base_mip_level >= mipLevels || range->base_array_layer >= arraySize)
+		return;
+	if (range->mip_level_count > mipLevels - range->base_mip_level)
+		return;
+	if (range->array_layer_count > arraySize - range->base_array_layer)
 		return;
 
-	UINT mipLevels = image->_desc.mip_levels;
-	UINT arraySize = image->_desc.array_layers;
+	// The whole image, and nothing of it out of step: the one-barrier path.
+	if (image->_subresource_states.empty() && range->base_mip_level == 0 && range->mip_level_count == mipLevels &&
+	    range->base_array_layer == 0 && range->array_layer_count == arraySize) {
+		spudgpu_d3d12_resource_barrier(cmd->_d3d_cmd_list.Get(), image, new_layout);
+		return;
+	}
 
-	std::vector<D3D12_RESOURCE_BARRIER> barriers;
-	barriers.reserve((size_t)range->mip_level_count * range->array_layer_count);
-
-	for (UINT layer = 0; layer < range->array_layer_count; ++layer) {
-		for (UINT mip = 0; mip < range->mip_level_count; ++mip) {
-			D3D12_RESOURCE_BARRIER barrier = {};
-			barrier.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-			barrier.Flags                  = D3D12_RESOURCE_BARRIER_FLAG_NONE;
-			barrier.Transition.pResource   = image->_d3d_resource.Get();
-			barrier.Transition.StateBefore = stateBefore;
-			barrier.Transition.StateAfter  = stateAfter;
-			barrier.Transition.Subresource = D3D12CalcSubresource(
-			    (UINT)(range->base_mip_level + mip),
-			    (UINT)(range->base_array_layer + layer),
-			    0, mipLevels, arraySize);
-			barriers.push_back(barrier);
+	// The states are about to differ across the image, so each (mip, layer)
+	// gets its own from here until they agree again. As for the whole image
+	// (see spudgpu_d3d12_resource_barrier), the state before is the one
+	// tracked here, never old_layout.
+	if (image->_subresource_states.empty()) {
+		try {
+			image->_subresource_states.assign((size_t)mipLevels * arraySize, image->_current_state);
+		} catch (const std::bad_alloc &) {
+			printf("spudgpu: spudgpu_cmd_image_barrier_subresource - out of memory tracking subresource states; nothing recorded\n");
+			return;
 		}
 	}
 
+	// Room for every barrier this can make is taken first, so that nothing
+	// below can fail once the tracked states start to change.
+	std::vector<D3D12_RESOURCE_BARRIER> barriers;
+	try {
+		// One more than the transitions, for the ordering barrier below.
+		barriers.reserve(
+		    (size_t)range->mip_level_count * range->array_layer_count * spudgpu_d3d12_format_plane_count(image->_d3d_resource_desc.Format) + 1);
+	} catch (const std::bad_alloc &) {
+		printf("spudgpu: spudgpu_cmd_image_barrier_subresource - out of memory building barriers; nothing recorded\n");
+		return;
+	}
+	for (UINT layer = 0; layer < (UINT)range->array_layer_count; ++layer) {
+		for (UINT mip = 0; mip < (UINT)range->mip_level_count; ++mip) {
+			const UINT m                   = (UINT)range->base_mip_level + mip;
+			const UINT l                   = (UINT)range->base_array_layer + layer;
+			D3D12_RESOURCE_STATES &tracked = image->_subresource_states[m + (size_t)l * mipLevels];
+			if (tracked == stateAfter)
+				continue;
+			spudgpu_d3d12_push_subresource_barriers(barriers, image, m, l, tracked, stateAfter);
+			tracked = stateAfter;
+		}
+	}
+
+	// Nothing in the range had to move and it is in the storage state: the
+	// header's ordering barrier.
+	if (barriers.empty() && stateAfter == D3D12_RESOURCE_STATE_UNORDERED_ACCESS)
+		barriers.push_back(spudgpu_d3d12_uav_barrier(image));
+
 	if (!barriers.empty())
 		cmd->_d3d_cmd_list->ResourceBarrier((UINT)barriers.size(), barriers.data());
-	// _current_state tracks the whole resource, matching this function's own
-	// existing simplification of one before/after pair for the whole queried
-	// range rather than true per-subresource tracking.
-	image->_current_state = stateAfter;
+
+	// Back in one state everywhere: return to tracking the image as a whole.
+	bool uniform = true;
+	for (D3D12_RESOURCE_STATES state : image->_subresource_states) {
+		if (state != stateAfter) {
+			uniform = false;
+			break;
+		}
+	}
+	if (uniform) {
+		image->_subresource_states.clear();
+		image->_current_state = stateAfter;
+	}
 }
 
 // Builds a D3D12_PLACED_SUBRESOURCE_FOOTPRINT describing the buffer-side

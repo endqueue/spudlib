@@ -210,6 +210,14 @@ bool ___internal_spudgpu_d3d12_make_device_properties(
 	// the CPU can map, which holds a resource in any state only on a UMA
 	// adapter.
 	device->_properties.device_mappable_memory = device->_properties.unified_memory;
+
+	// A layered pass needs the vertex shader to write
+	// SV_RenderTargetArrayIndex, which is this capability. The pass itself
+	// needs nothing: the views' array sizes are what make it layered.
+	D3D12_FEATURE_DATA_D3D12_OPTIONS options = {};
+	hr = device->_d3d_device->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS, &options, sizeof(options));
+	device->_properties.layered_rendering =
+	    SUCCEEDED(hr) && options.VPAndRTArrayIndexFromAnyShaderFeedingRasterizerSupportedWithoutGSEmulation;
 	return true;
 }
 SPUDRESULT spudgpu_enumerate_devices(

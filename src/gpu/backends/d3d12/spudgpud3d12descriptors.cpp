@@ -458,7 +458,7 @@ void spudgpu_update_descriptor_sets(
 					spudgpu_image_view_d3d12 *view =
 					    (spudgpu_image_view_d3d12 *)wr.image_info->image_view;
 					D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc =
-					    view->_d3d_view_desc._srv;
+					    view->_d3d_srv;
 					d3dDevice->CreateShaderResourceView(
 					    view->_image->_d3d_resource.Get(), &srvDesc, handle);
 
@@ -467,7 +467,7 @@ void spudgpu_update_descriptor_sets(
 					spudgpu_image_view_d3d12 *view =
 					    (spudgpu_image_view_d3d12 *)wr.image_info->image_view;
 					D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc =
-					    view->_d3d_view_desc._uav;
+					    view->_d3d_uav;
 					d3dDevice->CreateUnorderedAccessView(
 					    view->_image->_d3d_resource.Get(), nullptr, &uavDesc, handle);
 				}
@@ -734,7 +734,7 @@ SPUDRESULT spudgpu_bindless_register_sampled_image(
 	    state->heap->GetCPUDescriptorHandleForHeapStart();
 	handle.ptr += (SIZE_T)(*out_index) * state->increment; // class base 0
 
-	D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = vView->_d3d_view_desc._srv;
+	D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = vView->_d3d_srv;
 	device->_d3d_device->CreateShaderResourceView(
 	    vView->_image->_d3d_resource.Get(), &srvDesc, handle);
 	return SPUD_SUCCESS;
@@ -773,7 +773,7 @@ SPUDRESULT spudgpu_bindless_register_storage_image(
 	handle.ptr += (SIZE_T)(SPUDGPU_BINDLESS_MAX_SLOTS_PER_CLASS + *out_index) *
 	              state->increment; // class base 1
 
-	D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc = vView->_d3d_view_desc._uav;
+	D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc = vView->_d3d_uav;
 	device->_d3d_device->CreateUnorderedAccessView(
 	    vView->_image->_d3d_resource.Get(), nullptr, &uavDesc, handle);
 	return SPUD_SUCCESS;

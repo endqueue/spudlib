@@ -182,7 +182,9 @@ static MTLTextureType spudgpumetal___internal_image_texture_type(
 	// SPUDGPU_IMAGE_TYPE value - like Vulkan, they're a 2D array of 6 (or
 	// 6*N) layers, reinterpreted as SPUDGPU_IMAGE_VIEW_TYPE_CUBE via
 	// spudgpu_create_image_view - so the base texture is created as a plain
-	// (array) 2D texture regardless.
+	// (array) 2D texture regardless, cube_capable or not: a 2D array
+	// texture can be viewed as a cube or a cube array, and as single 2D
+	// layers to render its faces.
 	return (array_layers > 1) ? MTLTextureType2DArray : MTLTextureType2D;
 }
 
@@ -211,6 +213,14 @@ SPUDRESULT spudgpu_create_image(
 		                   SPUDGPU_IMAGE_USAGE_TRANSFER_SRC | SPUDGPU_IMAGE_USAGE_TRANSFER_DST |
 		                   SPUDGPU_IMAGE_USAGE_PRESENTABLE))
 			return SPUDRESULT_GPU_INVALID_IMAGE_USAGE;
+	}
+	// spudgpu_image_desc::cube_capable's contract (see spudgpu.h) is the
+	// same on every backend, though only Vulkan acts on it at creation.
+	if (desc->cube_capable) {
+		if (desc->type != SPUDGPU_IMAGE_TYPE_2D)
+			return SPUDRESULT_GPU_INVALID_IMAGE_TYPE;
+		if (desc->width != desc->height || desc->array_layers % 6 != 0)
+			return SPUDRESULT_DESC_INVALID_PARAMETERS;
 	}
 
 	MTLPixelFormat pixel_format = spudgpumetal___internal_image_pixel_format(desc->format);
@@ -330,6 +340,21 @@ static MTLTextureType spudgpumetal___internal_image_view_texture_type(
 	}
 }
 
+// The aspects [format] has (SPUDGPU_IMAGE_ASPECT). The same table in every
+// backend: it decides which views spudgpu_create_image_view refuses.
+static uint64_t spudgpumetal___internal_format_aspects(SPUDGPU_FORMAT format) {
+	switch (format) {
+	case SPUDGPU_FORMAT_D24_UNORM_S8_UINT:
+	case SPUDGPU_FORMAT_D32_FLOAT_S8X24_UINT:
+		return SPUDGPU_IMAGE_ASPECT_DEPTH | SPUDGPU_IMAGE_ASPECT_STENCIL;
+	case SPUDGPU_FORMAT_D16_UNORM:
+	case SPUDGPU_FORMAT_D32_FLOAT:
+		return SPUDGPU_IMAGE_ASPECT_DEPTH;
+	default:
+		return SPUDGPU_IMAGE_ASPECT_COLOR;
+	}
+}
+
 SPUDRESULT spudgpu_create_image_view(
     spudgpu_image image,
     const spudgpu_image_view_desc *desc,
@@ -342,6 +367,22 @@ SPUDRESULT spudgpu_create_image_view(
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
 
 	spudgpu_image_metal *parent_image_metal = (spudgpu_image_metal *)image;
+	// The cube view rules of spudgpu.h, the same on every backend.
+	if (desc->type == SPUDGPU_IMAGE_VIEW_TYPE_CUBE || desc->type == SPUDGPU_IMAGE_VIEW_TYPE_CUBE_ARRAY) {
+		if (!parent_image_metal->_desc.cube_capable)
+			return SPUDRESULT_GPU_INVALID_IMAGE_VIEW_TYPE;
+		if (desc->type == SPUDGPU_IMAGE_VIEW_TYPE_CUBE &&
+		    (desc->subresource_range.base_array_layer != 0 || desc->subresource_range.array_layer_count != 6))
+			return SPUDRESULT_GPU_BUFFER_OR_IMAGE_VIEW_RANGE_OUT_OF_SCOPE;
+		if (desc->type == SPUDGPU_IMAGE_VIEW_TYPE_CUBE_ARRAY &&
+		    (desc->subresource_range.array_layer_count == 0 || desc->subresource_range.array_layer_count % 6 != 0))
+			return SPUDRESULT_GPU_BUFFER_OR_IMAGE_VIEW_RANGE_OUT_OF_SCOPE;
+	}
+	// The aspect rule of spudgpu.h, the same on every backend.
+	if (desc->subresource_range.aspect_mask == SPUDGPU_IMAGE_ASPECT_NONE)
+		return SPUDRESULT_DESC_INVALID_PARAMETERS;
+	if (desc->subresource_range.aspect_mask & ~spudgpumetal___internal_format_aspects(parent_image_metal->_desc.format))
+		return SPUDRESULT_DESC_INVALID_PARAMETERS;
 	if (!parent_image_metal->_texture_mtl)
 		return SPUDRESULT_GPU_INVALID_IMAGE;
 
@@ -361,17 +402,17 @@ SPUDRESULT spudgpu_create_image_view(
 		NSRange levels           = NSMakeRange((NSUInteger)desc->subresource_range.base_mip_level, (NSUInteger)desc->subresource_range.mip_level_count);
 		NSRange slices           = NSMakeRange((NSUInteger)desc->subresource_range.base_array_layer, (NSUInteger)desc->subresource_range.array_layer_count);
 
-		// Same pixel format as the parent - spudgpu_image_view_desc has no
-		// format-override field yet (see its "TODO: Swizzle identities?" in
-		// spudgpu.h) and aspect_mask has no defined COLOR/DEPTH/STENCIL bit
-		// constants yet either, so there's nothing to reinterpret from
-		// today. The parent texture was created with
-		// MTLTextureUsagePixelFormatView specifically (see
-		// spudgpu_create_image) so that a differently-formatted or
-		// stencil-aspect view works the moment either of those grows real
-		// values to drive it, instead of failing outright because the base
-		// texture wasn't opted in at creation time.
-		view_metal->_texture_view_mtl = [parent_image_metal->_texture_mtl newTextureViewWithPixelFormat:parent_image_metal->_texture_mtl.pixelFormat
+		// The parent's pixel format, except for a view of the stencil alone
+		// (SPUDGPU_IMAGE_ASPECT_STENCIL), which is what a shader reads the
+		// stencil through: Metal reaches the stencil of a depth and stencil
+		// texture as a view in the matching stencil format. The parent was
+		// created with MTLTextureUsagePixelFormatView for this (see
+		// spudgpu_create_image). spudgpu_image_view_desc has no format
+		// override beyond that.
+		MTLPixelFormat view_format = parent_image_metal->_texture_mtl.pixelFormat;
+		if (desc->subresource_range.aspect_mask == SPUDGPU_IMAGE_ASPECT_STENCIL && view_format == MTLPixelFormatDepth32Float_Stencil8)
+			view_format = MTLPixelFormatX32_Stencil8;
+		view_metal->_texture_view_mtl = [parent_image_metal->_texture_mtl newTextureViewWithPixelFormat:view_format
 		                                                                                    textureType:view_type
 		                                                                                         levels:levels
 		                                                                                         slices:slices];

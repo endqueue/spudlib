@@ -328,6 +328,20 @@ static MTLVertexFormat spudgpumetal___internal_vertex_format(SPUDGPU_FORMAT form
 	}
 }
 
+// The class of primitive a topology draws. Patches have none here, for the
+// reason spudgpumetal___internal_primitive_type gives, and fall back the
+// same way.
+static MTLPrimitiveTopologyClass spudgpumetal___internal_topology_class(SPUDGPU_PRIMITIVE_TOPOLOGY topology) {
+	switch (topology) {
+	case SPUDGPU_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST:  return MTLPrimitiveTopologyClassTriangle;
+	case SPUDGPU_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP: return MTLPrimitiveTopologyClassTriangle;
+	case SPUDGPU_PRIMITIVE_TOPOLOGY_LINE_LIST:      return MTLPrimitiveTopologyClassLine;
+	case SPUDGPU_PRIMITIVE_TOPOLOGY_LINE_STRIP:     return MTLPrimitiveTopologyClassLine;
+	case SPUDGPU_PRIMITIVE_TOPOLOGY_POINT_LIST:     return MTLPrimitiveTopologyClassPoint;
+	default:                                        return MTLPrimitiveTopologyClassTriangle;
+	}
+}
+
 static MTLCullMode spudgpumetal___internal_cull_mode(SPUDGPU_CULL_MODE mode) {
 	switch (mode) {
 	case SPUDGPU_CULL_MODE_FRONT: return MTLCullModeFront;
@@ -502,6 +516,10 @@ SPUDRESULT spudgpu_create_shader_pipeline(
 		pipeline_desc.vertexFunction               = vertex_module_metal->_function_mtl;
 		pipeline_desc.fragmentFunction              = fragment_module_metal->_function_mtl;
 		pipeline_desc.vertexDescriptor              = vertex_desc;
+		// Metal refuses a pipeline in a layered pass
+		// (spudgpu_rendering_begin_desc::layer_count) unless this is given,
+		// and a pipeline isn't created against a pass, so it is always given.
+		pipeline_desc.inputPrimitiveTopology = spudgpumetal___internal_topology_class(desc->primitive_topology);
 		pipeline_desc.colorAttachments[0].pixelFormat = color_format;
 
 		const spudgpu_blend_attachment_desc *blend = &desc->blend_attachment;
