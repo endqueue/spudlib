@@ -217,15 +217,15 @@ pub const SPUDGPU_NATIVE_API_VULKAN: SPUDGPU_NATIVE_API = 1;
 pub const SPUDGPU_NATIVE_API_METAL: SPUDGPU_NATIVE_API  = 2;
 
 // ----------------------------------------------------------------
-// SPUDGPU_MEMORY_FLAGS
+// SPUDGPU_MEMORY_KIND  (one value, not a bitmask; buffers only)
 // ----------------------------------------------------------------
 
-pub type SPUDGPU_MEMORY_FLAGS = u32;
-pub const SPUDGPU_MEMORY_FLAGS_NONE: SPUDGPU_MEMORY_FLAGS          = 0;
-pub const SPUDGPU_MEMORY_FLAGS_DEVICE_LOCAL: SPUDGPU_MEMORY_FLAGS  = 1 << 0;
-pub const SPUDGPU_MEMORY_FLAGS_HOST_VISIBLE: SPUDGPU_MEMORY_FLAGS  = 1 << 1;
-pub const SPUDGPU_MEMORY_FLAGS_HOST_COHERENT: SPUDGPU_MEMORY_FLAGS = 1 << 2;
-pub const SPUDGPU_MEMORY_FLAGS_HOST_CACHED: SPUDGPU_MEMORY_FLAGS   = 1 << 3;
+pub type SPUDGPU_MEMORY_KIND = u32;
+pub const SPUDGPU_MEMORY_KIND_NONE: SPUDGPU_MEMORY_KIND            = 0;
+pub const SPUDGPU_MEMORY_KIND_DEVICE: SPUDGPU_MEMORY_KIND          = 1;
+pub const SPUDGPU_MEMORY_KIND_UPLOAD: SPUDGPU_MEMORY_KIND          = 2;
+pub const SPUDGPU_MEMORY_KIND_READBACK: SPUDGPU_MEMORY_KIND        = 3;
+pub const SPUDGPU_MEMORY_KIND_DEVICE_MAPPABLE: SPUDGPU_MEMORY_KIND = 4;
 
 // ----------------------------------------------------------------
 // SPUDGPU_BUFFER_USAGE
@@ -292,7 +292,7 @@ pub const SPUDGPU_PRESENT_MODE_MAILBOX: SPUDGPU_PRESENT_MODE   = 2;
 #[derive(Debug, Copy, Clone)]
 pub struct spudgpu_buffer_desc {
     pub usage: u32,
-    pub memory_flags: u32,
+    pub memory_kind: u32,
     pub gpu_address_location: u64,
     pub size: u64,
 }
@@ -311,7 +311,6 @@ pub struct spudgpu_buffer_view_desc {
 pub struct spudgpu_image_desc {
     pub usage: u32,
     pub type_: u32,          // 'type' is a keyword in Rust
-    pub memory_flags: u32,
     pub gpu_address_location: u64,
     pub format: SPUDGPU_FORMAT,
     pub width: u32,

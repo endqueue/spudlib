@@ -854,6 +854,43 @@ void spudgpu_cmd_push_constants(
 	}
 }
 
+void spudgpu_cmd_push_constants_compute(
+    spudgpu_command_list cmd,
+    spudgpu_compute_pipeline pipeline,
+    uint32_t offset,
+    uint32_t size,
+    const void *data) {
+	if (!cmd || !pipeline || !data || size == 0)
+		return;
+
+	spudgpu_command_list_metal *cmd_list_metal     = (spudgpu_command_list_metal *)cmd;
+	spudgpu_compute_pipeline_metal *pipeline_metal = (spudgpu_compute_pipeline_metal *)pipeline;
+	if (!pipeline_metal->_desc.push_constant_range_count)
+		return;
+	if (offset + size > SPUDGPU_METAL_PUSH_CONSTANTS_SIZE)
+		return;
+
+	// As spudgpu_cmd_push_constants: a sub-range can't be patched in place,
+	// so the write goes into the command list's scratch copy of the compute
+	// block and the whole of it is sent again.
+	memcpy(cmd_list_metal->_compute_push_constants_scratch + offset, data, size);
+	uint32_t new_extent = offset + size;
+	if (new_extent > cmd_list_metal->_compute_push_constants_extent)
+		cmd_list_metal->_compute_push_constants_extent = new_extent;
+
+	// The header's rule is to push after spudgpu_cmd_bind_compute_pipeline,
+	// which is what opens the compute encoder. Without one there is nothing
+	// to send to, and opening one here would end a render pass in progress.
+	if (!cmd_list_metal->_active_compute_encoder)
+		return;
+
+	// The compute shader's push constant block is cross-compiled to the same
+	// fixed buffer index as a graphics stage's (spudgpumetalshader.m).
+	[cmd_list_metal->_active_compute_encoder setBytes:cmd_list_metal->_compute_push_constants_scratch
+	                                           length:cmd_list_metal->_compute_push_constants_extent
+	                                          atIndex:SPUDGPU_METAL_PUSH_CONSTANTS_BUFFER_INDEX];
+}
+
 SPUDRESULT spudgpu_queue_submit(
     spudgpu_command_queue queue,
     const spudgpu_submit_desc *desc) {

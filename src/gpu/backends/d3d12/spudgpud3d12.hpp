@@ -32,31 +32,23 @@ spudgpu_d3d12_get_command_list_type(SPUDGPU_COMMAND_LIST_TYPE t) {
 	}
 }
 
-inline D3D12_HEAP_FLAGS spudgpu_d3d12_get_heap_flags(SPUDGPU_HEAP_FLAGS flags) {
-	D3D12_HEAP_FLAGS result = D3D12_HEAP_FLAG_NONE;
-	if (flags & SPUDGPU_HEAP_FLAG_SHARED)
-		result |= D3D12_HEAP_FLAG_SHARED;
-	if (flags & SPUDGPU_HEAP_FLAG_ALLOW_SHADER_ATOMICS)
-		result |= D3D12_HEAP_FLAG_ALLOW_SHADER_ATOMICS;
-	if (flags & SPUDGPU_HEAP_FLAG_NOT_ZEROED)
-		result |= D3D12_HEAP_FLAG_CREATE_NOT_ZEROED;
-	if (flags & SPUDGPU_HEAP_FLAG_CREATE_NOT_RESIDENT)
-		result |= D3D12_HEAP_FLAG_CREATE_NOT_RESIDENT;
-	return result;
+// The heap flags of every buffer and image. spudgpu.h declares a new
+// resource's contents undefined until written, so D3D12 is never asked to
+// zero one.
+inline D3D12_HEAP_FLAGS spudgpu_d3d12_get_heap_flags() {
+	return D3D12_HEAP_FLAG_CREATE_NOT_ZEROED;
 }
 inline D3D12_RESOURCE_FLAGS spudgpu_d3d12_get_buffer_resource_flags(
-    SPUDGPU_BUFFER_USAGE usage, SPUDGPU_RESOURCE_FLAGS flags) {
+    SPUDGPU_BUFFER_USAGE usage) {
 	D3D12_RESOURCE_FLAGS result = D3D12_RESOURCE_FLAG_NONE;
 	if (usage & SPUDGPU_BUFFER_USAGE_STORAGE)
 		result |= D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
 	if (usage & SPUDGPU_BUFFER_USAGE_RAYTRACING_ACCELERATION_STRUCTURE)
 		result |= D3D12_RESOURCE_FLAG_RAYTRACING_ACCELERATION_STRUCTURE;
-	if (flags & SPUDGPU_RESOURCE_FLAG_ALLOW_SIMULTANEOUS_ACCESS)
-		result |= D3D12_RESOURCE_FLAG_ALLOW_SIMULTANEOUS_ACCESS;
 	return result;
 }
 inline D3D12_RESOURCE_FLAGS spudgpu_d3d12_get_image_resource_flags(
-    SPUDGPU_IMAGE_USAGE usage, SPUDGPU_RESOURCE_FLAGS flags) {
+    SPUDGPU_IMAGE_USAGE usage) {
 	D3D12_RESOURCE_FLAGS result = D3D12_RESOURCE_FLAG_NONE;
 	if (usage & SPUDGPU_IMAGE_USAGE_COLOR_ATTACHMENT)
 		result |= D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
@@ -64,33 +56,48 @@ inline D3D12_RESOURCE_FLAGS spudgpu_d3d12_get_image_resource_flags(
 		result |= D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
 	if (usage & SPUDGPU_IMAGE_USAGE_STORAGE)
 		result |= D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
-	if (flags & SPUDGPU_RESOURCE_FLAG_ALLOW_SIMULTANEOUS_ACCESS)
-		result |= D3D12_RESOURCE_FLAG_ALLOW_SIMULTANEOUS_ACCESS;
 	return result;
 }
 inline DXGI_FORMAT spudgpu_d3d12_get_dxgi_format(SPUDGPU_FORMAT fmt) {
 	return static_cast<DXGI_FORMAT>(fmt);
 }
 
+// The heap a buffer of [kind] is created in: what each SPUDGPU_MEMORY_KIND
+// documents in spudgpu.h. spudgpu_create_buffer has already refused a value
+// that is not a kind.
 inline D3D12_HEAP_PROPERTIES
-spudgpu_d3d12_get_heap_properties_from_memory_flags(SPUDGPU_MEMORY_FLAGS flags) {
+spudgpu_d3d12_get_heap_properties_from_memory_kind(SPUDGPU_MEMORY_KIND kind) {
 	D3D12_HEAP_PROPERTIES props = {};
-	if (flags & SPUDGPU_MEMORY_FLAGS_HOST_VISIBLE) {
-		props.Type = (flags & SPUDGPU_MEMORY_FLAGS_HOST_CACHED)
-		                 ? D3D12_HEAP_TYPE_READBACK
-		                 : D3D12_HEAP_TYPE_UPLOAD;
-	} else {
+	switch (kind) {
+	case SPUDGPU_MEMORY_KIND_UPLOAD:
+		props.Type = D3D12_HEAP_TYPE_UPLOAD;
+		break;
+	case SPUDGPU_MEMORY_KIND_READBACK:
+		props.Type = D3D12_HEAP_TYPE_READBACK;
+		break;
+	case SPUDGPU_MEMORY_KIND_DEVICE_MAPPABLE:
+		// A custom heap is held to neither the upload heap's rule (always
+		// GENERIC_READ, no unordered access) nor the readback heap's (always
+		// COPY_DEST). L0 is the only pool a UMA adapter has, and
+		// spudgpu_create_buffer only gets here on one.
+		props.Type                 = D3D12_HEAP_TYPE_CUSTOM;
+		props.CPUPageProperty      = D3D12_CPU_PAGE_PROPERTY_WRITE_BACK;
+		props.MemoryPoolPreference = D3D12_MEMORY_POOL_L0;
+		break;
+	default:
 		props.Type = D3D12_HEAP_TYPE_DEFAULT;
+		break;
 	}
 	return props;
 }
+// An upload heap's resources are GENERIC_READ and a readback heap's are
+// COPY_DEST for as long as they exist; D3D12 allows no other state for them.
 inline D3D12_RESOURCE_STATES
-spudgpu_d3d12_get_initial_buffer_state(SPUDGPU_MEMORY_FLAGS flags) {
-	if (flags & SPUDGPU_MEMORY_FLAGS_HOST_VISIBLE) {
-		return (flags & SPUDGPU_MEMORY_FLAGS_HOST_CACHED)
-		           ? D3D12_RESOURCE_STATE_COPY_DEST
-		           : D3D12_RESOURCE_STATE_GENERIC_READ;
-	}
+spudgpu_d3d12_get_initial_buffer_state(SPUDGPU_MEMORY_KIND kind) {
+	if (kind == SPUDGPU_MEMORY_KIND_UPLOAD)
+		return D3D12_RESOURCE_STATE_GENERIC_READ;
+	if (kind == SPUDGPU_MEMORY_KIND_READBACK)
+		return D3D12_RESOURCE_STATE_COPY_DEST;
 	return D3D12_RESOURCE_STATE_COMMON;
 }
 inline D3D12_RESOURCE_STATES

@@ -42,18 +42,86 @@ void spudgpuvulkan___buffer_usage_flags_internal(
         *outputValue |= VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT;
 }
 
-void spudgpuvulkan___memory_property_flags_internal(
-    uint32_t __spud_gpu_memory_flags,
-    VkMemoryPropertyFlags *output) {
-    VkMemoryPropertyFlags *const outputValue = output;
-    if (__spud_gpu_memory_flags & SPUDGPU_MEMORY_FLAGS_DEVICE_LOCAL)
-        *outputValue |= VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
-    if (__spud_gpu_memory_flags & SPUDGPU_MEMORY_FLAGS_HOST_VISIBLE)
-        *outputValue |= VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT;
-    if (__spud_gpu_memory_flags & SPUDGPU_MEMORY_FLAGS_HOST_COHERENT)
-        *outputValue |= VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
-    if (__spud_gpu_memory_flags & SPUDGPU_MEMORY_FLAGS_HOST_CACHED)
-        *outputValue |= VK_MEMORY_PROPERTY_HOST_CACHED_BIT;
+// The first memory type in typeFilter that has every bit of [properties], and
+// that type's own flags. UINT32_MAX if there is none.
+static uint32_t spudgpuvulkan___internal_find_memory_type_with_flags(
+    const VkPhysicalDeviceMemoryProperties *memProperties,
+    uint32_t typeFilter,
+    VkMemoryPropertyFlags properties,
+    VkMemoryPropertyFlags *out_flags) {
+    for (uint32_t i = 0; i < memProperties->memoryTypeCount; i++) {
+        if (!(typeFilter & (1u << i))) continue;
+        if ((memProperties->memoryTypes[i].propertyFlags & properties) != properties) continue;
+        *out_flags = memProperties->memoryTypes[i].propertyFlags;
+        return i;
+    }
+    return UINT32_MAX;
+}
+
+// The memory type a buffer of [kind] is allocated from: the properties each
+// SPUDGPU_MEMORY_KIND documents in spudgpu.h. Nothing here asks for
+// HOST_COHERENT: the caller flushes and invalidates whatever it was given.
+static uint32_t spudgpuvulkan___internal_buffer_memory_type(
+    VkPhysicalDevice physicalDevice,
+    uint32_t typeFilter,
+    SPUDGPU_MEMORY_KIND kind,
+    VkMemoryPropertyFlags *out_flags) {
+    VkPhysicalDeviceMemoryProperties memProperties;
+    vkGetPhysicalDeviceMemoryProperties(physicalDevice, &memProperties);
+
+    switch (kind) {
+    case SPUDGPU_MEMORY_KIND_DEVICE:
+        return spudgpuvulkan___internal_find_memory_type_with_flags(
+            &memProperties, typeFilter,
+            VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, out_flags);
+    case SPUDGPU_MEMORY_KIND_UPLOAD:
+        return spudgpuvulkan___internal_find_memory_type_with_flags(
+            &memProperties, typeFilter,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT, out_flags);
+    case SPUDGPU_MEMORY_KIND_READBACK: {
+        // HOST_CACHED is what makes CPU reads fast, and no device has to
+        // offer it: without it the contract still holds on plain
+        // HOST_VISIBLE memory.
+        uint32_t index = spudgpuvulkan___internal_find_memory_type_with_flags(
+            &memProperties, typeFilter,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_CACHED_BIT, out_flags);
+        if (index != UINT32_MAX) return index;
+        return spudgpuvulkan___internal_find_memory_type_with_flags(
+            &memProperties, typeFilter,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT, out_flags);
+    }
+    case SPUDGPU_MEMORY_KIND_DEVICE_MAPPABLE:
+        return spudgpuvulkan___internal_find_memory_type_with_flags(
+            &memProperties, typeFilter,
+            VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT | VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT, out_flags);
+    default:
+        return UINT32_MAX;
+    }
+}
+
+// [offset, offset + size) of a buffer as a range vkFlushMappedMemoryRanges
+// and vkInvalidateMappedMemoryRanges accept: widened to multiples of
+// nonCoherentAtomSize, and stopped at the end of the allocation. The whole
+// allocation is what spudgpu_map_buffer maps, so the widened range is always
+// inside the mapping.
+static VkMappedMemoryRange spudgpuvulkan___internal_buffer_memory_range(
+    spudgpu_buffer buffer,
+    uint64_t offset,
+    uint64_t size) {
+    const VkDeviceSize atom = buffer->_device._properties_vk.limits.nonCoherentAtomSize;
+    VkDeviceSize begin = (VkDeviceSize) offset;
+    VkDeviceSize end = (VkDeviceSize) (offset + size);
+    begin -= begin % atom;
+    if (end % atom) end += atom - end % atom;
+    if (end > buffer->_memory_size_vk) end = buffer->_memory_size_vk;
+
+    VkMappedMemoryRange range = {0};
+    range.sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE;
+    range.pNext = NULL;
+    range.memory = buffer->_memory_vk;
+    range.offset = begin;
+    range.size = end - begin;
+    return range;
 }
 
 #if __cplusplus
@@ -84,6 +152,19 @@ SPUDRESULT spudgpu_create_buffer(
             //throw std::runtime_error(
             //  "SpudGPU create_buffer: invalid usage: SPUDGPU_BUFFER_USAGE_NONE");
             return SPUDRESULT_GPU_INVALID_BUFFER_USAGE;
+
+        // SPUDGPU_MEMORY_KIND's contract (see spudgpu.h), the same checks
+        // in the same order on every backend.
+        if (desc->memory_kind < SPUDGPU_MEMORY_KIND_DEVICE || desc->memory_kind > SPUDGPU_MEMORY_KIND_DEVICE_MAPPABLE)
+            return SPUDRESULT_GPU_INVALID_MEMORY_KIND;
+        if (desc->memory_kind == SPUDGPU_MEMORY_KIND_UPLOAD &&
+            (desc->usage & (SPUDGPU_BUFFER_USAGE_STORAGE | SPUDGPU_BUFFER_USAGE_TRANSFER_DST |
+                            SPUDGPU_BUFFER_USAGE_RAYTRACING_ACCELERATION_STRUCTURE)))
+            return SPUDRESULT_GPU_INVALID_BUFFER_USAGE;
+        if (desc->memory_kind == SPUDGPU_MEMORY_KIND_READBACK && desc->usage != SPUDGPU_BUFFER_USAGE_TRANSFER_DST)
+            return SPUDRESULT_GPU_INVALID_BUFFER_USAGE;
+        if (desc->memory_kind == SPUDGPU_MEMORY_KIND_DEVICE_MAPPABLE && !device->_properties.device_mappable_memory)
+            return SPUDRESULT_GPU_MEMORY_KIND_NOT_SUPPORTED;
     }
 
     // Create the result struct
@@ -117,12 +198,19 @@ SPUDRESULT spudgpu_create_buffer(
 
     // Allocate memory
     {
-        // TODO: Vulkan Memory Property Flags
-        VkMemoryPropertyFlags properties = 0;
-        spudgpuvulkan___memory_property_flags_internal(desc->memory_flags, &properties);
-
         VkMemoryRequirements memRequirements;
         vkGetBufferMemoryRequirements(vk_device, result._buffer_vk, &memRequirements);
+
+        // Fails when the buffer can use no memory type that has the kind's
+        // properties.
+        const uint32_t memoryTypeIndex = spudgpuvulkan___internal_buffer_memory_type(
+            vk_physical_device, memRequirements.memoryTypeBits,
+            desc->memory_kind, &result._memory_properties_vk);
+        if (memoryTypeIndex == UINT32_MAX) {
+            vkDestroyBuffer(vk_device, result._buffer_vk, NULL);
+            return SPUDRESULT_API_SPECIFIC_FAILURE;
+        }
+        result._memory_size_vk = memRequirements.size;
 
         // Required whenever the buffer was created with
         // VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT (see bufferInfo.usage
@@ -136,9 +224,7 @@ SPUDRESULT spudgpu_create_buffer(
         allocInfo.pNext = &allocFlagsInfo;
         allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
         allocInfo.allocationSize = memRequirements.size;
-        allocInfo.memoryTypeIndex = spudgpuvulkan___find_memory_type_internal(
-            vk_physical_device, memRequirements.memoryTypeBits,
-            properties);
+        allocInfo.memoryTypeIndex = memoryTypeIndex;
 
         if (vkAllocateMemory(vk_device, &allocInfo, NULL, &result._memory_vk) != VK_SUCCESS) {
             //throw std::runtime_error("SpudGPU Vulkan: failed to allocate buffer memory!");
@@ -260,21 +346,24 @@ SPUDRESULT spudgpu_map_buffer(
     if (offset + size > buffer->_desc.size) return SPUDRESULT_GPU_MAP_OUT_OF_RANGE;
     if (!ppData) return SPUDRESULT_NULL_OUTPUT_PARAMETER;
 
-    // Guard: must have been allocated with HOST_VISIBLE
-    if (!(buffer->_desc.memory_flags & SPUDGPU_MEMORY_FLAGS_HOST_VISIBLE))
-        return SPUDRESULT_GPU_INVALID_MEMORY_FLAGS;
+    if (buffer->_desc.memory_kind == SPUDGPU_MEMORY_KIND_DEVICE)
+        return SPUDRESULT_GPU_INVALID_MEMORY_KIND;
 
-    VkDeviceSize mapSize = (size == 0) ? buffer->_desc.size : size;
-
+    // The whole allocation is mapped, whatever range was asked for: a flush
+    // or invalidate range has to be widened to nonCoherentAtomSize (see
+    // spudgpuvulkan___internal_buffer_memory_range) and still lie inside
+    // the mapping.
+    void *mapped = NULL;
     if (vkMapMemory(
         buffer->_device._logical_device_vk,
         buffer->_memory_vk,
-        (VkDeviceSize) offset,
-        mapSize,
+        0,
+        VK_WHOLE_SIZE,
         0, // flags — reserved, must be 0
-        ppData) != VK_SUCCESS)
+        &mapped) != VK_SUCCESS)
         return SPUDRESULT_API_SPECIFIC_FAILURE;
 
+    *ppData = (uint8_t *) mapped + offset;
 	return SPUD_SUCCESS;
 }
 
@@ -285,22 +374,28 @@ void spudgpu_unmap_buffer(spudgpu_buffer buffer) {
         buffer->_memory_vk);
 }
 
-void spudgpu_flush_buffer(
+SPUDRESULT spudgpu_flush_buffer(
     spudgpu_buffer buffer,
     uint64_t offset,
     uint64_t size) {
-    if (!buffer) return;
-    
-    VkMappedMemoryRange range = {0};
-    range.pNext = NULL;
-    range.sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE;
-    range.memory = buffer->_memory_vk;
-    range.offset = (VkDeviceSize) offset;
-    range.size = (size == 0) ? VK_WHOLE_SIZE : (VkDeviceSize) size;
+    if (!buffer) return SPUDRESULT_GPU_INVALID_BUFFER;
+    if (buffer->_desc.memory_kind != SPUDGPU_MEMORY_KIND_UPLOAD &&
+        buffer->_desc.memory_kind != SPUDGPU_MEMORY_KIND_DEVICE_MAPPABLE)
+        return SPUDRESULT_GPU_INVALID_MEMORY_KIND;
+    if (offset + size > buffer->_desc.size) return SPUDRESULT_GPU_MAP_OUT_OF_RANGE;
 
-    vkFlushMappedMemoryRanges(
+    // Coherent memory has nothing to flush.
+    if (buffer->_memory_properties_vk & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)
+        return SPUD_SUCCESS;
+
+    const VkMappedMemoryRange range = spudgpuvulkan___internal_buffer_memory_range(
+        buffer, offset, (size == 0) ? buffer->_desc.size - offset : size);
+    if (vkFlushMappedMemoryRanges(
         buffer->_device._logical_device_vk,
-        1, &range);
+        1, &range) != VK_SUCCESS)
+        return SPUDRESULT_API_SPECIFIC_FAILURE;
+
+    return SPUD_SUCCESS;
 }
 
 SPUDRESULT spudgpu_invalidate_buffer(
@@ -308,19 +403,22 @@ SPUDRESULT spudgpu_invalidate_buffer(
     uint64_t offset,
     uint64_t size) {
     if (!buffer) return SPUDRESULT_GPU_INVALID_BUFFER;
+    if (buffer->_desc.memory_kind != SPUDGPU_MEMORY_KIND_READBACK &&
+        buffer->_desc.memory_kind != SPUDGPU_MEMORY_KIND_DEVICE_MAPPABLE)
+        return SPUDRESULT_GPU_INVALID_MEMORY_KIND;
+    if (offset + size > buffer->_desc.size) return SPUDRESULT_GPU_MAP_OUT_OF_RANGE;
 
-    VkMappedMemoryRange range = {0};
-    range.pNext = NULL;
-    range.sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE;
-    range.memory = buffer->_memory_vk;
-    range.offset = (VkDeviceSize) offset;
-    range.size = (size == 0) ? VK_WHOLE_SIZE : (VkDeviceSize) size;
+    // Coherent memory has nothing to invalidate.
+    if (buffer->_memory_properties_vk & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)
+        return SPUD_SUCCESS;
 
+    const VkMappedMemoryRange range = spudgpuvulkan___internal_buffer_memory_range(
+        buffer, offset, (size == 0) ? buffer->_desc.size - offset : size);
     if (vkInvalidateMappedMemoryRanges(
         buffer->_device._logical_device_vk,
-        1, &range) != VK_SUCCESS )
+        1, &range) != VK_SUCCESS)
         return SPUDRESULT_API_SPECIFIC_FAILURE;
-    
+
     return SPUD_SUCCESS;
 }
 

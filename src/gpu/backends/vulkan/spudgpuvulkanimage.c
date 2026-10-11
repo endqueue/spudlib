@@ -12,10 +12,6 @@ extern uint32_t spudgpuvulkan___find_memory_type_internal(
     uint32_t typeFilter,
     VkMemoryPropertyFlags properties);
 
-extern void spudgpuvulkan___memory_property_flags_internal(
-    uint32_t __spud_gpu_memory_flags,
-    VkMemoryPropertyFlags *output);
-
 static void spudgpuvulkan___image_usage_flags_internal(
     uint32_t __spud_gpu_image_usage,
     VkImageUsageFlags *output) {
@@ -120,8 +116,6 @@ SPUDRESULT spudgpu_create_image(
                                 SPUDGPU_IMAGE_USAGE_TRANSFER_SRC | SPUDGPU_IMAGE_USAGE_TRANSFER_DST |
                                 SPUDGPU_IMAGE_USAGE_PRESENTABLE))
                 return SPUDRESULT_GPU_INVALID_IMAGE_USAGE;
-            if (desc->memory_flags & SPUDGPU_MEMORY_FLAGS_HOST_VISIBLE)
-                return SPUDRESULT_GPU_INVALID_MEMORY_FLAGS;
         }
         if (desc->format == SPUDGPU_FORMAT_UNKNOWN) return SPUDRESULT_GPU_INVALID_FORMAT;
     }

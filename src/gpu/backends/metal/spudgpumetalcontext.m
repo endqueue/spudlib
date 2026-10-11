@@ -98,6 +98,9 @@ static void spudgpumetal___internal_make_device_properties(
 	device->_properties.dedicated_system_memory = 0;
 	device->_properties.shared_system_memory    = unified ? workingSet : 0;
 	device->_properties.unified_memory          = unified;
+	// SPUDGPU_MEMORY_KIND_DEVICE_MAPPABLE is Shared storage, which is the
+	// device's own memory only where that memory is the system's.
+	device->_properties.device_mappable_memory  = unified;
 }
 
 static SPUDRESULT spudgpumetal___internal_create_command_queue_family(

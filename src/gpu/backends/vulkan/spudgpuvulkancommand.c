@@ -507,6 +507,24 @@ void spudgpu_cmd_push_constants(
         stages, offset, size, data);
 }
 
+void spudgpu_cmd_push_constants_compute(
+    spudgpu_command_list     cmd,
+    spudgpu_compute_pipeline pipeline,
+    uint32_t                 offset,
+    uint32_t                 size,
+    const void              *data) {
+    if (!cmd || !pipeline || !data || size == 0) return;
+    if (!pipeline->_desc.push_constant_range_count) return;
+
+    /* Every range of a compute pipeline's layout is created with the compute
+     * stage alone (spudgpu_create_compute_pipeline), so there are no stage
+     * flags to collect from the ranges. */
+    vkCmdPushConstants(
+        cmd->_command_buffer_vk,
+        pipeline->_pipeline_layout_vk,
+        VK_SHADER_STAGE_COMPUTE_BIT, offset, size, data);
+}
+
 void spudgpu_cmd_bind_bindless_resources(
     spudgpu_command_list cmd,
     spudgpu_shader_pipeline pipeline,

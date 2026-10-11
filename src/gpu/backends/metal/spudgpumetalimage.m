@@ -211,8 +211,6 @@ SPUDRESULT spudgpu_create_image(
 		                   SPUDGPU_IMAGE_USAGE_TRANSFER_SRC | SPUDGPU_IMAGE_USAGE_TRANSFER_DST |
 		                   SPUDGPU_IMAGE_USAGE_PRESENTABLE))
 			return SPUDRESULT_GPU_INVALID_IMAGE_USAGE;
-		if (desc->memory_flags & SPUDGPU_MEMORY_FLAGS_HOST_VISIBLE)
-			return SPUDRESULT_GPU_INVALID_MEMORY_FLAGS;
 	}
 
 	MTLPixelFormat pixel_format = spudgpumetal___internal_image_pixel_format(desc->format);
@@ -240,23 +238,11 @@ SPUDRESULT spudgpu_create_image(
 		texture_desc.arrayLength           = (texture_desc.textureType == MTLTextureType3D) ? 1 : desc->array_layers;
 		texture_desc.mipmapLevelCount      = desc->mip_levels;
 		texture_desc.usage                 = spudgpumetal___internal_image_texture_usage(desc->usage);
-		// heap_flags/image_flags: same reasoning as spudgpu_create_buffer -
-		// SPUDGPU_HEAP_FLAG_ALLOW_SHADER_ATOMICS is a documented no-op,
-		// NOT_ZEROED is already Metal's default behavior, SHARED/
-		// CREATE_NOT_RESIDENT and SPUDGPU_RESOURCE_FLAG_ALLOW_SIMULTANEOUS_ACCESS
-		// have no equivalent on a plain MTLTexture and are unused.
-		//
-		// memory_flags: only HOST_VISIBLE's presence matters, same as
-		// buffers - Private for GPU-only, Shared for CPU-visible. Most
-		// images want Private. SPUDGPU_IMAGE_USAGE_TRANSIENT_ATTACHMENT
-		// takes priority over both: spudgpu_create_image above already
-		// rejected combining it with HOST_VISIBLE, so reaching here with it
-		// set means a plain tile-memory-only allocation is wanted.
+		// An image has no memory kind (see spudgpu_image_desc): it is in
+		// the device's memory and never mapped, which is Private storage.
+		// A transient attachment has no memory at all outside its pass.
 		if (desc->usage & SPUDGPU_IMAGE_USAGE_TRANSIENT_ATTACHMENT) {
 			texture_desc.storageMode = MTLStorageModeMemoryless;
-		} else if (desc->memory_flags & SPUDGPU_MEMORY_FLAGS_HOST_VISIBLE) {
-			texture_desc.storageMode  = MTLStorageModeShared;
-			texture_desc.cpuCacheMode = (desc->memory_flags & SPUDGPU_MEMORY_FLAGS_HOST_CACHED) ? MTLCPUCacheModeDefaultCache : MTLCPUCacheModeWriteCombined;
 		} else {
 			texture_desc.storageMode = MTLStorageModePrivate;
 		}

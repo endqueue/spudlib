@@ -206,6 +206,10 @@ bool ___internal_spudgpu_d3d12_make_device_properties(
 	HRESULT hr                                    = device->_d3d_device->CheckFeatureSupport(
 	    D3D12_FEATURE_ARCHITECTURE1, &architecture, sizeof(architecture));
 	device->_properties.unified_memory = SUCCEEDED(hr) && architecture.UMA;
+	// SPUDGPU_MEMORY_KIND_DEVICE_MAPPABLE is a custom heap in pool L0 that
+	// the CPU can map, which holds a resource in any state only on a UMA
+	// adapter.
+	device->_properties.device_mappable_memory = device->_properties.unified_memory;
 	return true;
 }
 SPUDRESULT spudgpu_enumerate_devices(

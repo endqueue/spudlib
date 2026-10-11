@@ -2,7 +2,7 @@
 //!
 //! # Quick start
 //! ```no_run
-//! use spudgpu::{Instance, NativeApi, Buffer, BufferDesc, BufferUsage, MemoryFlags};
+//! use spudgpu::{Instance, NativeApi, Buffer, BufferDesc, BufferUsage, MemoryKind};
 //!
 //! let instance = Instance::new(NativeApi::Vulkan, "My App", 1, "My Engine", 1)
 //!     .expect("Failed to initialize SpudGPU");
@@ -14,7 +14,7 @@
 //!
 //! let buffer = Buffer::new(device, &BufferDesc {
 //!     usage: BufferUsage::VERTEX | BufferUsage::INDEX,
-//!     memory_flags: MemoryFlags::DEVICE_LOCAL,
+//!     memory_kind: MemoryKind::DEVICE,
 //!     size: 1024,
 //! }).expect("Failed to create buffer");
 //! ```
@@ -108,23 +108,17 @@ impl Format {
 }
 
 // ----------------------------------------------------------------
-// MemoryFlags  (bitflags-style struct so users can OR them)
+// MemoryKind  (one kind per buffer: these do not combine)
 // ----------------------------------------------------------------
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct MemoryFlags(u32);
+pub struct MemoryKind(u32);
 
-impl MemoryFlags {
-    pub const NONE:          Self = Self(sys::SPUDGPU_MEMORY_FLAGS_NONE);
-    pub const DEVICE_LOCAL:  Self = Self(sys::SPUDGPU_MEMORY_FLAGS_DEVICE_LOCAL);
-    pub const HOST_VISIBLE:  Self = Self(sys::SPUDGPU_MEMORY_FLAGS_HOST_VISIBLE);
-    pub const HOST_COHERENT: Self = Self(sys::SPUDGPU_MEMORY_FLAGS_HOST_COHERENT);
-    pub const HOST_CACHED:   Self = Self(sys::SPUDGPU_MEMORY_FLAGS_HOST_CACHED);
-}
-
-impl std::ops::BitOr for MemoryFlags {
-    type Output = Self;
-    fn bitor(self, rhs: Self) -> Self { Self(self.0 | rhs.0) }
+impl MemoryKind {
+    pub const DEVICE:          Self = Self(sys::SPUDGPU_MEMORY_KIND_DEVICE);
+    pub const UPLOAD:          Self = Self(sys::SPUDGPU_MEMORY_KIND_UPLOAD);
+    pub const READBACK:        Self = Self(sys::SPUDGPU_MEMORY_KIND_READBACK);
+    pub const DEVICE_MAPPABLE: Self = Self(sys::SPUDGPU_MEMORY_KIND_DEVICE_MAPPABLE);
 }
 
 // ----------------------------------------------------------------
@@ -284,7 +278,7 @@ unsafe impl Sync for Device {}
 
 pub struct BufferDesc {
     pub usage: BufferUsage,
-    pub memory_flags: MemoryFlags,
+    pub memory_kind: MemoryKind,
     pub size: u64,
 }
 
@@ -307,7 +301,7 @@ impl Buffer {
 
         let raw_desc = sys::spudgpu_buffer_desc {
             usage: desc.usage.0,
-            memory_flags: desc.memory_flags.0,
+            memory_kind: desc.memory_kind.0,
             gpu_address_location: 0,
             size: desc.size,
         };
@@ -350,7 +344,6 @@ unsafe impl Send for Buffer {}
 
 pub struct ImageDesc {
     pub usage: ImageUsage,
-    pub memory_flags: MemoryFlags,
     pub format: Format,
     pub width: u32,
     pub height: u32,
@@ -375,7 +368,6 @@ impl Image {
         let raw_desc = sys::spudgpu_image_desc {
             usage: desc.usage.0,
             type_: 0,   // derived from usage on the C side currently
-            memory_flags: desc.memory_flags.0,
             gpu_address_location: 0,
             format: desc.format.to_raw(),
             width: desc.width,

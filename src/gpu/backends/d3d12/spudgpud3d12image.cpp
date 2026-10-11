@@ -11,7 +11,7 @@ static SPUDRESULT spudgpu_d3d12_create_resource_desc_from_image(
 	if (!out_d3d_resource_desc)
 		return SPUD_SUCCESS;
 	D3D12_RESOURCE_FLAGS d3dResourceFlags =
-	    spudgpu_d3d12_get_image_resource_flags(desc->usage, desc->image_flags);
+	    spudgpu_d3d12_get_image_resource_flags(desc->usage);
 	DXGI_FORMAT dxgiFmt = spudgpu_d3d12_get_dxgi_format(desc->format);
 	CD3DX12_RESOURCE_DESC result;
 	switch (desc->type) {
@@ -75,8 +75,6 @@ SPUDRESULT spudgpu_create_image(
 		                   SPUDGPU_IMAGE_USAGE_TRANSFER_SRC | SPUDGPU_IMAGE_USAGE_TRANSFER_DST |
 		                   SPUDGPU_IMAGE_USAGE_PRESENTABLE))
 			return SPUDRESULT_GPU_INVALID_IMAGE_USAGE;
-		if (desc->memory_flags & SPUDGPU_MEMORY_FLAGS_HOST_VISIBLE)
-			return SPUDRESULT_GPU_INVALID_MEMORY_FLAGS;
 	}
 	if (desc->format == SPUDGPU_FORMAT_UNKNOWN)
 		return SPUDRESULT_GPU_INVALID_FORMAT;
@@ -97,9 +95,10 @@ SPUDRESULT spudgpu_create_image(
 		return sr;
 	}
 
+	// An image is always in the device's memory (see spudgpu_image_desc).
 	D3D12_HEAP_PROPERTIES d3dHeapProperties =
-	    spudgpu_d3d12_get_heap_properties_from_memory_flags(desc->memory_flags);
-	D3D12_HEAP_FLAGS d3dHeapFlags = spudgpu_d3d12_get_heap_flags(desc->heap_flags);
+	    spudgpu_d3d12_get_heap_properties_from_memory_kind(SPUDGPU_MEMORY_KIND_DEVICE);
+	D3D12_HEAP_FLAGS d3dHeapFlags = spudgpu_d3d12_get_heap_flags();
 	if (desc->usage & SPUDGPU_IMAGE_USAGE_PRESENTABLE)
 		d3dHeapFlags |= D3D12_HEAP_FLAG_ALLOW_DISPLAY;
 	D3D12_RESOURCE_STATES d3dInitialState =

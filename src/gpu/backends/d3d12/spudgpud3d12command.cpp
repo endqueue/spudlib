@@ -487,8 +487,17 @@ void spudgpu_cmd_pipeline_barrier(
 
 	for (uint32_t i = 0; i < buffer_barrier_count; i++) {
 		const spudgpu_buffer_barrier &b = buffer_barriers[i];
+		// UNORDERED_ACCESS to UNORDERED_ACCESS is not a transition and not
+		// nothing: it is the header's "writes before are complete before
+		// accesses after", which D3D12 has its own barrier type for.
+		if (b.state_before == SPUDGPU_RESOURCE_STATE_UNORDERED_ACCESS &&
+		    b.state_after == SPUDGPU_RESOURCE_STATE_UNORDERED_ACCESS) {
+			barriers.push_back(CD3DX12_RESOURCE_BARRIER::UAV(b.buffer->_d3d_resource.Get()));
+			continue;
+		}
 		D3D12_RESOURCE_STATES before = spudgpu_d3d12___resource_state(b.state_before);
 		D3D12_RESOURCE_STATES after = spudgpu_d3d12___resource_state(b.state_after);
+		// Any other pair of equal states does nothing, as the header says.
 		if (before == after)
 			continue;
 		barriers.push_back(CD3DX12_RESOURCE_BARRIER::Transition(
@@ -496,6 +505,12 @@ void spudgpu_cmd_pipeline_barrier(
 	}
 	for (uint32_t i = 0; i < image_barrier_count; i++) {
 		const spudgpu_image_barrier &b = image_barriers[i];
+		// As for a buffer, above.
+		if (b.state_before == SPUDGPU_RESOURCE_STATE_UNORDERED_ACCESS &&
+		    b.state_after == SPUDGPU_RESOURCE_STATE_UNORDERED_ACCESS) {
+			barriers.push_back(CD3DX12_RESOURCE_BARRIER::UAV(b.image->_d3d_resource.Get()));
+			continue;
+		}
 		D3D12_RESOURCE_STATES before = spudgpu_d3d12___resource_state(b.state_before);
 		D3D12_RESOURCE_STATES after = spudgpu_d3d12___resource_state(b.state_after);
 		if (before == after)

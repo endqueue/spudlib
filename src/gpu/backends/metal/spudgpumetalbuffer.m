@@ -10,25 +10,23 @@
 #include "spudgpumetal.h"
 #include <Metal/Metal.h>
 
-// Only two storage modes matter on Apple Silicon's unified memory - there is
-// no MTLStorageModeManaged here (that mode doesn't exist on Apple Silicon at
-// all; it's a discrete-GPU-era mode for genuinely separate CPU/GPU memory).
-// HOST_VISIBLE's presence picks Shared vs. Private; HOST_CACHED then picks
-// the CPU cache mode within Shared (same tradeoff as a D3D12 upload vs.
-// readback heap). HOST_COHERENT doesn't change anything: Shared storage is
-// always coherent on unified memory, so there is no non-coherent
-// host-visible tier to opt in or out of - see spudgpu_flush_buffer/
-// spudgpu_invalidate_buffer below.
-static MTLResourceOptions spudgpumetal___internal_buffer_resource_options(SPUDGPU_MEMORY_FLAGS memory_flags) {
-	if (!(memory_flags & SPUDGPU_MEMORY_FLAGS_HOST_VISIBLE)) {
+// The storage a buffer of [kind] gets: what each SPUDGPU_MEMORY_KIND
+// documents in spudgpu.h. Only two storage modes are used - Private for the
+// one kind that is never mapped, Shared for the rest - and the CPU cache mode
+// separates the kind the CPU only writes from the kinds it reads.
+// MTLStorageModeManaged is not used: it keeps a second copy to synchronize,
+// which no kind asks for. spudgpu_create_buffer has already refused a value
+// that is not a kind.
+static MTLResourceOptions spudgpumetal___internal_buffer_resource_options(SPUDGPU_MEMORY_KIND memory_kind) {
+	switch (memory_kind) {
+	case SPUDGPU_MEMORY_KIND_UPLOAD:
+		return MTLResourceStorageModeShared | MTLResourceCPUCacheModeWriteCombined;
+	case SPUDGPU_MEMORY_KIND_READBACK:
+	case SPUDGPU_MEMORY_KIND_DEVICE_MAPPABLE:
+		return MTLResourceStorageModeShared | MTLResourceCPUCacheModeDefaultCache;
+	default:
 		return MTLResourceStorageModePrivate;
 	}
-
-	MTLResourceOptions options = MTLResourceStorageModeShared;
-	options |= (memory_flags & SPUDGPU_MEMORY_FLAGS_HOST_CACHED)
-	               ? MTLResourceCPUCacheModeDefaultCache
-	               : MTLResourceCPUCacheModeWriteCombined;
-	return options;
 }
 
 SPUDRESULT spudgpu_create_buffer(
@@ -49,6 +47,19 @@ SPUDRESULT spudgpu_create_buffer(
 	spudgpu_device_metal *device_metal = (spudgpu_device_metal *)device;
 	SPUDRESULT sr                      = SPUD_SUCCESS;
 
+	// SPUDGPU_MEMORY_KIND's contract (see spudgpu.h), the same checks in the
+	// same order on every backend.
+	if (desc->memory_kind < SPUDGPU_MEMORY_KIND_DEVICE || desc->memory_kind > SPUDGPU_MEMORY_KIND_DEVICE_MAPPABLE)
+		return SPUDRESULT_GPU_INVALID_MEMORY_KIND;
+	if (desc->memory_kind == SPUDGPU_MEMORY_KIND_UPLOAD &&
+	    (desc->usage & (SPUDGPU_BUFFER_USAGE_STORAGE | SPUDGPU_BUFFER_USAGE_TRANSFER_DST |
+	                    SPUDGPU_BUFFER_USAGE_RAYTRACING_ACCELERATION_STRUCTURE)))
+		return SPUDRESULT_GPU_INVALID_BUFFER_USAGE;
+	if (desc->memory_kind == SPUDGPU_MEMORY_KIND_READBACK && desc->usage != SPUDGPU_BUFFER_USAGE_TRANSFER_DST)
+		return SPUDRESULT_GPU_INVALID_BUFFER_USAGE;
+	if (desc->memory_kind == SPUDGPU_MEMORY_KIND_DEVICE_MAPPABLE && !device_metal->_properties.device_mappable_memory)
+		return SPUDRESULT_GPU_MEMORY_KIND_NOT_SUPPORTED;
+
 	spudgpu_buffer_metal *buffer_metal = (spudgpu_buffer_metal *)calloc(1, sizeof(spudgpu_buffer_metal));
 	if (!buffer_metal) {
 		sr = SPUDRESULT_GENERAL_FAILURE;
@@ -57,19 +68,9 @@ SPUDRESULT spudgpu_create_buffer(
 	buffer_metal->_parent_device = device_metal;
 	buffer_metal->_desc          = *desc;
 
-	// heap_flags: SPUDGPU_HEAP_FLAG_ALLOW_SHADER_ATOMICS is a documented
-	// no-op on Metal (see spudgpu.h). SPUDGPU_HEAP_FLAG_NOT_ZEROED is also a
-	// no-op here - Metal never guarantees zero-initialized contents in the
-	// first place (unlike Vulkan/D3D12's default-zeroed allocations), so
-	// there's nothing to opt out of. SPUDGPU_HEAP_FLAG_SHARED (cross-
-	// process) and SPUDGPU_HEAP_FLAG_CREATE_NOT_RESIDENT have no equivalent
-	// on a plain MTLBuffer and are unused - no current caller sets them
-	// (mirrors SPUDGPU_IMAGE_USAGE_PRESENTABLE's precedent). buffer_flags'
-	// SPUDGPU_RESOURCE_FLAG_ALLOW_SIMULTANEOUS_ACCESS is likewise unused -
-	// Metal buffers were never exclusively owned by one queue to begin with.
 	buffer_metal->_buffer_mtl = [device_metal->_device_mtl
 	    newBufferWithLength:desc->size
-	                 options:spudgpumetal___internal_buffer_resource_options(desc->memory_flags)];
+	                 options:spudgpumetal___internal_buffer_resource_options(desc->memory_kind)];
 	if (!buffer_metal->_buffer_mtl) {
 		sr = SPUDRESULT_API_SPECIFIC_FAILURE;
 		goto failedattempt;
@@ -189,10 +190,11 @@ SPUDRESULT spudgpu_map_buffer(
 	if (!ppData)
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
 
-	// Only a Shared-storage buffer (SPUDGPU_MEMORY_FLAGS_HOST_VISIBLE) has a
-	// CPU-visible pointer at all - see spudgpumetal___internal_buffer_resource_options.
-	if (!(buffer_metal->_desc.memory_flags & SPUDGPU_MEMORY_FLAGS_HOST_VISIBLE))
-		return SPUDRESULT_GPU_INVALID_MEMORY_FLAGS;
+	// Only a Shared-storage buffer has a CPU-visible pointer at all, which
+	// is every kind but DEVICE - see
+	// spudgpumetal___internal_buffer_resource_options.
+	if (buffer_metal->_desc.memory_kind == SPUDGPU_MEMORY_KIND_DEVICE)
+		return SPUDRESULT_GPU_INVALID_MEMORY_KIND;
 
 	uint64_t map_size = (size == 0) ? buffer_metal->_desc.size : size;
 	if (offset + map_size > buffer_metal->_desc.size)
@@ -212,19 +214,25 @@ void spudgpu_unmap_buffer(spudgpu_buffer buffer) {
 		return;
 }
 
-// A Shared-storage MTLBuffer on unified memory is always coherent - there is
-// no non-coherent host-visible tier to flush writes out of or invalidate CPU
-// caches for on this backend (see
-// spudgpumetal___internal_buffer_resource_options and spudgpu_create_buffer).
-// Both are correctly no-ops here, not an unimplemented gap - mirrors the
-// D3D12 backend, which is also a no-op for both, for its own reasons
-// (Map()/Unmap()'s range parameters already cover it there).
-void spudgpu_flush_buffer(
+// A Shared-storage MTLBuffer is one piece of memory the CPU and the GPU both
+// see, so there is nothing to flush out of or invalidate - only a Managed
+// buffer has a second copy, and no kind uses one (see
+// spudgpumetal___internal_buffer_resource_options). Both calls make the
+// checks every backend makes and then have nothing to do.
+SPUDRESULT spudgpu_flush_buffer(
     spudgpu_buffer buffer,
     uint64_t offset,
     uint64_t size) {
 	if (!buffer)
-		return;
+		return SPUDRESULT_GPU_INVALID_BUFFER;
+
+	spudgpu_buffer_metal *buffer_metal = (spudgpu_buffer_metal *)buffer;
+	if (buffer_metal->_desc.memory_kind != SPUDGPU_MEMORY_KIND_UPLOAD &&
+	    buffer_metal->_desc.memory_kind != SPUDGPU_MEMORY_KIND_DEVICE_MAPPABLE)
+		return SPUDRESULT_GPU_INVALID_MEMORY_KIND;
+	if (offset + size > buffer_metal->_desc.size)
+		return SPUDRESULT_GPU_MAP_OUT_OF_RANGE;
+	return SPUD_SUCCESS;
 }
 
 SPUDRESULT spudgpu_invalidate_buffer(
@@ -233,6 +241,13 @@ SPUDRESULT spudgpu_invalidate_buffer(
     uint64_t size) {
 	if (!buffer)
 		return SPUDRESULT_GPU_INVALID_BUFFER;
+
+	spudgpu_buffer_metal *buffer_metal = (spudgpu_buffer_metal *)buffer;
+	if (buffer_metal->_desc.memory_kind != SPUDGPU_MEMORY_KIND_READBACK &&
+	    buffer_metal->_desc.memory_kind != SPUDGPU_MEMORY_KIND_DEVICE_MAPPABLE)
+		return SPUDRESULT_GPU_INVALID_MEMORY_KIND;
+	if (offset + size > buffer_metal->_desc.size)
+		return SPUDRESULT_GPU_MAP_OUT_OF_RANGE;
 	return SPUD_SUCCESS;
 }
 

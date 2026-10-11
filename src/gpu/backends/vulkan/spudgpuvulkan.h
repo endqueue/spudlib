@@ -139,6 +139,12 @@ typedef struct spudgpu_buffer_t {
 #endif
     VkBuffer _buffer_vk;
     VkDeviceMemory _memory_vk;
+    // The allocation's size, which may be more than _desc.size, and the
+    // property flags of the memory type it came from. Both are what
+    // spudgpu_flush_buffer/spudgpu_invalidate_buffer need to form a range
+    // Vulkan accepts.
+    VkDeviceSize _memory_size_vk;
+    VkMemoryPropertyFlags _memory_properties_vk;
     spudgpu_buffer_desc _desc;
     spudgpu_device_vulkan _device;
 } spudgpu_buffer_vulkan;

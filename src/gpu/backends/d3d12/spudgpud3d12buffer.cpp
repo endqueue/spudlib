@@ -6,7 +6,7 @@
 static CD3DX12_RESOURCE_DESC spudgpu_d3d12_create_resource_desc_from_buffer(
     const spudgpu_buffer_desc *desc) {
 	D3D12_RESOURCE_FLAGS d3dResourceFlags =
-	    spudgpu_d3d12_get_buffer_resource_flags(desc->usage, desc->buffer_flags);
+	    spudgpu_d3d12_get_buffer_resource_flags(desc->usage);
 	// A CBV's SizeInBytes must be a 256-byte-aligned multiple
 	// (D3D12_CONSTANT_BUFFER_DATA_PLACEMENT_ALIGNMENT), and CreateConstantBufferView
 	// rounds up to that regardless of the resource's real size -- so the backing
@@ -38,6 +38,18 @@ SPUDRESULT spudgpu_create_buffer(
 		return SPUDRESULT_GPU_ZERO_BUFFER_SIZE;
 	if (desc->usage == SPUDGPU_BUFFER_USAGE_NONE)
 		return SPUDRESULT_GPU_INVALID_BUFFER_USAGE;
+	// SPUDGPU_MEMORY_KIND's contract (see spudgpu.h), the same checks in the
+	// same order on every backend.
+	if (desc->memory_kind < SPUDGPU_MEMORY_KIND_DEVICE || desc->memory_kind > SPUDGPU_MEMORY_KIND_DEVICE_MAPPABLE)
+		return SPUDRESULT_GPU_INVALID_MEMORY_KIND;
+	if (desc->memory_kind == SPUDGPU_MEMORY_KIND_UPLOAD &&
+	    (desc->usage & (SPUDGPU_BUFFER_USAGE_STORAGE | SPUDGPU_BUFFER_USAGE_TRANSFER_DST |
+	                    SPUDGPU_BUFFER_USAGE_RAYTRACING_ACCELERATION_STRUCTURE)))
+		return SPUDRESULT_GPU_INVALID_BUFFER_USAGE;
+	if (desc->memory_kind == SPUDGPU_MEMORY_KIND_READBACK && desc->usage != SPUDGPU_BUFFER_USAGE_TRANSFER_DST)
+		return SPUDRESULT_GPU_INVALID_BUFFER_USAGE;
+	if (desc->memory_kind == SPUDGPU_MEMORY_KIND_DEVICE_MAPPABLE && !device->_properties.device_mappable_memory)
+		return SPUDRESULT_GPU_MEMORY_KIND_NOT_SUPPORTED;
 
 	spudgpu_buffer_d3d12 *pResult =
 	    (spudgpu_buffer_d3d12 *)malloc(sizeof(spudgpu_buffer_d3d12));
@@ -50,11 +62,11 @@ SPUDRESULT spudgpu_create_buffer(
 	pResult->_d3d_resource_desc =
 	    spudgpu_d3d12_create_resource_desc_from_buffer(desc);
 	D3D12_HEAP_FLAGS d3dHeapFlags =
-	    spudgpu_d3d12_get_heap_flags(desc->heap_flags);
+	    spudgpu_d3d12_get_heap_flags();
 	D3D12_HEAP_PROPERTIES d3dHeapProperties =
-	    spudgpu_d3d12_get_heap_properties_from_memory_flags(desc->memory_flags);
+	    spudgpu_d3d12_get_heap_properties_from_memory_kind(desc->memory_kind);
 	D3D12_RESOURCE_STATES d3dInitialState =
-	    spudgpu_d3d12_get_initial_buffer_state(desc->memory_flags);
+	    spudgpu_d3d12_get_initial_buffer_state(desc->memory_kind);
 	if (device->_d3d_device->CreateCommittedResource(
 	        &d3dHeapProperties, d3dHeapFlags, &pResult->_d3d_resource_desc,
 	        d3dInitialState, nullptr,
@@ -185,14 +197,22 @@ SPUDRESULT spudgpu_map_buffer(
 		return SPUDRESULT_GPU_MAP_OUT_OF_RANGE;
 	if (!ppData)
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
-	if (!(buffer->_desc.memory_flags & SPUDGPU_MEMORY_FLAGS_HOST_VISIBLE))
-		return SPUDRESULT_GPU_INVALID_MEMORY_FLAGS;
-	// 0 means "map the entire buffer" per spudgpu.h's documented contract --
-	// matches the Vulkan backend's mapSize fallback (spudgpuvulkanbuffer.c).
+	if (buffer->_desc.memory_kind == SPUDGPU_MEMORY_KIND_DEVICE)
+		return SPUDRESULT_GPU_INVALID_MEMORY_KIND;
+	// The read range says what the CPU may read through the pointer. An
+	// UPLOAD buffer is never read (see SPUDGPU_MEMORY_KIND), which is the
+	// empty range; the other kinds may read all of what they map. 0 means
+	// "map the entire buffer" per spudgpu.h.
 	uint64_t mapSize       = (size == 0) ? buffer->_desc.size : size;
-	CD3DX12_RANGE d3dRange = CD3DX12_RANGE(offset, offset + mapSize);
-	if (FAILED(buffer->_d3d_resource->Map(0, &d3dRange, ppData)))
+	CD3DX12_RANGE d3dRange = (buffer->_desc.memory_kind == SPUDGPU_MEMORY_KIND_UPLOAD)
+	                             ? CD3DX12_RANGE(0, 0)
+	                             : CD3DX12_RANGE(offset, offset + mapSize);
+	void *mapped           = nullptr;
+	if (FAILED(buffer->_d3d_resource->Map(0, &d3dRange, &mapped)))
 		return SPUDRESULT_API_SPECIFIC_FAILURE;
+	// Map returns the start of the resource whatever the read range is: the
+	// range is never added to the pointer.
+	*ppData = (uint8_t *)mapped + offset;
 	return SPUD_SUCCESS;
 }
 void spudgpu_unmap_buffer(spudgpu_buffer buffer) {
@@ -200,18 +220,27 @@ void spudgpu_unmap_buffer(spudgpu_buffer buffer) {
 	buffer->_d3d_resource->Unmap(0, nullptr);
 }
 
-// D3D12 has no standalone flush/invalidate call the way Vulkan does
-// (vkFlushMappedMemoryRanges / vkInvalidateMappedMemoryRanges) — that
-// behavior is folded into Map()'s pReadRange and Unmap()'s pWrittenRange
-// parameters instead, which spudgpu_map_buffer/spudgpu_unmap_buffer above
-// already pass. By the time a caller could invoke either of these, the
-// runtime has already guaranteed the mapped range is coherent, so both are
-// correctly no-ops here.
-void spudgpu_flush_buffer(spudgpu_buffer buffer, uint64_t offset, uint64_t size) {
+// D3D12 has no flush or invalidate call: a mapped resource is coherent with
+// the GPU as it is, and the ranges Map() and Unmap() take are hints. Both
+// calls make the checks every backend makes and then have nothing to do.
+SPUDRESULT spudgpu_flush_buffer(spudgpu_buffer buffer, uint64_t offset, uint64_t size) {
+	if (!buffer)
+		return SPUDRESULT_GPU_INVALID_BUFFER;
+	if (buffer->_desc.memory_kind != SPUDGPU_MEMORY_KIND_UPLOAD &&
+	    buffer->_desc.memory_kind != SPUDGPU_MEMORY_KIND_DEVICE_MAPPABLE)
+		return SPUDRESULT_GPU_INVALID_MEMORY_KIND;
+	if (offset + size > buffer->_desc.size)
+		return SPUDRESULT_GPU_MAP_OUT_OF_RANGE;
+	return SPUD_SUCCESS;
 }
 SPUDRESULT spudgpu_invalidate_buffer(spudgpu_buffer buffer, uint64_t offset, uint64_t size) {
 	if (!buffer)
 		return SPUDRESULT_GPU_INVALID_BUFFER;
+	if (buffer->_desc.memory_kind != SPUDGPU_MEMORY_KIND_READBACK &&
+	    buffer->_desc.memory_kind != SPUDGPU_MEMORY_KIND_DEVICE_MAPPABLE)
+		return SPUDRESULT_GPU_INVALID_MEMORY_KIND;
+	if (offset + size > buffer->_desc.size)
+		return SPUDRESULT_GPU_MAP_OUT_OF_RANGE;
 	return SPUD_SUCCESS;
 }
 }

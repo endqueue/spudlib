@@ -213,6 +213,33 @@ at compile time; the table is at the top of `spudaudio.h`.
   `spudgpu_submit_command_lists_synced` is. Written 2026-10-10, not compiled
   on any backend. `spudgpu_semaphore` is still binary on Vulkan and a hidden
   counter on D3D12 and Metal.
+- **A buffer's memory is one `SPUDGPU_MEMORY_KIND`, a contract and not a
+  set of Vulkan property bits.** `DEVICE`, `UPLOAD`, `READBACK` and
+  `DEVICE_MAPPABLE` each say what the CPU and the GPU may do with the buffer
+  and which usages it may have (the table is on the enum in `spudgpu.h`);
+  each backend picks whatever memory keeps that contract, and the checks
+  that enforce it are the same in all three. `SPUDGPU_MEMORY_KIND_NONE` is
+  refused: a zeroed desc has not chosen. Don't add a kind, or a flag beside
+  the kind, that only one API can tell apart (coherent, cached, write
+  combined): the caller always calls `spudgpu_flush_buffer` after a mapped
+  write and `spudgpu_invalidate_buffer` before a mapped read, and a backend
+  that has nothing to do for one does the checks and returns. An image has
+  no kind at all: it is in the device's memory and never mapped.
+  `DEVICE_MAPPABLE` is the one kind a device may lack, reported by
+  `SPUDGPU_DEVICE_PROPERTIES::device_mappable_memory` and refused with
+  `SPUDRESULT_GPU_MEMORY_KIND_NOT_SUPPORTED`; it has no `SPUDGPU_EXT_*`
+  macro because every backend implements it. Written 2026-10-10, not
+  compiled on any backend; D3D12's custom heap for it has never run.
+- **A buffer or image desc carries no flag only one API acts on.**
+  `SPUDGPU_HEAP_FLAGS` (D3D12's heap flags under another name) and
+  `SPUDGPU_RESOURCE_FLAGS` (one D3D12 resource flag) were removed on
+  2026-10-10: Vulkan read neither, Metal ignored both, and no caller set a
+  bit. Don't bring a bit back onto the desc. Sharing a resource across
+  processes or APIs, if it is ever needed, is an `SPUDGPU_EXT_*` group with
+  its export and import calls, which all three APIs can back. Zeroing is
+  settled by rule instead of by flag: a new buffer's or image's contents are
+  undefined until written, on every backend, so the D3D12 backend always
+  passes `D3D12_HEAP_FLAG_CREATE_NOT_ZEROED`.
 - **Native escape hatches are interop-only.** `spudgpu_vulkan_natives.h` /
   `_d3d12_natives.h` / `_metal_natives.h` unwrap a handle back to its raw native type
   (`VkInstance`, `ID3D12Device14`, ...) for third-party libraries SpudLib doesn't wrap
@@ -308,6 +335,40 @@ at compile time; the table is at the top of `spudaudio.h`.
   already disagree, decide which answer is correct and move all of them to it;
   the reference backend is the one to build against first, not the one that wins
   a disagreement.
+- **Where the graphics APIs behave differently underneath, the header states
+  one rule that holds on all of them, and every backend is held to it.** The
+  rule is the narrowest contract every API can keep: what one API preserves
+  and another doesn't is declared undefined for the caller, not exposed as a
+  per-backend difference and not papered over with emulation. It is written
+  in the function's comment as a rule the caller follows, not as a note on
+  what each API happens to do.
+
+  `spudgpu_cmd_push_constants_compute` is the example. Vulkan keeps one push
+  constant state for a command list, D3D12 keeps one for graphics and one for
+  compute, and Metal has none and resends the block to an encoder. The header
+  says none of that. It says:
+
+  ```c
+  /* Two rules hold on every backend, whatever the graphics API underneath
+   * keeps or shares:
+   *
+   * - Push after spudgpu_cmd_bind_compute_pipeline() and before the
+   *   spudgpu_cmd_dispatch() that reads the data. What a dispatch reads from a
+   *   byte that has not been pushed since the compute pipeline was last bound
+   *   is undefined.
+   * - Graphics and compute pipelines do not have a push constant block each:
+   *   after this call, what a draw reads from the block is undefined until it
+   *   is pushed again with spudgpu_cmd_push_constants(), and the other way
+   *   round.
+   */
+  ```
+
+  This is the preferred way to handle such a case. A caller that follows the
+  rule gets the same result on every backend; one that leans on what a single
+  API preserves is outside the contract. Reach for an `SPUDGPU_EXT_*` macro or
+  a capability query only when a backend can't do the thing at all, not when
+  the APIs merely keep different state. The fence model (a counter on every
+  backend) is the same idea applied to an object.
 - What may differ is what only one platform can produce: a failed platform call
   (`SPUDRESULT_API_SPECIFIC_FAILURE`), or a feature a backend doesn't have,
   which is reported through the result code or capability query the header

@@ -524,6 +524,19 @@ static void spudgpuvulkan___internal_make_device_properties(
     // that has none of its own.
     device->_properties.unified_memory =
         props->deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU;
+
+    // SPUDGPU_MEMORY_KIND_DEVICE_MAPPABLE needs a memory type that is the
+    // device's and can be mapped, and is only offered where the device's
+    // memory is the system's (see SPUDGPU_DEVICE_PROPERTIES in spudgpu.h).
+    bool deviceLocalHostVisibleType = false;
+    for (uint32_t i = 0; i < memProps.memoryTypeCount; i++) {
+        const VkMemoryPropertyFlags both =
+            VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT | VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT;
+        if ((memProps.memoryTypes[i].propertyFlags & both) == both)
+            deviceLocalHostVisibleType = true;
+    }
+    device->_properties.device_mappable_memory =
+        device->_properties.unified_memory && deviceLocalHostVisibleType;
 }
 
 SPUDRESULT spudgpu_enumerate_devices(

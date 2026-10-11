@@ -808,12 +808,33 @@ void spudgpu_cmd_push_constants(
 	if (!pipeline->_desc.push_constant_range_count)
 		return;
 	// Push constants are at root param index = descriptor_set_layout_count.
-	uint32_t rootIdx       = pipeline->_desc.descriptor_set_layout_count;
-	uint32_t offset32      = offset / 4;
-	uint32_t count32       = (size + 3) / 4;
-	const uint8_t *bytePtr = (const uint8_t *)data;
+	// [data] is the bytes to write, starting at its first byte; [offset] is
+	// only where in the block they go.
+	uint32_t rootIdx  = pipeline->_desc.descriptor_set_layout_count;
+	uint32_t offset32 = offset / 4;
+	uint32_t count32  = (size + 3) / 4;
 	cmd->_d3d_cmd_list->SetGraphicsRoot32BitConstants(
-	    rootIdx, count32, bytePtr + offset, offset32);
+	    rootIdx, count32, data, offset32);
+}
+
+void spudgpu_cmd_push_constants_compute(
+    spudgpu_command_list cmd,
+    spudgpu_compute_pipeline pipeline,
+    uint32_t offset,
+    uint32_t size,
+    const void *data) {
+	if (!cmd || !pipeline || !data || !size)
+		return;
+	if (!pipeline->_desc.push_constant_range_count)
+		return;
+	// The compute root signature is built by the same
+	// spudgpu_d3d12_build_root_signature as a graphics one, so the constants
+	// are at the same place: root param index = descriptor_set_layout_count.
+	uint32_t rootIdx  = pipeline->_desc.descriptor_set_layout_count;
+	uint32_t offset32 = offset / 4;
+	uint32_t count32  = (size + 3) / 4;
+	cmd->_d3d_cmd_list->SetComputeRoot32BitConstants(
+	    rootIdx, count32, data, offset32);
 }
 
 SPUDRESULT spudgpu_create_compute_pipeline(

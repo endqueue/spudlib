@@ -213,6 +213,11 @@ typedef struct spudgpu_command_list_t {
 	// Push-constant scratch block - see SPUDGPU_METAL_PUSH_CONSTANTS_SIZE.
 	uint8_t _push_constants_scratch[SPUDGPU_METAL_PUSH_CONSTANTS_SIZE];
 	uint32_t _push_constants_extent; // High-water mark of bytes ever written.
+
+	// The same for spudgpu_cmd_push_constants_compute, kept apart so a
+	// compute push never rewrites what the render encoder was last sent.
+	uint8_t _compute_push_constants_scratch[SPUDGPU_METAL_PUSH_CONSTANTS_SIZE];
+	uint32_t _compute_push_constants_extent;
 } spudgpu_command_list_metal;
 
 // Defined in spudgpumetalimage.m - shared so shader pipeline attachment
