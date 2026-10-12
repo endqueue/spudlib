@@ -235,6 +235,12 @@ if(NOT TARGET spudlib)
         find_package(CURL 7.84 REQUIRED)
         find_package(Threads REQUIRED)
         target_link_libraries(spudlib PRIVATE CURL::libcurl Threads::Threads)
+        # libm: spudlib calls libm (sqrtf, etc.) internally. On Linux that's a
+        # separate DSO; Windows folds it into the CRT and Apple into libSystem,
+        # so it's only linked here. spudlib builds STATIC, so this propagates to
+        # consumers' final link line too - which is also why a sample or host
+        # that calls libm itself doesn't have to repeat it.
+        target_link_libraries(spudlib PRIVATE m)
         if(CURL_VERSION_STRING VERSION_LESS "8.11")
             message(WARNING "SpudNet: libcurl ${CURL_VERSION_STRING} is older than 8.11 - spudnet_websocket_* will return SPUDRESULT_SPUDNET_UNSUPPORTED.")
         endif()
