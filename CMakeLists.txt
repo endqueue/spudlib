@@ -23,6 +23,30 @@ endif()
 # Proceed with your clean compile-time single macro definitions...
 message(STATUS "Selected Graphics Backend: ${GRAPHICS_BACKEND}")
 
+# --- vendored-or-fetched dependency ----------------------------------------
+# Probe eqdev/.deps/<dir> for a hand-vendored checkout and use it if present
+# (one copy shared across the whole workspace, no per-repo duplication),
+# otherwise fetch <repo> at the pinned <tag> so a standalone clone of this repo
+# still configures with nothing vendored by hand. Probe <dir>/CMakeLists.txt,
+# not just the directory, so an empty placeholder folder doesn't match.
+include(FetchContent)
+function(spud_declare_vendored_or_fetch name dir repo tag)
+    # Accept either the plain `git clone` folder name (<dir>) or the
+    # FetchContent-style <dir>-src, so a vendored checkout is found without
+    # renaming. Probe <cand>/CMakeLists.txt, not just the directory, so an
+    # empty placeholder folder doesn't match.
+    foreach(_cand "${dir}" "${dir}-src")
+        set(_vendored "${CMAKE_CURRENT_SOURCE_DIR}/../.deps/${_cand}")
+        if(EXISTS "${_vendored}/CMakeLists.txt")
+            message(STATUS "${name}: using vendored ${_vendored}")
+            FetchContent_Declare(${name} SOURCE_DIR "${_vendored}")
+            return()
+        endif()
+    endforeach()
+    message(STATUS "${name}: no vendored copy under .deps/, fetching ${repo}@${tag}")
+    FetchContent_Declare(${name} GIT_REPOSITORY "${repo}" GIT_TAG "${tag}")
+endfunction()
+
 # Don't do anything if another library/application is already compiling SpudLib
 if(NOT TARGET spudlib)
     # Set initial SpudLib sources
@@ -315,6 +339,8 @@ if(NOT TARGET spudlib)
                 # Built from source (not the Vulkan SDK's prebuilt .lib files) so it
                 # picks up CMAKE_MSVC_RUNTIME_LIBRARY and matches our CRT per-config
                 # (the SDK's libs are release-only /MD and mismatch /MDd debug builds).
+                # Prefer eqdev/.deps/SPIRV-Cross if vendored (shared with the Metal
+                # path and ApricotFields, no duplicate checkout); else fetch.
                 include(FetchContent)
                 set(SPIRV_CROSS_CLI OFF CACHE BOOL "" FORCE)
                 set(SPIRV_CROSS_ENABLE_TESTS OFF CACHE BOOL "" FORCE)
@@ -323,11 +349,8 @@ if(NOT TARGET spudlib)
                 set(SPIRV_CROSS_ENABLE_REFLECT OFF CACHE BOOL "" FORCE)
                 set(SPIRV_CROSS_ENABLE_C_API OFF CACHE BOOL "" FORCE)
                 set(SPIRV_CROSS_ENABLE_UTIL OFF CACHE BOOL "" FORCE)
-                FetchContent_Declare(
-                    spirv_cross
-                    GIT_REPOSITORY https://github.com/KhronosGroup/SPIRV-Cross.git
-                    GIT_TAG        vulkan-sdk-1.4.341.0
-                )
+                spud_declare_vendored_or_fetch(spirv_cross SPIRV-Cross
+                    https://github.com/KhronosGroup/SPIRV-Cross.git vulkan-sdk-1.4.363.0)
                 set(CMAKE_POLICY_VERSION_MINIMUM 3.10)
                 FetchContent_MakeAvailable(spirv_cross)
 
@@ -384,10 +407,10 @@ if(NOT TARGET spudlib)
             # plain Objective-C (see the OBJC note above), which can't link
             # against SPIRV-Cross's C++ template-heavy interface directly.
             #
-            # Vendored locally under eqdev/.deps/SPIRV-Cross (the same
-            # eqdev/.deps/ convention already used for SDL3/glm/imgui-docking/
-            # etc.) rather than a fresh git clone - FetchContent's SOURCE_DIR
-            # points it at that checkout instead of fetching anything.
+            # Vendored under eqdev/.deps/SPIRV-Cross (the same eqdev/.deps/
+            # convention already used for SDL3/glm/imgui-docking/etc.); if that
+            # checkout isn't present (e.g. a standalone clone of this repo),
+            # fetch the pinned tag instead.
             include(FetchContent)
             set(SPIRV_CROSS_CLI OFF CACHE BOOL "" FORCE)
             set(SPIRV_CROSS_ENABLE_TESTS OFF CACHE BOOL "" FORCE)
@@ -397,10 +420,8 @@ if(NOT TARGET spudlib)
             set(SPIRV_CROSS_ENABLE_REFLECT OFF CACHE BOOL "" FORCE)
             set(SPIRV_CROSS_ENABLE_C_API ON CACHE BOOL "" FORCE)
             set(SPIRV_CROSS_ENABLE_UTIL OFF CACHE BOOL "" FORCE)
-            FetchContent_Declare(
-                spirv_cross
-                SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../.deps/SPIRV-Cross
-            )
+            spud_declare_vendored_or_fetch(spirv_cross SPIRV-Cross
+                https://github.com/KhronosGroup/SPIRV-Cross.git vulkan-sdk-1.4.363.0)
             set(CMAKE_POLICY_VERSION_MINIMUM 3.10)
             FetchContent_MakeAvailable(spirv_cross)
 
