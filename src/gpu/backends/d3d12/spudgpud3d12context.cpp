@@ -218,6 +218,8 @@ bool ___internal_spudgpu_d3d12_make_device_properties(
 	hr = device->_d3d_device->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS, &options, sizeof(options));
 	device->_properties.layered_rendering =
 	    SUCCEEDED(hr) && options.VPAndRTArrayIndexFromAnyShaderFeedingRasterizerSupportedWithoutGSEmulation;
+	// An ID3D12Heap can have the heap properties of every kind.
+	device->_properties.mappable_heaps = true;
 	return true;
 }
 SPUDRESULT spudgpu_enumerate_devices(

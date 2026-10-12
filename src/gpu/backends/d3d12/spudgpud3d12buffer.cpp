@@ -3,7 +3,7 @@
 
 #include "spudgpud3d12.hpp"
 
-static CD3DX12_RESOURCE_DESC spudgpu_d3d12_create_resource_desc_from_buffer(
+CD3DX12_RESOURCE_DESC spudgpu_d3d12_create_resource_desc_from_buffer(
     const spudgpu_buffer_desc *desc) {
 	D3D12_RESOURCE_FLAGS d3dResourceFlags =
 	    spudgpu_d3d12_get_buffer_resource_flags(desc->usage);
@@ -22,18 +22,9 @@ static CD3DX12_RESOURCE_DESC spudgpu_d3d12_create_resource_desc_from_buffer(
 	return result;
 }
 
-extern "C" {
-
-SPUDRESULT spudgpu_create_buffer(
-    spudgpu_device device,
-    const spudgpu_buffer_desc *desc,
-    spudgpu_buffer *out_buffer) {
-	if (!device)
-		return SPUDRESULT_GPU_INVALID_DEVICE;
-	if (!desc)
-		return SPUDRESULT_NULL_DESC;
-	if (!out_buffer)
-		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
+SPUDRESULT spudgpu_d3d12_check_buffer_desc(
+    const SPUDGPU_DEVICE_PROPERTIES *properties,
+    const spudgpu_buffer_desc *desc) {
 	if (desc->size == 0)
 		return SPUDRESULT_GPU_ZERO_BUFFER_SIZE;
 	if (desc->usage == SPUDGPU_BUFFER_USAGE_NONE)
@@ -48,8 +39,26 @@ SPUDRESULT spudgpu_create_buffer(
 		return SPUDRESULT_GPU_INVALID_BUFFER_USAGE;
 	if (desc->memory_kind == SPUDGPU_MEMORY_KIND_READBACK && desc->usage != SPUDGPU_BUFFER_USAGE_TRANSFER_DST)
 		return SPUDRESULT_GPU_INVALID_BUFFER_USAGE;
-	if (desc->memory_kind == SPUDGPU_MEMORY_KIND_DEVICE_MAPPABLE && !device->_properties.device_mappable_memory)
+	if (desc->memory_kind == SPUDGPU_MEMORY_KIND_DEVICE_MAPPABLE && !properties->device_mappable_memory)
 		return SPUDRESULT_GPU_MEMORY_KIND_NOT_SUPPORTED;
+	return SPUD_SUCCESS;
+}
+
+extern "C" {
+
+SPUDRESULT spudgpu_create_buffer(
+    spudgpu_device device,
+    const spudgpu_buffer_desc *desc,
+    spudgpu_buffer *out_buffer) {
+	if (!device)
+		return SPUDRESULT_GPU_INVALID_DEVICE;
+	if (!desc)
+		return SPUDRESULT_NULL_DESC;
+	if (!out_buffer)
+		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
+	const SPUDRESULT descResult = spudgpu_d3d12_check_buffer_desc(&device->_properties, desc);
+	if (descResult != SPUD_SUCCESS)
+		return descResult;
 
 	spudgpu_buffer_d3d12 *pResult =
 	    (spudgpu_buffer_d3d12 *)malloc(sizeof(spudgpu_buffer_d3d12));
@@ -76,6 +85,8 @@ SPUDRESULT spudgpu_create_buffer(
 		return SPUDRESULT_API_SPECIFIC_FAILURE;
 	}
 	pResult->_d3d_gpu_address = pResult->_d3d_resource->GetGPUVirtualAddress();
+	// spudgpu_get_buffer_desc hands this back (see spudgpu.h).
+	pResult->_desc.gpu_address_location = pResult->_d3d_gpu_address;
 
 #if _DEBUG
 	if (spud_debug_name_set(pResult, desc->debug_name) != SPUD_SUCCESS) {
@@ -92,6 +103,8 @@ void spudgpu_destroy_buffer(spudgpu_buffer buffer) {
 	if (!buffer)
 		return;
 #if _DEBUG
+	if (buffer->_heap)
+		buffer->_heap->_placed_count--;
 	free((void *)buffer->_debug_name);
 #endif
 	buffer->~spudgpu_buffer_d3d12();

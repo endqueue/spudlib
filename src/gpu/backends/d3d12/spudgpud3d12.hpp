@@ -5,6 +5,7 @@
 #include "spudgpu.h"
 #include "spudgpu_d3d12_natives.h"
 #include <array>
+#include <atomic>
 #include <cstdlib>
 #include <dxgi1_6.h>
 #include <new>
@@ -249,6 +250,9 @@ typedef struct spudgpu_buffer_t {
 	Microsoft::WRL::ComPtr<ID3D12Resource2> _d3d_resource;
 	D3D12_RESOURCE_DESC _d3d_resource_desc;
 	D3D12_GPU_VIRTUAL_ADDRESS _d3d_gpu_address;
+	// nullptr for a committed buffer; the heap it was placed in otherwise
+	// (spudgpu_create_placed_buffer).
+	spudgpu_heap _heap;
 } spudgpu_buffer_d3d12;
 
 typedef struct spudgpu_buffer_view_t {
@@ -293,7 +297,46 @@ typedef struct spudgpu_image_t {
 	// the whole image can't describe mip N in one layout and mip N + 1 in
 	// another, which is what that call exists for.
 	std::vector<D3D12_RESOURCE_STATES> _subresource_states;
+	// nullptr for a committed image; the heap it was placed in otherwise
+	// (spudgpu_create_placed_image).
+	spudgpu_heap _heap;
 } spudgpu_image_d3d12;
+
+typedef struct spudgpu_heap_t {
+#if _DEBUG
+	const char *_debug_name;
+	// Buffers and images placed in the heap and not yet destroyed.
+	// spudgpu_destroy_heap asserts it is 0. Atomic, because resources in
+	// one heap may be placed and destroyed on several threads at once.
+	std::atomic<uint64_t> _placed_count;
+#endif
+	spudgpu_device_d3d12 *_device;
+	spudgpu_heap_desc _desc;
+	Microsoft::WRL::ComPtr<ID3D12Heap> _d3d_heap;
+} spudgpu_heap_d3d12;
+
+// Shared by spudgpu_create_buffer / spudgpu_create_image and the heap calls
+// (spudgpud3d12heap.cpp), so a buffer or image is checked and described the
+// same way whether it is committed or placed.
+
+// spudgpu_create_buffer's desc checks, in its order, after its argument
+// checks: size, usage, memory kind, usage against kind, device.
+SPUDRESULT spudgpu_d3d12_check_buffer_desc(
+    const SPUDGPU_DEVICE_PROPERTIES *properties,
+    const spudgpu_buffer_desc *desc);
+CD3DX12_RESOURCE_DESC spudgpu_d3d12_create_resource_desc_from_buffer(
+    const spudgpu_buffer_desc *desc);
+// spudgpu_create_image's desc checks, in its order, after its argument
+// checks.
+SPUDRESULT spudgpu_d3d12_check_image_desc(const spudgpu_image_desc *desc);
+SPUDRESULT spudgpu_d3d12_create_resource_desc_from_image(
+    const spudgpu_image_desc *desc,
+    D3D12_RESOURCE_DESC *out_d3d_resource_desc);
+// The optimized clear value an image of [desc] is created with, or false if
+// it has none (it is not an attachment).
+bool spudgpu_d3d12_get_image_clear_value(
+    const spudgpu_image_desc *desc,
+    D3D12_CLEAR_VALUE *out_clear_value);
 
 typedef struct spudgpu_image_view_t {
 #if _DEBUG

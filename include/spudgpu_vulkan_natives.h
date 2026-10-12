@@ -34,6 +34,12 @@ VkCommandBuffer spudgpu_get_vk_command_buffer(spudgpu_command_list cmd);
 
 VkImageView spudgpu_get_vk_image_view(spudgpu_image_view view);
 
+/* The one allocation a heap is, which its placed buffers and images are
+ * bound to at their offsets. A heap of a mappable kind keeps this memory
+ * mapped for as long as it exists, so it is never mapped again with
+ * vkMapMemory. */
+VkDeviceMemory spudgpu_get_vk_heap_memory(spudgpu_heap heap);
+
 VkFormat spudgpu_get_vk_swap_chain_format(spudgpu_swap_chain swap_chain);
 
 #ifdef __cplusplus

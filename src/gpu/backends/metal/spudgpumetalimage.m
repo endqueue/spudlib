@@ -188,16 +188,7 @@ static MTLTextureType spudgpumetal___internal_image_texture_type(
 	return (array_layers > 1) ? MTLTextureType2DArray : MTLTextureType2D;
 }
 
-SPUDRESULT spudgpu_create_image(
-    spudgpu_device device,
-    const spudgpu_image_desc *desc,
-    spudgpu_image *out_image) {
-	if (!device)
-		return SPUDRESULT_GPU_INVALID_DEVICE;
-	if (!desc)
-		return SPUDRESULT_NULL_DESC;
-	if (!out_image)
-		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
+SPUDRESULT spudgpumetal___check_image_desc(const spudgpu_image_desc *desc) {
 	if (!desc->width || !desc->height || !desc->depth || !desc->array_layers || !desc->mip_levels)
 		return SPUDRESULT_DESC_INVALID_PARAMETERS;
 	if (desc->usage == SPUDGPU_IMAGE_USAGE_NONE)
@@ -222,10 +213,46 @@ SPUDRESULT spudgpu_create_image(
 		if (desc->width != desc->height || desc->array_layers % 6 != 0)
 			return SPUDRESULT_DESC_INVALID_PARAMETERS;
 	}
-
-	MTLPixelFormat pixel_format = spudgpumetal___internal_image_pixel_format(desc->format);
-	if (pixel_format == MTLPixelFormatInvalid)
+	if (spudgpumetal___internal_image_pixel_format(desc->format) == MTLPixelFormatInvalid)
 		return SPUDRESULT_GPU_INVALID_FORMAT;
+	return SPUD_SUCCESS;
+}
+
+MTLTextureDescriptor *spudgpumetal___new_texture_descriptor(const spudgpu_image_desc *desc) {
+	MTLTextureDescriptor *texture_desc = [[MTLTextureDescriptor alloc] init];
+	texture_desc.textureType           = spudgpumetal___internal_image_texture_type(desc->type, desc->array_layers);
+	texture_desc.pixelFormat           = spudgpumetal___internal_image_pixel_format(desc->format);
+	texture_desc.width                 = desc->width;
+	texture_desc.height                = desc->height;
+	texture_desc.depth                 = (texture_desc.textureType == MTLTextureType3D) ? desc->depth : 1;
+	texture_desc.arrayLength           = (texture_desc.textureType == MTLTextureType3D) ? 1 : desc->array_layers;
+	texture_desc.mipmapLevelCount      = desc->mip_levels;
+	texture_desc.usage                 = spudgpumetal___internal_image_texture_usage(desc->usage);
+	// An image has no memory kind (see spudgpu_image_desc): it is in
+	// the device's memory and never mapped, which is Private storage.
+	// A transient attachment has no memory at all outside its pass.
+	if (desc->usage & SPUDGPU_IMAGE_USAGE_TRANSIENT_ATTACHMENT) {
+		texture_desc.storageMode = MTLStorageModeMemoryless;
+	} else {
+		texture_desc.storageMode = MTLStorageModePrivate;
+	}
+
+	return texture_desc;
+}
+
+SPUDRESULT spudgpu_create_image(
+    spudgpu_device device,
+    const spudgpu_image_desc *desc,
+    spudgpu_image *out_image) {
+	if (!device)
+		return SPUDRESULT_GPU_INVALID_DEVICE;
+	if (!desc)
+		return SPUDRESULT_NULL_DESC;
+	if (!out_image)
+		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
+	const SPUDRESULT desc_result = spudgpumetal___check_image_desc(desc);
+	if (desc_result != SPUD_SUCCESS)
+		return desc_result;
 
 	spudgpu_device_metal *device_metal = (spudgpu_device_metal *)device;
 	SPUDRESULT sr                      = SPUD_SUCCESS;
@@ -239,25 +266,8 @@ SPUDRESULT spudgpu_create_image(
 	image_metal->_desc          = *desc;
 
 	{
-		MTLTextureDescriptor *texture_desc = [[MTLTextureDescriptor alloc] init];
-		texture_desc.textureType           = spudgpumetal___internal_image_texture_type(desc->type, desc->array_layers);
-		texture_desc.pixelFormat           = pixel_format;
-		texture_desc.width                 = desc->width;
-		texture_desc.height                = desc->height;
-		texture_desc.depth                 = (texture_desc.textureType == MTLTextureType3D) ? desc->depth : 1;
-		texture_desc.arrayLength           = (texture_desc.textureType == MTLTextureType3D) ? 1 : desc->array_layers;
-		texture_desc.mipmapLevelCount      = desc->mip_levels;
-		texture_desc.usage                 = spudgpumetal___internal_image_texture_usage(desc->usage);
-		// An image has no memory kind (see spudgpu_image_desc): it is in
-		// the device's memory and never mapped, which is Private storage.
-		// A transient attachment has no memory at all outside its pass.
-		if (desc->usage & SPUDGPU_IMAGE_USAGE_TRANSIENT_ATTACHMENT) {
-			texture_desc.storageMode = MTLStorageModeMemoryless;
-		} else {
-			texture_desc.storageMode = MTLStorageModePrivate;
-		}
-
-		image_metal->_texture_mtl = [device_metal->_device_mtl newTextureWithDescriptor:texture_desc];
+		MTLTextureDescriptor *texture_desc = spudgpumetal___new_texture_descriptor(desc);
+		image_metal->_texture_mtl          = [device_metal->_device_mtl newTextureWithDescriptor:texture_desc];
 		[texture_desc release];
 	}
 	if (!image_metal->_texture_mtl) {
@@ -295,6 +305,8 @@ void spudgpu_destroy_image(spudgpu_image image) {
 			[image_metal->_texture_mtl release];
 		}
 #if _DEBUG
+		if (image_metal->_heap)
+			image_metal->_heap->_placed_count--;
 		free((void *)image_metal->_debug_name);
 #endif
 		free(image_metal);

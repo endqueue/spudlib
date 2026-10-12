@@ -102,6 +102,16 @@ typedef enum SPUDRESULT {
 	SPUDRESULT_GPU_INVALID_BUFFER_SIZE                         = 237,
 	SPUDRESULT_GPU_BUFFER_OR_IMAGE_VIEW_RANGE_OUT_OF_SCOPE     = 238,
 	SPUDRESULT_GPU_MAP_OUT_OF_RANGE                            = 239,
+	SPUDRESULT_GPU_INVALID_HEAP                                = 240,
+	SPUDRESULT_GPU_INVALID_HEAP_RESOURCE_CLASS                 = 241,
+	/** A heap's size is not a multiple of SPUDGPU_HEAP_SIZE_GRANULARITY. */
+	SPUDRESULT_GPU_INVALID_HEAP_SIZE                           = 242,
+	/** A resource is not of the heap's memory kind or resource class. */
+	SPUDRESULT_GPU_HEAP_MISMATCH                               = 243,
+	/** A placement's offset is not a multiple of the resource's alignment. */
+	SPUDRESULT_GPU_PLACEMENT_MISALIGNED                        = 244,
+	/** A placement runs past the end of its heap. */
+	SPUDRESULT_GPU_PLACEMENT_OUT_OF_RANGE                      = 245,
 	SPUDRESULT_GPU_INVALID_SEMAPHORE                           = 250,
 	SPUDRESULT_GPU_INVALID_FENCE                               = 251,
 	SPUDRESULT_GPU_FENCE_WAIT_TIMED_OUT                        = 252,

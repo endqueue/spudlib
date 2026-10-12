@@ -43,7 +43,7 @@ codes) rather than inventing its own error convention.
 | SpudCore | `spudcore.h` | `spud_` / `SPUDRESULT` | platform-agnostic |
 | SpudPerf | `spudperf.h` | `spudperf_` | Windows, Linux |
 
-SpudGPU dominates the codebase (92 functions across 20 opaque handles) and is where
+SpudGPU dominates the codebase (99 functions across 21 opaque handles) and is where
 most work happens. The others are small, focused translation shims — don't let their
 API surface grow beyond what they are: SpudNet is "move bytes," not a networking
 framework (message framing, snapshot/delta semantics, host authority are all
@@ -194,10 +194,10 @@ at compile time; the table is at the top of `spudaudio.h`.
   `SPUDGPU_LEGACY_*`'s opt-in constrained-hardware path, which exists for one small
   caller-owned object, not a structurally different API.
 - **Backend file split mirrors the header, not guessed.** Each backend (Vulkan, D3D12,
-  Metal) uses the same ten-file-per-concern layout: `context`, `buffer`, `image`,
-  `shader`, `swapchain`, `descriptors`, `command`, `renderpass`, `native`, `sync`. If
-  `spudgpu.h` grows a new concern, split a new file for it in every backend rather than
-  dumping new functions into an existing one.
+  Metal) uses the same eleven-file-per-concern layout: `context`, `buffer`, `heap`,
+  `image`, `shader`, `swapchain`, `descriptors`, `command`, `renderpass`, `native`,
+  `sync`. If `spudgpu.h` grows a new concern, split a new file for it in every
+  backend rather than dumping new functions into an existing one.
 - **A fence is a counter that only goes up, on every backend.** A submission
   signals it to a value the caller chooses
   (`spudgpu_submit_desc::signal_fence_value`), `spudgpu_wait_for_fences` waits
@@ -240,6 +240,39 @@ at compile time; the table is at the top of `spudaudio.h`.
   settled by rule instead of by flag: a new buffer's or image's contents are
   undefined until written, on every backend, so the D3D12 backend always
   passes `D3D12_HEAP_FLAG_CREATE_NOT_ZEROED`.
+- **A heap is one device allocation; SpudGPU places, the caller decides where.**
+  `spudgpu_create_heap` makes a heap of one `SPUDGPU_MEMORY_KIND` and one
+  `SPUDGPU_HEAP_RESOURCE_CLASS` (buffers, images, attachment images);
+  `spudgpu_get_buffer/image_placement_requirements` ask the heap for a
+  resource's size and alignment; `spudgpu_create_placed_buffer/image` make an
+  ordinary handle at the caller's offset, destroyed with the ordinary destroy
+  call. SpudGPU keeps no record of what is placed where and checks no
+  overlap - which heap, which offset, when to make or drop a heap are the
+  caller's. Settled on 2026-10-11, don't reopen without a reason:
+  - One class per heap on every backend, D3D12 tier 2 included (D3D12 tier 1
+    made the rule; Vulkan never has buffers and images in one allocation).
+  - The requirement queries take the heap, not the device: Vulkan folds
+    `nonCoherentAtomSize` into a mappable heap's answer there, so a flush of
+    one placed buffer never reaches the next.
+  - Vulkan chooses a heap's memory type when it is made, from probe
+    resources (`spudgpuvulkanheap.c` explains which), and maps a mappable
+    heap once for its life: Vulkan allows one mapping of a `VkDeviceMemory`.
+  - Metal heaps are `MTLHeapTypePlacement` and hazard **tracked**, because
+    this backend's barriers do nothing and rely on tracking. Metal may then
+    order work on unrelated resources of one heap. Untracked heaps wait for
+    real Metal barriers.
+  - An image in an attachment-images heap is first written whole (a pass
+    that clears it, depth and stencil both, or copies into all of it):
+    D3D12's rule for placed render targets, without a discard command.
+  - A debug build counts live placements per heap (atomically) and
+    `spudgpu_destroy_heap` asserts the count is 0.
+  - D3D12 places every texture at 64 KiB alignment. Asking for 4 KiB is a
+    debug layer error for a texture too big for it, and telling them apart
+    needs each format's tile shape; not done.
+  Written 2026-10-11. Vulkan and D3D12 type-checked on Linux against the
+  Khronos and DirectX headers, and the Vulkan heap, buffer and image files
+  run against a mock Vulkan; the Metal files parsed with clang against a
+  stub Metal header only. Nothing has run on a GPU.
 - **Native escape hatches are interop-only.** `spudgpu_vulkan_natives.h` /
   `_d3d12_natives.h` / `_metal_natives.h` unwrap a handle back to its raw native type
   (`VkInstance`, `ID3D12Device14`, ...) for third-party libraries SpudLib doesn't wrap
@@ -570,6 +603,10 @@ one.
     Metal has no `spudgpu_get_shader_pipeline_desc`, bundle or bindless calls;
     D3D12 has no `spudgpu_create_surface_from_callback` or swap chain
     semaphore getters.
+  - D3D12 returns `SPUDRESULT_GPU_INVALID_IMAGE_TYPE` for an image desc
+    whose `type` is not an image type (from building the resource desc, so
+    after every other check, and after `SPUDRESULT_GPU_HEAP_MISMATCH` for a
+    placed image); Vulkan and Metal don't check it.
   - D3D12's `spudgpu_cmd_begin_rendering` returns early without a colour
     attachment, so a depth-only pass renders on Vulkan and Metal only.
   - Metal's `spudgpu_create_swap_chain` rejects `buffer_count != 1` and

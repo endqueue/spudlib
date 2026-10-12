@@ -127,6 +127,7 @@ if(NOT TARGET spudlib)
                 src/gpu/backends/vulkan/spudgpuvulkan.h
                 src/gpu/backends/vulkan/spudgpuvulkancontext.c
                 src/gpu/backends/vulkan/spudgpuvulkanbuffer.c
+                src/gpu/backends/vulkan/spudgpuvulkanheap.c
                 src/gpu/backends/vulkan/spudgpuvulkanshader.c
                 src/gpu/backends/vulkan/spudgpuvulkanswapchain.c
                 src/gpu/backends/vulkan/spudgpuvulkanimage.c
@@ -144,6 +145,7 @@ if(NOT TARGET spudlib)
                 src/gpu/backends/d3d12/spudgpud3d12.hpp
                 src/gpu/backends/d3d12/spudgpud3d12context.cpp
                 src/gpu/backends/d3d12/spudgpud3d12buffer.cpp
+                src/gpu/backends/d3d12/spudgpud3d12heap.cpp
                 src/gpu/backends/d3d12/spudgpud3d12shader.cpp
                 src/gpu/backends/d3d12/spudgpud3d12swapchain.cpp
                 src/gpu/backends/d3d12/spudgpud3d12image.cpp
@@ -173,6 +175,7 @@ if(NOT TARGET spudlib)
                 include/spudgpu_metal_natives.h
                 src/gpu/backends/metal/spudgpumetalcontext.m
                 src/gpu/backends/metal/spudgpumetalbuffer.m
+                src/gpu/backends/metal/spudgpumetalheap.m
                 src/gpu/backends/metal/spudgpumetalshader.m
                 src/gpu/backends/metal/spudgpumetalswapchain.m
                 src/gpu/backends/metal/spudgpumetalimage.m

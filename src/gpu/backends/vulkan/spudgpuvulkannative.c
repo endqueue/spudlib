@@ -39,6 +39,10 @@ VkImageView spudgpu_get_vk_image_view(spudgpu_image_view view) {
     return ((spudgpu_image_view_vulkan *) view)->_image_view_vk;
 }
 
+VkDeviceMemory spudgpu_get_vk_heap_memory(spudgpu_heap heap) {
+    return heap ? heap->_memory_vk : VK_NULL_HANDLE;
+}
+
 VkFormat spudgpu_get_vk_swap_chain_format(spudgpu_swap_chain swap_chain) {
     return swap_chain ? swap_chain->_format_vk : VK_FORMAT_UNDEFINED;
 }

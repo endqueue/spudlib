@@ -85,6 +85,63 @@ static void spudgpuvulkan___image_view_type_internal(
     *output = flags;
 }
 
+SPUDRESULT spudgpuvulkan___check_image_desc(const spudgpu_image_desc *desc) {
+    if (!desc->width || !desc->height || !desc->depth || !desc->array_layers || !desc->mip_levels)
+        return SPUDRESULT_DESC_INVALID_PARAMETERS;
+    if (desc->usage == 0) return SPUDRESULT_GPU_INVALID_IMAGE_USAGE;
+
+    // SPUDGPU_IMAGE_USAGE_TRANSIENT_ATTACHMENT's contract (see
+    // spudgpu.h) is enforced identically on every backend, not just the
+    // ones that act on it - Vulkan's own spec imposes the same
+    // restriction on VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT (it must
+    // not be combined with any usage besides the attachment bits), so
+    // this isn't a Metal-specific rule being forced onto Vulkan.
+    if (desc->usage & SPUDGPU_IMAGE_USAGE_TRANSIENT_ATTACHMENT) {
+        if (!(desc->usage & (SPUDGPU_IMAGE_USAGE_COLOR_ATTACHMENT | SPUDGPU_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT)))
+            return SPUDRESULT_GPU_INVALID_IMAGE_USAGE;
+        if (desc->usage & (SPUDGPU_IMAGE_USAGE_SAMPLED | SPUDGPU_IMAGE_USAGE_STORAGE |
+                            SPUDGPU_IMAGE_USAGE_TRANSFER_SRC | SPUDGPU_IMAGE_USAGE_TRANSFER_DST |
+                            SPUDGPU_IMAGE_USAGE_PRESENTABLE))
+            return SPUDRESULT_GPU_INVALID_IMAGE_USAGE;
+    }
+    // spudgpu_image_desc::cube_capable's contract (see spudgpu.h) is the
+    // same on every backend, though only Vulkan acts on it at creation.
+    if (desc->cube_capable) {
+        if (desc->type != SPUDGPU_IMAGE_TYPE_2D) return SPUDRESULT_GPU_INVALID_IMAGE_TYPE;
+        if (desc->width != desc->height || desc->array_layers % 6 != 0)
+            return SPUDRESULT_DESC_INVALID_PARAMETERS;
+    }
+    if (desc->format == SPUDGPU_FORMAT_UNKNOWN) return SPUDRESULT_GPU_INVALID_FORMAT;
+    return SPUD_SUCCESS;
+}
+
+void spudgpuvulkan___image_create_info(
+    const spudgpu_image_desc *desc,
+    VkImageCreateInfo *out_info) {
+    memset(out_info, 0, sizeof(*out_info));
+    out_info->sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    out_info->pNext = NULL;
+    // A cube view can only be made of an image created with this bit. It is
+    // the one thing here the caller's cube_capable changes: Vulkan is the
+    // API that has to be told at creation.
+    out_info->flags = desc->cube_capable ? VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT : 0;
+    out_info->mipLevels = desc->mip_levels;
+    out_info->arrayLayers = desc->array_layers;
+    out_info->format = convert_spud_to_vulkan_format(desc->format);
+    out_info->tiling = VK_IMAGE_TILING_OPTIMAL;
+    out_info->initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    out_info->samples = VK_SAMPLE_COUNT_1_BIT;
+    out_info->sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+    spudgpuvulkan___image_usage_flags_internal(desc->usage, &out_info->usage);
+    spudgpuvulkan___image_type_internal(desc->type, &out_info->imageType);
+
+    // Determine the Image Type and Width Height Depth
+    out_info->extent.width = desc->width;
+    out_info->extent.height = desc->height;
+    out_info->extent.depth = desc->depth;
+}
+
 #if __cplusplus
 extern "C" {
 #endif
@@ -97,35 +154,8 @@ SPUDRESULT spudgpu_create_image(
     if (!desc) return SPUDRESULT_NULL_DESC;
     if (!out_image) return SPUDRESULT_NULL_OUTPUT_PARAMETER;
 
-    // Validate desc
-    {
-        if (!desc->width || !desc->height || !desc->depth || !desc->array_layers || !desc->mip_levels)
-            return SPUDRESULT_DESC_INVALID_PARAMETERS;
-        if (desc->usage == 0) return SPUDRESULT_GPU_INVALID_IMAGE_USAGE;
-
-        // SPUDGPU_IMAGE_USAGE_TRANSIENT_ATTACHMENT's contract (see
-        // spudgpu.h) is enforced identically on every backend, not just the
-        // ones that act on it - Vulkan's own spec imposes the same
-        // restriction on VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT (it must
-        // not be combined with any usage besides the attachment bits), so
-        // this isn't a Metal-specific rule being forced onto Vulkan.
-        if (desc->usage & SPUDGPU_IMAGE_USAGE_TRANSIENT_ATTACHMENT) {
-            if (!(desc->usage & (SPUDGPU_IMAGE_USAGE_COLOR_ATTACHMENT | SPUDGPU_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT)))
-                return SPUDRESULT_GPU_INVALID_IMAGE_USAGE;
-            if (desc->usage & (SPUDGPU_IMAGE_USAGE_SAMPLED | SPUDGPU_IMAGE_USAGE_STORAGE |
-                                SPUDGPU_IMAGE_USAGE_TRANSFER_SRC | SPUDGPU_IMAGE_USAGE_TRANSFER_DST |
-                                SPUDGPU_IMAGE_USAGE_PRESENTABLE))
-                return SPUDRESULT_GPU_INVALID_IMAGE_USAGE;
-        }
-        // spudgpu_image_desc::cube_capable's contract (see spudgpu.h) is the
-        // same on every backend, though only Vulkan acts on it at creation.
-        if (desc->cube_capable) {
-            if (desc->type != SPUDGPU_IMAGE_TYPE_2D) return SPUDRESULT_GPU_INVALID_IMAGE_TYPE;
-            if (desc->width != desc->height || desc->array_layers % 6 != 0)
-                return SPUDRESULT_DESC_INVALID_PARAMETERS;
-        }
-        if (desc->format == SPUDGPU_FORMAT_UNKNOWN) return SPUDRESULT_GPU_INVALID_FORMAT;
-    }
+    const SPUDRESULT descResult = spudgpuvulkan___check_image_desc(desc);
+    if (descResult != SPUD_SUCCESS) return descResult;
 
     // Create the result struct
     spudgpu_image_vulkan result = {0};
@@ -138,28 +168,8 @@ SPUDRESULT spudgpu_create_image(
     VkDevice vk_device = result._device._logical_device_vk;
     VkPhysicalDevice vk_physical_device = result._device._physical_device_vk;
 
-    VkImageCreateInfo imageInfo = {0};
-    imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-    imageInfo.pNext = NULL;
-    // A cube view can only be made of an image created with this bit. It is
-    // the one thing here the caller's cube_capable changes: Vulkan is the
-    // API that has to be told at creation.
-    imageInfo.flags = result._desc.cube_capable ? VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT : 0;
-    imageInfo.mipLevels = result._desc.mip_levels;
-    imageInfo.arrayLayers = result._desc.array_layers;
-    imageInfo.format = result._format_vk;
-    imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
-    imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
-    imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-
-    spudgpuvulkan___image_usage_flags_internal(result._desc.usage, &imageInfo.usage);
-    spudgpuvulkan___image_type_internal(result._desc.type, &imageInfo.imageType);
-
-    // Determine the Image Type and Width Height Depth
-    imageInfo.extent.width = result._desc.width;
-    imageInfo.extent.height = result._desc.height;
-    imageInfo.extent.depth = result._desc.depth;
+    VkImageCreateInfo imageInfo;
+    spudgpuvulkan___image_create_info(&result._desc, &imageInfo);
 
     if (vkCreateImage(vk_device, &imageInfo, NULL, &result._image_vk) != VK_SUCCESS) {
         //throw std::runtime_error("Failed to create vulkan image!");
@@ -235,8 +245,12 @@ void spudgpu_destroy_image(
     spudgpu_image image) {
     if (!image) return;
     vkDestroyImage(image->_device._logical_device_vk, image->_image_vk, NULL);
-    vkFreeMemory(image->_device._logical_device_vk, image->_memory_vk, NULL);
+    // A placed image's memory is its heap's.
+    if (!image->_heap)
+        vkFreeMemory(image->_device._logical_device_vk, image->_memory_vk, NULL);
 #if _DEBUG
+    if (image->_heap)
+        image->_heap->_placed_count--;
     free((void *)image->_debug_name);
 #endif
     free(image);

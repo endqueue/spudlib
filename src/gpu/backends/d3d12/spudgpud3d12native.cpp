@@ -45,6 +45,9 @@ bool spudgpu_get_d3d12_buffer_view(
 		return false;
 }
 
+ID3D12Heap *spudgpu_get_d3d12_heap(spudgpu_heap heap) {
+    return heap ? heap->_d3d_heap.Get() : nullptr;
+}
 ID3D12Resource2 *spudgpu_get_d3d12_image(spudgpu_image image) {
     return image ? image->_d3d_resource.Get() : nullptr;
 }

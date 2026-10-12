@@ -199,6 +199,8 @@ typedef struct spudgpu_buffer_view_t *spudgpu_buffer_view;
 typedef struct spudgpu_image_t *spudgpu_image;
 /** Opaque handle to a view of an image's subresources. */
 typedef struct spudgpu_image_view_t *spudgpu_image_view;
+/** Opaque handle to a heap: one device allocation buffers and images are placed in. */
+typedef struct spudgpu_heap_t *spudgpu_heap;
 /** Opaque handle to a graphics pipeline. */
 typedef struct spudgpu_shader_pipeline_t *spudgpu_shader_pipeline;
 /** Opaque handle to a command list. */
@@ -433,6 +435,21 @@ typedef struct SPUDGPU_DEVICE_PROPERTIES {
 	 * `MTLGPUFamilyApple5` or `MTLGPUFamilyMac2`.
 	 */
 	bool layered_rendering;
+	/**
+	 * Whether a heap can be created with SPUDGPU_MEMORY_KIND_UPLOAD,
+	 * SPUDGPU_MEMORY_KIND_READBACK or SPUDGPU_MEMORY_KIND_DEVICE_MAPPABLE.
+	 * False means spudgpu_create_heap() returns
+	 * SPUDRESULT_GPU_MEMORY_KIND_NOT_SUPPORTED for those kinds, and buffers
+	 * of them are created with spudgpu_create_buffer() instead.
+	 *
+	 * DEVICE_MAPPABLE heaps also need #device_mappable_memory.
+	 *
+	 * Vulkan and D3D12: always true. Metal: whether the device is in an
+	 * `MTLGPUFamilyApple` family, the GPUs that make heaps of
+	 * `MTLStorageModeShared`; any other makes heaps of
+	 * `MTLStorageModePrivate` only.
+	 */
+	bool mappable_heaps;
 } SPUDGPU_DEVICE_PROPERTIES;
 
 /**
@@ -1204,6 +1221,9 @@ SPUDRESULT spudgpu_create_buffer(
 /**
  * @brief Destroys a GPU buffer and frees its memory.
  *
+ * A buffer placed in a heap (spudgpu_create_placed_buffer()) frees nothing
+ * to the device: its bytes stay the heap's.
+ *
  * @warning Views of the buffer must be destroyed first, and command lists that
  * reference it must have finished executing.
  *
@@ -1670,6 +1690,9 @@ SPUDRESULT spudgpu_create_image(
 /**
  * @brief Destroys a GPU image and frees its memory.
  *
+ * An image placed in a heap (spudgpu_create_placed_image()) frees nothing
+ * to the device: its bytes stay the heap's.
+ *
  * @warning Views of the image must be destroyed first, and command lists that
  * reference it must have finished executing.
  *
@@ -1887,6 +1910,325 @@ void spudgpu_destroy_image_view(spudgpu_image_view image_view);
 SPUDRESULT spudgpu_get_image_view_desc(
     spudgpu_image_view image_view,
     spudgpu_image_view_desc *out_desc);
+
+// ============================================================================
+//  Heaps and placed resources
+//  Maps to: VkDeviceMemory (Vulkan), ID3D12Heap (D3D12), MTLHeap (Metal)
+// ============================================================================
+
+/**
+ * @brief What a heap holds: buffers, images that are never attachments, or
+ * images that are.
+ *
+ * A heap holds one class and nothing else, on every backend. That is D3D12's
+ * resource heap tier 1 made the rule (D3D12_HEAP_FLAG_ALLOW_ONLY_BUFFERS,
+ * _ALLOW_ONLY_NON_RT_DS_TEXTURES, _ALLOW_ONLY_RT_DS_TEXTURES, set on every
+ * D3D12 device, tier 2 included). Vulkan picks a heap's memory type by its
+ * class, and never has buffers and images in one allocation.
+ *
+ * Which class an image is in follows from its usage, not a choice: one with
+ * SPUDGPU_IMAGE_USAGE_COLOR_ATTACHMENT or
+ * SPUDGPU_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT goes in an
+ * SPUDGPU_HEAP_RESOURCE_CLASS_ATTACHMENT_IMAGES heap, any other in an
+ * SPUDGPU_HEAP_RESOURCE_CLASS_IMAGES heap.
+ *
+ * @see SPUDGPU_HEAP_RESOURCE_CLASS_Constants
+ */
+typedef uint32_t SPUDGPU_HEAP_RESOURCE_CLASS;
+
+/**
+ * @name Heap Resource Classes
+ * @anchor SPUDGPU_HEAP_RESOURCE_CLASS_Constants
+ */
+/** @{ */
+enum {
+	/**
+	 * Not a class. spudgpu_create_heap() returns
+	 * SPUDRESULT_GPU_INVALID_HEAP_RESOURCE_CLASS for it, as for any value
+	 * not listed here: a zeroed desc has not chosen.
+	 */
+	SPUDGPU_HEAP_RESOURCE_CLASS_NONE = 0,
+	/** Buffers of the heap's memory kind. */
+	SPUDGPU_HEAP_RESOURCE_CLASS_BUFFERS = 1,
+	/** Images with neither attachment usage. The heap's kind is
+	 *  SPUDGPU_MEMORY_KIND_DEVICE. */
+	SPUDGPU_HEAP_RESOURCE_CLASS_IMAGES = 2,
+	/** Images with a color or depth/stencil attachment usage. The heap's
+	 *  kind is SPUDGPU_MEMORY_KIND_DEVICE. */
+	SPUDGPU_HEAP_RESOURCE_CLASS_ATTACHMENT_IMAGES = 3
+};
+/** @} */
+
+/**
+ * Every heap's size is a multiple of this many bytes. It is D3D12's heap
+ * alignment (`D3D12_DEFAULT_RESOURCE_PLACEMENT_ALIGNMENT`) made the rule.
+ */
+#define SPUDGPU_HEAP_SIZE_GRANULARITY 65536u
+
+/**
+ * @brief Describes a heap: one device allocation that buffers and images are
+ * placed in at offsets the caller chooses.
+ *
+ * SpudGPU keeps no record of what is placed where in a heap. Which heap a
+ * resource goes in, at which offset, and when a heap is created or destroyed
+ * are the caller's.
+ */
+typedef struct spudgpu_heap_desc {
+	/**
+	 * The memory every resource placed in the heap is in, with the contract
+	 * SPUDGPU_MEMORY_KIND states for a buffer of that kind. An image heap's
+	 * is SPUDGPU_MEMORY_KIND_DEVICE: images have no other.
+	 * @see SPUDGPU_MEMORY_KIND
+	 */
+	SPUDGPU_MEMORY_KIND memory_kind;
+
+	/** What the heap holds. @see SPUDGPU_HEAP_RESOURCE_CLASS */
+	SPUDGPU_HEAP_RESOURCE_CLASS resource_class;
+
+	/** Bytes. A multiple of SPUDGPU_HEAP_SIZE_GRANULARITY, not 0. */
+	uint64_t size;
+#if _DEBUG
+	/** @brief A string identifier used for diagnostic tracking. */
+	const char *debug_name;
+#endif
+} spudgpu_heap_desc;
+
+/**
+ * @brief Allocates a heap.
+ *
+ * Its contents are undefined, as a new buffer's are: placing a resource in it
+ * does not clear the bytes the resource covers.
+ *
+ * @param[in]  device   Device the heap is allocated on.
+ * @param[in]  desc     Heap configuration.
+ * @param[out] out_heap Receives the new heap on success.
+ *
+ * @retval SPUD_SUCCESS The heap was created.
+ * @retval SPUDRESULT_GPU_INVALID_DEVICE `device` is NULL.
+ * @retval SPUDRESULT_NULL_DESC `desc` is NULL.
+ * @retval SPUDRESULT_NULL_OUTPUT_PARAMETER `out_heap` is NULL.
+ * @retval SPUDRESULT_ZERO_SIZE `desc->size` is 0.
+ * @retval SPUDRESULT_GPU_INVALID_HEAP_SIZE `desc->size` is not a multiple of
+ *         SPUDGPU_HEAP_SIZE_GRANULARITY.
+ * @retval SPUDRESULT_GPU_INVALID_HEAP_RESOURCE_CLASS `desc->resource_class`
+ *         is SPUDGPU_HEAP_RESOURCE_CLASS_NONE or not a class.
+ * @retval SPUDRESULT_GPU_INVALID_MEMORY_KIND `desc->memory_kind` is
+ *         SPUDGPU_MEMORY_KIND_NONE or not a kind, or the class is an image
+ *         class and the kind is not SPUDGPU_MEMORY_KIND_DEVICE.
+ * @retval SPUDRESULT_GPU_MEMORY_KIND_NOT_SUPPORTED The kind is
+ *         SPUDGPU_MEMORY_KIND_UPLOAD, SPUDGPU_MEMORY_KIND_READBACK or
+ *         SPUDGPU_MEMORY_KIND_DEVICE_MAPPABLE and the device's
+ *         SPUDGPU_DEVICE_PROPERTIES::mappable_heaps is false, or it is
+ *         SPUDGPU_MEMORY_KIND_DEVICE_MAPPABLE and
+ *         SPUDGPU_DEVICE_PROPERTIES::device_mappable_memory is false.
+ * @return Another SPUDRESULT if the backend fails, such as
+ *         SPUDRESULT_OUT_OF_MEMORY or SPUDRESULT_API_SPECIFIC_FAILURE (the
+ *         device having no room for a heap that size is the usual one).
+ *
+ * The checks run in the order listed.
+ *
+ * @see spudgpu_destroy_heap()
+ */
+SPUDRESULT spudgpu_create_heap(
+    spudgpu_device device,
+    const spudgpu_heap_desc *desc,
+    spudgpu_heap *out_heap);
+
+/**
+ * @brief Frees a heap's memory.
+ *
+ * @warning Every buffer and image placed in the heap must be destroyed first,
+ * which means the command lists that reference them have finished. A debug
+ * build asserts that none is left.
+ *
+ * @param[in] heap Heap to destroy. NULL does nothing.
+ */
+void spudgpu_destroy_heap(spudgpu_heap heap);
+
+/**
+ * @brief Reads the descriptor a heap was created with.
+ *
+ * @param[in]  heap     Heap to query.
+ * @param[out] out_desc Receives the heap's descriptor.
+ *
+ * @retval SPUD_SUCCESS `out_desc` was filled in.
+ * @retval SPUDRESULT_GPU_INVALID_HEAP `heap` is NULL.
+ * @retval SPUDRESULT_NULL_OUTPUT_PARAMETER `out_desc` is NULL.
+ */
+SPUDRESULT spudgpu_get_heap_desc(
+    spudgpu_heap heap,
+    spudgpu_heap_desc *out_desc);
+
+/**
+ * @brief What a resource needs from a heap: how many bytes from its offset,
+ * and what its offset is a multiple of.
+ */
+typedef struct spudgpu_placement_requirements {
+	/**
+	 * Bytes the resource covers from its offset. Never less than a buffer's
+	 * size, and often more: on D3D12 every buffer covers a multiple of
+	 * 64 KiB.
+	 */
+	uint64_t size;
+	/** A power of two the offset is a multiple of. */
+	uint64_t alignment;
+} spudgpu_placement_requirements;
+
+/**
+ * @brief Reports what a buffer of `desc` needs to be placed in `heap`.
+ *
+ * The heap is asked, not the device, because the answer is its memory's. In
+ * a heap of a mappable kind, the size and alignment are both multiples of
+ * what the device flushes and invalidates in, so spudgpu_flush_buffer() and
+ * spudgpu_invalidate_buffer() on one placed buffer never touch a byte of
+ * another.
+ *
+ * The same `desc` and heap give the same answer for as long as the heap
+ * exists. Nothing is allocated in the heap.
+ *
+ * @param[in]  heap             Heap the buffer would be placed in.
+ * @param[in]  desc             The buffer, as spudgpu_create_placed_buffer()
+ *                              would be given it. `gpu_address_location` is
+ *                              not read.
+ * @param[out] out_requirements Receives the size and alignment.
+ *
+ * @retval SPUD_SUCCESS `out_requirements` was filled in.
+ * @retval SPUDRESULT_GPU_INVALID_HEAP `heap` is NULL.
+ * @retval SPUDRESULT_NULL_DESC `desc` is NULL.
+ * @retval SPUDRESULT_NULL_OUTPUT_PARAMETER `out_requirements` is NULL.
+ * @retval SPUDRESULT_GPU_ZERO_BUFFER_SIZE `desc->size` is 0.
+ * @retval SPUDRESULT_GPU_INVALID_BUFFER_USAGE `desc->usage` is
+ *         SPUDGPU_BUFFER_USAGE_NONE, or is one `desc->memory_kind` does not
+ *         allow.
+ * @retval SPUDRESULT_GPU_INVALID_MEMORY_KIND `desc->memory_kind` is
+ *         SPUDGPU_MEMORY_KIND_NONE or not a kind.
+ * @retval SPUDRESULT_GPU_MEMORY_KIND_NOT_SUPPORTED As for
+ *         spudgpu_create_buffer().
+ * @retval SPUDRESULT_GPU_HEAP_MISMATCH The heap is not a
+ *         SPUDGPU_HEAP_RESOURCE_CLASS_BUFFERS heap, or `desc->memory_kind`
+ *         is not the heap's.
+ * @return SPUDRESULT_API_SPECIFIC_FAILURE if the graphics API's query fails.
+ *
+ * The desc checks are spudgpu_create_buffer()'s, in its order; the heap
+ * checks come after them.
+ */
+SPUDRESULT spudgpu_get_buffer_placement_requirements(
+    spudgpu_heap heap,
+    const spudgpu_buffer_desc *desc,
+    spudgpu_placement_requirements *out_requirements);
+
+/**
+ * @brief Reports what an image of `desc` needs to be placed in `heap`.
+ *
+ * The same `desc` and heap give the same answer for as long as the heap
+ * exists. Nothing is allocated in the heap.
+ *
+ * @param[in]  heap             Heap the image would be placed in.
+ * @param[in]  desc             The image, as spudgpu_create_placed_image()
+ *                              would be given it.
+ * @param[out] out_requirements Receives the size and alignment.
+ *
+ * @retval SPUD_SUCCESS `out_requirements` was filled in.
+ * @retval SPUDRESULT_GPU_INVALID_HEAP `heap` is NULL.
+ * @retval SPUDRESULT_NULL_DESC `desc` is NULL.
+ * @retval SPUDRESULT_NULL_OUTPUT_PARAMETER `out_requirements` is NULL.
+ * @retval (each result of spudgpu_create_image()'s desc checks, in its
+ *         order.)
+ * @retval SPUDRESULT_GPU_INVALID_IMAGE_USAGE `desc->usage` has
+ *         SPUDGPU_IMAGE_USAGE_TRANSIENT_ATTACHMENT or
+ *         SPUDGPU_IMAGE_USAGE_PRESENTABLE. A transient attachment's memory
+ *         is the tile's or lazily allocated and a presentable image's is the
+ *         swap chain's, never a heap's.
+ * @retval SPUDRESULT_GPU_HEAP_MISMATCH The heap's class is not the image's
+ *         (see SPUDGPU_HEAP_RESOURCE_CLASS).
+ * @return SPUDRESULT_API_SPECIFIC_FAILURE if the graphics API's query fails.
+ */
+SPUDRESULT spudgpu_get_image_placement_requirements(
+    spudgpu_heap heap,
+    const spudgpu_image_desc *desc,
+    spudgpu_placement_requirements *out_requirements);
+
+/**
+ * @brief Creates a buffer in `heap`'s memory at `offset`.
+ *
+ * The result is a spudgpu_buffer like any other: its views, binding, copies,
+ * barriers, spudgpu_get_buffer_desc() and spudgpu_destroy_buffer() are
+ * unchanged, and its `gpu_address_location` is valid. Destroying it frees
+ * nothing to the device; the bytes stay the heap's, and once the buffer is
+ * destroyed another resource may be placed over them. Its contents are
+ * undefined until written, as any new buffer's are, whatever was in those
+ * bytes before.
+ *
+ * Mapping keeps its contract: a placed buffer has one mapping at a time and
+ * may stay mapped for as long as it exists. Several buffers of one heap may
+ * be mapped at once.
+ *
+ * Nothing checks that the bytes are free. Two live resources placed over one
+ * byte is undefined, on every backend.
+ *
+ * @param[in]  heap       Heap to place the buffer in.
+ * @param[in]  offset     Byte offset in the heap: a multiple of the
+ *                        alignment spudgpu_get_buffer_placement_requirements()
+ *                        reports for `desc`.
+ * @param[in]  desc       Buffer configuration. `memory_kind` is the heap's.
+ * @param[out] out_buffer Receives the new buffer on success.
+ *
+ * @retval SPUD_SUCCESS The buffer was created.
+ * @retval (each result of spudgpu_get_buffer_placement_requirements(), in
+ *         its order, with `out_buffer` in place of `out_requirements`.)
+ * @retval SPUDRESULT_GPU_PLACEMENT_MISALIGNED `offset` is not a multiple of
+ *         the reported alignment.
+ * @retval SPUDRESULT_GPU_PLACEMENT_OUT_OF_RANGE `offset` plus the reported
+ *         size runs past the end of the heap.
+ * @return Another SPUDRESULT if the backend fails.
+ *
+ * @see spudgpu_destroy_buffer()
+ */
+SPUDRESULT spudgpu_create_placed_buffer(
+    spudgpu_heap heap,
+    uint64_t offset,
+    const spudgpu_buffer_desc *desc,
+    spudgpu_buffer *out_buffer);
+
+/**
+ * @brief Creates an image in `heap`'s memory at `offset`.
+ *
+ * The result is a spudgpu_image like any other, destroyed with
+ * spudgpu_destroy_image(), with a placed buffer's rules for what destroying
+ * it frees and what overlapping placements are.
+ *
+ * An image in a SPUDGPU_HEAP_RESOURCE_CLASS_ATTACHMENT_IMAGES heap has one
+ * rule more, on every backend: the first thing done with it writes all of
+ * every subresource, by a rendering pass that clears each attachment over
+ * the whole image (depth and stencil both, for a format with the two) or by
+ * copies into all of every subresource. What anything
+ * else done first reads or leaves behind is undefined. (D3D12 requires a
+ * placed render target or depth/stencil resource to be initialized by a
+ * clear, a full copy or a discard before any other use.)
+ *
+ * @param[in]  heap      Heap to place the image in.
+ * @param[in]  offset    Byte offset in the heap: a multiple of the alignment
+ *                       spudgpu_get_image_placement_requirements() reports
+ *                       for `desc`.
+ * @param[in]  desc      Image configuration.
+ * @param[out] out_image Receives the new image on success.
+ *
+ * @retval SPUD_SUCCESS The image was created.
+ * @retval (each result of spudgpu_get_image_placement_requirements(), in
+ *         its order, with `out_image` in place of `out_requirements`.)
+ * @retval SPUDRESULT_GPU_PLACEMENT_MISALIGNED `offset` is not a multiple of
+ *         the reported alignment.
+ * @retval SPUDRESULT_GPU_PLACEMENT_OUT_OF_RANGE `offset` plus the reported
+ *         size runs past the end of the heap.
+ * @return Another SPUDRESULT if the backend fails.
+ *
+ * @see spudgpu_destroy_image()
+ */
+SPUDRESULT spudgpu_create_placed_image(
+    spudgpu_heap heap,
+    uint64_t offset,
+    const spudgpu_image_desc *desc,
+    spudgpu_image *out_image);
 
 // ============================================================================
 //  Image Layout

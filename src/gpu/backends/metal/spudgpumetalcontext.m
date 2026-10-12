@@ -105,6 +105,10 @@ static void spudgpumetal___internal_make_device_properties(
 	// set tables.
 	device->_properties.layered_rendering =
 	    [device->_device_mtl supportsFamily:MTLGPUFamilyApple5] || [device->_device_mtl supportsFamily:MTLGPUFamilyMac2];
+	// A heap of MTLStorageModeShared, which every mappable kind is, can be
+	// made on an Apple GPU and not on any other. Each MTLGPUFamilyApple
+	// family includes the ones before it, so Apple1 is every Apple GPU.
+	device->_properties.mappable_heaps = [device->_device_mtl supportsFamily:MTLGPUFamilyApple1];
 }
 
 static SPUDRESULT spudgpumetal___internal_create_command_queue_family(

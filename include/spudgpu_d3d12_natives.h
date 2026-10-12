@@ -48,6 +48,8 @@ bool spudgpu_get_d3d12_image_view(
     spudgpu_image_view view,
     SPUDGPU_D3D12_IMAGE_VIEW *out);
 
+ID3D12Heap *spudgpu_get_d3d12_heap(spudgpu_heap heap);
+
 ID3D12RootSignature *spudgpu_get_d3d12_root_signature(spudgpu_shader_pipeline pipeline);
 ID3D12PipelineState *spudgpu_get_d3d12_pipeline_state(spudgpu_shader_pipeline pipeline);
 

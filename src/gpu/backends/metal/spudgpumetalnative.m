@@ -65,6 +65,13 @@ id<MTLTexture> spudgpu_get_mtl_texture(spudgpu_image image) {
 	return image_metal->_texture_mtl;
 }
 
+id<MTLHeap> spudgpu_get_mtl_heap(spudgpu_heap heap) {
+	spudgpu_heap_metal *heap_metal = (spudgpu_heap_metal *)heap;
+	if (!heap_metal)
+		return nil;
+	return heap_metal->_heap_mtl;
+}
+
 id<MTLTexture> spudgpu_get_mtl_texture_view(spudgpu_image_view view) {
 	spudgpu_image_view_metal *view_metal = (spudgpu_image_view_metal *)view;
 	if (!view_metal)

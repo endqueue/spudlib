@@ -9,6 +9,7 @@
 
 #include "spudgpu.h"
 #include <vulkan/vulkan.h>
+#include <stdatomic.h>
 
 typedef struct spudgpu_instance_t {
 #if _DEBUG
@@ -140,15 +141,21 @@ typedef struct spudgpu_buffer_t {
     const char *_debug_name;
 #endif
     VkBuffer _buffer_vk;
-    VkDeviceMemory _memory_vk;
-    // The allocation's size, which may be more than _desc.size, and the
-    // property flags of the memory type it came from. Both are what
+    // The buffer's own allocation, or its heap's when _heap is set: the
+    // buffer is bound at _memory_offset_vk of it (0 for its own) and covers
+    // _memory_size_vk bytes from there, which may be more than _desc.size.
+    // Those and the property flags of the memory type are what
     // spudgpu_flush_buffer/spudgpu_invalidate_buffer need to form a range
     // Vulkan accepts.
+    VkDeviceMemory _memory_vk;
+    VkDeviceSize _memory_offset_vk;
     VkDeviceSize _memory_size_vk;
     VkMemoryPropertyFlags _memory_properties_vk;
     spudgpu_buffer_desc _desc;
     spudgpu_device_vulkan _device;
+    // NULL for a buffer with its own allocation; the heap it was placed in
+    // otherwise (spudgpu_create_placed_buffer), whose memory it never frees.
+    spudgpu_heap _heap;
 } spudgpu_buffer_vulkan;
 
 typedef struct spudgpu_buffer_view_t {
@@ -164,11 +171,37 @@ typedef struct spudgpu_image_t {
     const char *_debug_name;
 #endif
     VkImage _image_vk;
+    // The image's own allocation, or its heap's when _heap is set.
     VkDeviceMemory _memory_vk;
     VkFormat _format_vk;
     spudgpu_image_desc _desc;
     spudgpu_device_vulkan _device;
+    // NULL for an image with its own allocation; the heap it was placed in
+    // otherwise (spudgpu_create_placed_image), whose memory it never frees.
+    spudgpu_heap _heap;
 } spudgpu_image_vulkan;
+
+typedef struct spudgpu_heap_t {
+#if _DEBUG
+    const char *_debug_name;
+    // Buffers and images placed in the heap and not yet destroyed.
+    // spudgpu_destroy_heap asserts it is 0. Atomic, because resources in
+    // one heap may be placed and destroyed on several threads at once.
+    _Atomic uint64_t _placed_count;
+#endif
+    VkDeviceMemory _memory_vk;
+    // The memory type the heap was allocated from (see spudgpuvulkanheap.c
+    // for how it is chosen), and its property flags.
+    uint32_t _memory_type_index_vk;
+    VkMemoryPropertyFlags _memory_properties_vk;
+    // The whole allocation, mapped from creation to destruction, for a heap
+    // of a mappable kind; NULL for SPUDGPU_MEMORY_KIND_DEVICE. Vulkan allows
+    // one mapping of a VkDeviceMemory at a time, so the heap maps it once
+    // and its buffers' spudgpu_map_buffer hands out pointers into it.
+    void *_mapped;
+    spudgpu_heap_desc _desc;
+    spudgpu_device_vulkan _device;
+} spudgpu_heap_vulkan;
 
 typedef struct spudgpu_image_view_t {
 #if _DEBUG
@@ -296,6 +329,34 @@ typedef struct spudgpu_descriptor_set_t {
 } spudgpu_descriptor_set_vulkan;
 
 VkFormat convert_spud_to_vulkan_format(SPUDGPU_FORMAT format);
+
+// Shared by spudgpu_create_buffer / spudgpu_create_image and the heap calls
+// (spudgpuvulkanheap.c), so a buffer or image is checked and described the
+// same way whether it has its own allocation or is placed in a heap.
+
+// spudgpu_create_buffer's desc checks, in its order, after its argument
+// checks: size, usage, memory kind, usage against kind, device.
+SPUDRESULT spudgpuvulkan___check_buffer_desc(
+    const SPUDGPU_DEVICE_PROPERTIES *properties,
+    const spudgpu_buffer_desc *desc);
+// The VkBufferCreateInfo of a buffer of [desc].
+void spudgpuvulkan___buffer_create_info(
+    const spudgpu_buffer_desc *desc,
+    VkBufferCreateInfo *out_info);
+// The first memory type in [typeFilter] with the properties [kind]
+// documents in spudgpu.h, and that type's flags. UINT32_MAX if none.
+uint32_t spudgpuvulkan___memory_type_for_kind(
+    VkPhysicalDevice physicalDevice,
+    uint32_t typeFilter,
+    SPUDGPU_MEMORY_KIND kind,
+    VkMemoryPropertyFlags *out_flags);
+// spudgpu_create_image's desc checks, in its order, after its argument
+// checks.
+SPUDRESULT spudgpuvulkan___check_image_desc(const spudgpu_image_desc *desc);
+// The VkImageCreateInfo of an image of [desc].
+void spudgpuvulkan___image_create_info(
+    const spudgpu_image_desc *desc,
+    VkImageCreateInfo *out_info);
 
 // Defined in spudgpuvulkandescriptors.c. Idempotent — safe to call more than
 // once, but must be called at least once before the device's first

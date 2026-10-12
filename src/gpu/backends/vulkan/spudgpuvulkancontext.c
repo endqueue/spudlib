@@ -557,6 +557,10 @@ static void spudgpuvulkan___internal_make_device_properties(
 
     device->_properties.layered_rendering =
         spudgpuvulkan___internal_shader_output_layer(device->_physical_device_vk);
+
+    // A heap of any kind is a vkAllocateMemory of that kind's memory type,
+    // which every kind has wherever spudgpu_create_buffer can make it.
+    device->_properties.mappable_heaps = true;
 }
 
 SPUDRESULT spudgpu_enumerate_devices(

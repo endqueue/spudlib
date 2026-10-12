@@ -9,6 +9,7 @@
 
 #include "spudgpu.h"
 #include <Metal/Metal.h>
+#include <stdatomic.h>
 #include <QuartzCore/QuartzCore.h>
 
 // Metal command queues aren't partitioned into families the way Vulkan/D3D12
@@ -95,6 +96,9 @@ typedef struct spudgpu_buffer_t {
 	id<MTLBuffer> _buffer_mtl;
 	spudgpu_device_metal * _parent_device;
 	spudgpu_buffer_desc _desc;
+	// NULL for a buffer made on the device; the heap it was placed in
+	// otherwise (spudgpu_create_placed_buffer).
+	spudgpu_heap _heap;
 } spudgpu_buffer_metal;
 
 typedef struct spudgpu_buffer_view_t {
@@ -115,7 +119,45 @@ typedef struct spudgpu_image_t {
 	id<MTLTexture> _texture_mtl;
 	spudgpu_device_metal *_parent_device;
 	spudgpu_image_desc _desc;
+	// NULL for an image made on the device; the heap it was placed in
+	// otherwise (spudgpu_create_placed_image).
+	spudgpu_heap _heap;
 } spudgpu_image_metal;
+
+typedef struct spudgpu_heap_t {
+#if _DEBUG
+	const char *_debug_name;
+	// Buffers and images placed in the heap and not yet destroyed.
+	// spudgpu_destroy_heap asserts it is 0. Atomic, because resources in
+	// one heap may be placed and destroyed on several threads at once.
+	_Atomic uint64_t _placed_count;
+#endif
+	// MTLHeapTypePlacement, hazard tracked (see spudgpumetalheap.m).
+	id<MTLHeap> _heap_mtl;
+	// The resource options every buffer placed in the heap is made with:
+	// the heap's storage and CPU cache modes, and its hazard tracking.
+	MTLResourceOptions _resource_options_mtl;
+	spudgpu_device_metal *_parent_device;
+	spudgpu_heap_desc _desc;
+} spudgpu_heap_metal;
+
+// Shared by spudgpu_create_buffer / spudgpu_create_image and the heap calls
+// (spudgpumetalheap.m), so a buffer or image is checked and described the
+// same way whether it is made on the device or placed in a heap.
+
+// spudgpu_create_buffer's desc checks, in its order, after its argument
+// checks: size, usage, memory kind, usage against kind, device.
+SPUDRESULT spudgpumetal___check_buffer_desc(
+    const SPUDGPU_DEVICE_PROPERTIES *properties,
+    const spudgpu_buffer_desc *desc);
+// The storage and CPU cache modes a buffer of [memory_kind] is made with.
+MTLResourceOptions spudgpumetal___buffer_resource_options(SPUDGPU_MEMORY_KIND memory_kind);
+// spudgpu_create_image's desc checks, in its order, after its argument
+// checks.
+SPUDRESULT spudgpumetal___check_image_desc(const spudgpu_image_desc *desc);
+// A texture descriptor for an image of [desc], which the caller releases.
+// [desc] has passed spudgpumetal___check_image_desc.
+MTLTextureDescriptor *spudgpumetal___new_texture_descriptor(const spudgpu_image_desc *desc);
 
 typedef struct spudgpu_image_view_t {
 #if _DEBUG

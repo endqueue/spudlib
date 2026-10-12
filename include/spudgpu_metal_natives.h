@@ -68,6 +68,10 @@ id<MTLTexture> spudgpu_get_mtl_texture(spudgpu_image image);
  * view object rather than the base image. */
 id<MTLTexture> spudgpu_get_mtl_texture_view(spudgpu_image_view view);
 
+/* A placement heap (MTLHeapTypePlacement), hazard tracked: see
+ * spudgpu_create_heap(). */
+id<MTLHeap> spudgpu_get_mtl_heap(spudgpu_heap heap);
+
 id<MTLRenderPipelineState>
 spudgpu_get_mtl_render_pipeline_state(spudgpu_shader_pipeline pipeline);
 

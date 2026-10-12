@@ -164,7 +164,7 @@ static void spudgpu_d3d12_fill_srv(
 	}
 }
 
-static SPUDRESULT spudgpu_d3d12_create_resource_desc_from_image(
+SPUDRESULT spudgpu_d3d12_create_resource_desc_from_image(
     const spudgpu_image_desc *desc,
     D3D12_RESOURCE_DESC *out_d3d_resource_desc) {
 	if (!desc)
@@ -216,18 +216,7 @@ spudgpu_d3d12_get_clear_value(const SPUDGPU_CLEAR_VALUE *c) {
 	return result;
 }
 
-extern "C" {
-
-SPUDRESULT spudgpu_create_image(
-    spudgpu_device device,
-    const spudgpu_image_desc *desc,
-    spudgpu_image *out_image) {
-	if (!device)
-		return SPUDRESULT_GPU_INVALID_DEVICE;
-	if (!desc)
-		return SPUDRESULT_NULL_DESC;
-	if (!out_image)
-		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
+SPUDRESULT spudgpu_d3d12_check_image_desc(const spudgpu_image_desc *desc) {
 	if (!desc->width || !desc->height || !desc->depth || !desc->array_layers || !desc->mip_levels)
 		return SPUDRESULT_DESC_INVALID_PARAMETERS;
 	if (desc->usage == SPUDGPU_IMAGE_USAGE_NONE)
@@ -254,6 +243,35 @@ SPUDRESULT spudgpu_create_image(
 	}
 	if (desc->format == SPUDGPU_FORMAT_UNKNOWN)
 		return SPUDRESULT_GPU_INVALID_FORMAT;
+	return SPUD_SUCCESS;
+}
+
+bool spudgpu_d3d12_get_image_clear_value(
+    const spudgpu_image_desc *desc,
+    D3D12_CLEAR_VALUE *out_clear_value) {
+	if (!(desc->usage & (SPUDGPU_IMAGE_USAGE_COLOR_ATTACHMENT | SPUDGPU_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT)))
+		return false;
+	*out_clear_value = spudgpu_d3d12_get_clear_value(&desc->clear_value);
+	// D3D12 requires the clear value format to match the resource format exactly.
+	out_clear_value->Format = spudgpu_d3d12_get_dxgi_format(desc->format);
+	return true;
+}
+
+extern "C" {
+
+SPUDRESULT spudgpu_create_image(
+    spudgpu_device device,
+    const spudgpu_image_desc *desc,
+    spudgpu_image *out_image) {
+	if (!device)
+		return SPUDRESULT_GPU_INVALID_DEVICE;
+	if (!desc)
+		return SPUDRESULT_NULL_DESC;
+	if (!out_image)
+		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
+	const SPUDRESULT descResult = spudgpu_d3d12_check_image_desc(desc);
+	if (descResult != SPUD_SUCCESS)
+		return descResult;
 
 	spudgpu_image_d3d12 *pResult =
 	    (spudgpu_image_d3d12 *)malloc(sizeof(spudgpu_image_d3d12));
@@ -280,13 +298,8 @@ SPUDRESULT spudgpu_create_image(
 	D3D12_RESOURCE_STATES d3dInitialState =
 	    spudgpu_d3d12_get_initial_image_state(desc->usage);
 
-	bool hasOptimizedClearValue =
-	    (desc->usage & (SPUDGPU_IMAGE_USAGE_COLOR_ATTACHMENT |
-	                    SPUDGPU_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT)) != 0;
-	D3D12_CLEAR_VALUE d3dClearValue =
-	    spudgpu_d3d12_get_clear_value(&desc->clear_value);
-	// D3D12 requires the clear value format to match the resource format exactly.
-	d3dClearValue.Format = spudgpu_d3d12_get_dxgi_format(desc->format);
+	D3D12_CLEAR_VALUE d3dClearValue = {};
+	const bool hasOptimizedClearValue = spudgpu_d3d12_get_image_clear_value(desc, &d3dClearValue);
 
 	HRESULT hr = device->_d3d_device->CreateCommittedResource1(
 	    &d3dHeapProperties, d3dHeapFlags, &pResult->_d3d_resource_desc,
@@ -319,6 +332,8 @@ SPUDRESULT spudgpu_create_image(
 void spudgpu_destroy_image(spudgpu_image image) {
     if (!image) return;
 #if _DEBUG
+    if (image->_heap)
+        image->_heap->_placed_count--;
     free((void *)image->_debug_name);
 #endif
     image->~spudgpu_image_d3d12();

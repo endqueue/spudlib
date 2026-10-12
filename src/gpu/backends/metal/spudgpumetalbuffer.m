@@ -17,7 +17,7 @@
 // MTLStorageModeManaged is not used: it keeps a second copy to synchronize,
 // which no kind asks for. spudgpu_create_buffer has already refused a value
 // that is not a kind.
-static MTLResourceOptions spudgpumetal___internal_buffer_resource_options(SPUDGPU_MEMORY_KIND memory_kind) {
+MTLResourceOptions spudgpumetal___buffer_resource_options(SPUDGPU_MEMORY_KIND memory_kind) {
 	switch (memory_kind) {
 	case SPUDGPU_MEMORY_KIND_UPLOAD:
 		return MTLResourceStorageModeShared | MTLResourceCPUCacheModeWriteCombined;
@@ -27,6 +27,28 @@ static MTLResourceOptions spudgpumetal___internal_buffer_resource_options(SPUDGP
 	default:
 		return MTLResourceStorageModePrivate;
 	}
+}
+
+SPUDRESULT spudgpumetal___check_buffer_desc(
+    const SPUDGPU_DEVICE_PROPERTIES *properties,
+    const spudgpu_buffer_desc *desc) {
+	if (desc->size == 0)
+		return SPUDRESULT_GPU_ZERO_BUFFER_SIZE;
+	if (desc->usage == SPUDGPU_BUFFER_USAGE_NONE)
+		return SPUDRESULT_GPU_INVALID_BUFFER_USAGE;
+	// SPUDGPU_MEMORY_KIND's contract (see spudgpu.h), the same checks in the
+	// same order on every backend.
+	if (desc->memory_kind < SPUDGPU_MEMORY_KIND_DEVICE || desc->memory_kind > SPUDGPU_MEMORY_KIND_DEVICE_MAPPABLE)
+		return SPUDRESULT_GPU_INVALID_MEMORY_KIND;
+	if (desc->memory_kind == SPUDGPU_MEMORY_KIND_UPLOAD &&
+	    (desc->usage & (SPUDGPU_BUFFER_USAGE_STORAGE | SPUDGPU_BUFFER_USAGE_TRANSFER_DST |
+	                    SPUDGPU_BUFFER_USAGE_RAYTRACING_ACCELERATION_STRUCTURE)))
+		return SPUDRESULT_GPU_INVALID_BUFFER_USAGE;
+	if (desc->memory_kind == SPUDGPU_MEMORY_KIND_READBACK && desc->usage != SPUDGPU_BUFFER_USAGE_TRANSFER_DST)
+		return SPUDRESULT_GPU_INVALID_BUFFER_USAGE;
+	if (desc->memory_kind == SPUDGPU_MEMORY_KIND_DEVICE_MAPPABLE && !properties->device_mappable_memory)
+		return SPUDRESULT_GPU_MEMORY_KIND_NOT_SUPPORTED;
+	return SPUD_SUCCESS;
 }
 
 SPUDRESULT spudgpu_create_buffer(
@@ -39,26 +61,11 @@ SPUDRESULT spudgpu_create_buffer(
 		return SPUDRESULT_NULL_DESC;
 	if (!out_buffer)
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
-	if (desc->size == 0)
-		return SPUDRESULT_GPU_ZERO_BUFFER_SIZE;
-	if (desc->usage == SPUDGPU_BUFFER_USAGE_NONE)
-		return SPUDRESULT_GPU_INVALID_BUFFER_USAGE;
 
 	spudgpu_device_metal *device_metal = (spudgpu_device_metal *)device;
-	SPUDRESULT sr                      = SPUD_SUCCESS;
-
-	// SPUDGPU_MEMORY_KIND's contract (see spudgpu.h), the same checks in the
-	// same order on every backend.
-	if (desc->memory_kind < SPUDGPU_MEMORY_KIND_DEVICE || desc->memory_kind > SPUDGPU_MEMORY_KIND_DEVICE_MAPPABLE)
-		return SPUDRESULT_GPU_INVALID_MEMORY_KIND;
-	if (desc->memory_kind == SPUDGPU_MEMORY_KIND_UPLOAD &&
-	    (desc->usage & (SPUDGPU_BUFFER_USAGE_STORAGE | SPUDGPU_BUFFER_USAGE_TRANSFER_DST |
-	                    SPUDGPU_BUFFER_USAGE_RAYTRACING_ACCELERATION_STRUCTURE)))
-		return SPUDRESULT_GPU_INVALID_BUFFER_USAGE;
-	if (desc->memory_kind == SPUDGPU_MEMORY_KIND_READBACK && desc->usage != SPUDGPU_BUFFER_USAGE_TRANSFER_DST)
-		return SPUDRESULT_GPU_INVALID_BUFFER_USAGE;
-	if (desc->memory_kind == SPUDGPU_MEMORY_KIND_DEVICE_MAPPABLE && !device_metal->_properties.device_mappable_memory)
-		return SPUDRESULT_GPU_MEMORY_KIND_NOT_SUPPORTED;
+	SPUDRESULT sr                      = spudgpumetal___check_buffer_desc(&device_metal->_properties, desc);
+	if (sr != SPUD_SUCCESS)
+		return sr;
 
 	spudgpu_buffer_metal *buffer_metal = (spudgpu_buffer_metal *)calloc(1, sizeof(spudgpu_buffer_metal));
 	if (!buffer_metal) {
@@ -70,7 +77,7 @@ SPUDRESULT spudgpu_create_buffer(
 
 	buffer_metal->_buffer_mtl = [device_metal->_device_mtl
 	    newBufferWithLength:desc->size
-	                 options:spudgpumetal___internal_buffer_resource_options(desc->memory_kind)];
+	                 options:spudgpumetal___buffer_resource_options(desc->memory_kind)];
 	if (!buffer_metal->_buffer_mtl) {
 		sr = SPUDRESULT_API_SPECIFIC_FAILURE;
 		goto failedattempt;
@@ -105,6 +112,8 @@ void spudgpu_destroy_buffer(spudgpu_buffer buffer) {
 			[buffer_metal->_buffer_mtl release];
 		}
 #if _DEBUG
+		if (buffer_metal->_heap)
+			buffer_metal->_heap->_placed_count--;
 		free((void *)buffer_metal->_debug_name);
 #endif
 		free(buffer_metal);
@@ -192,7 +201,7 @@ SPUDRESULT spudgpu_map_buffer(
 
 	// Only a Shared-storage buffer has a CPU-visible pointer at all, which
 	// is every kind but DEVICE - see
-	// spudgpumetal___internal_buffer_resource_options.
+	// spudgpumetal___buffer_resource_options.
 	if (buffer_metal->_desc.memory_kind == SPUDGPU_MEMORY_KIND_DEVICE)
 		return SPUDRESULT_GPU_INVALID_MEMORY_KIND;
 
@@ -217,7 +226,7 @@ void spudgpu_unmap_buffer(spudgpu_buffer buffer) {
 // A Shared-storage MTLBuffer is one piece of memory the CPU and the GPU both
 // see, so there is nothing to flush out of or invalidate - only a Managed
 // buffer has a second copy, and no kind uses one (see
-// spudgpumetal___internal_buffer_resource_options). Both calls make the
+// spudgpumetal___buffer_resource_options). Both calls make the
 // checks every backend makes and then have nothing to do.
 SPUDRESULT spudgpu_flush_buffer(
     spudgpu_buffer buffer,
