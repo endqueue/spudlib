@@ -298,21 +298,28 @@ if(NOT TARGET spudlib)
                 set(Vulkan_LIBRARY "C:/VulkanSDK/1.4.341.1/Lib/vulkan-1.lib")
                 set(Vulkan_GLSLC_EXECUTABLE "C:/VulkanSDK/1.4.341.1/Bin/glslc.exe")
             elseif(UNIX AND NOT APPLE)
-                # Check for Wayland or default to X11 in Linux
-                find_package(PkgConfig REQUIRED)
-
-                # find_package(Wayland QUIET)
-                pkg_check_modules(WAYLAND wayland-client)
-
-                if(WAYLAND_FOUND)
-                    # target_compile_definitions(spudlib PUBLIC SPUDGPU_PLATFORM_WAYLAND)
-                    # target_link_libraries(spudlib PRIVATE wayland-client)
+                # The Vulkan WSI surface type is compiled in (spudgpuvulkanswapchain.c
+                # switches on SPUDGPU_PLATFORM_XLIB / SPUDGPU_PLATFORM_WAYLAND), so it
+                # must match the window handles the caller will pass: an X11
+                # Display*/Window, or a wl_display*/wl_surface*. This is the caller's
+                # choice, NOT something SpudLib sniffs from whichever dev packages
+                # happen to be installed on the build machine - auto-detecting it
+                # silently built a Wayland surface creator that then crashed in Mesa's
+                # WSI when handed X11 handles. Pick it explicitly via SPUDGPU_LINUX_WSI;
+                # Xlib is the default because it also works under XWayland.
+                set(SPUDGPU_LINUX_WSI "Xlib" CACHE STRING "Linux Vulkan WSI surface type: Xlib or Wayland")
+                set_property(CACHE SPUDGPU_LINUX_WSI PROPERTY STRINGS "Xlib" "Wayland")
+                if(SPUDGPU_LINUX_WSI STREQUAL "Wayland")
+                    find_package(PkgConfig REQUIRED)
+                    pkg_check_modules(WAYLAND REQUIRED wayland-client)
                     target_compile_definitions(spudlib PUBLIC SPUDGPU_PLATFORM_WAYLAND VK_USE_PLATFORM_WAYLAND_KHR)
                     target_link_libraries(spudlib PRIVATE ${WAYLAND_LIBRARIES})
                     target_include_directories(spudlib PRIVATE ${WAYLAND_INCLUDE_DIRS})
-                else()
+                elseif(SPUDGPU_LINUX_WSI STREQUAL "Xlib")
                     target_compile_definitions(spudlib PUBLIC SPUDGPU_PLATFORM_XLIB VK_USE_PLATFORM_XLIB_KHR)
                     target_link_libraries(spudlib PRIVATE X11) # X11 is usually available without find_package on Linux
+                else()
+                    message(FATAL_ERROR "SPUDGPU_LINUX_WSI must be 'Xlib' or 'Wayland', got '${SPUDGPU_LINUX_WSI}'")
                 endif()
             endif()
 
