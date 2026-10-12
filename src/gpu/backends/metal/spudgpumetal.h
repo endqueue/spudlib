@@ -445,7 +445,12 @@ typedef struct spudgpu_descriptor_set_t {
 	// The argument buffer itself, written into by spudgpu_update_descriptor_sets
 	// via _layout's shared MTLArgumentEncoder.
 	id<MTLBuffer> _argument_buffer_mtl;
-	// See SPUDGPU_METAL_MAX_TRACKED_RESOURCES_PER_SET above.
+	// See SPUDGPU_METAL_MAX_TRACKED_RESOURCES_PER_SET above. One entry per
+	// argument index that has been written: writing an index again replaces
+	// its entry, so a set never marks resident what it no longer references.
+	// Not retained - as with the argument buffer's own reference, a resource
+	// must outlive every bind of a set that still references it.
+	uint32_t _tracked_argument_indices[SPUDGPU_METAL_MAX_TRACKED_RESOURCES_PER_SET];
 	id<MTLResource> _tracked_resources_mtl[SPUDGPU_METAL_MAX_TRACKED_RESOURCES_PER_SET];
 	MTLResourceUsage _tracked_resource_usages_mtl[SPUDGPU_METAL_MAX_TRACKED_RESOURCES_PER_SET];
 	uint32_t _tracked_resource_count;

@@ -423,10 +423,20 @@ void spudgpu_update_descriptor_sets(
 			continue;
 		}
 
-		if (tracked_resource && set_metal->_tracked_resource_count < SPUDGPU_METAL_MAX_TRACKED_RESOURCES_PER_SET) {
-			set_metal->_tracked_resources_mtl[set_metal->_tracked_resource_count]        = tracked_resource;
-			set_metal->_tracked_resource_usages_mtl[set_metal->_tracked_resource_count] = tracked_usage;
-			set_metal->_tracked_resource_count++;
+		if (tracked_resource) {
+			// Replace what this argument index tracked before, if anything:
+			// the argument buffer no longer references the old resource, and
+			// it may since have been destroyed.
+			uint32_t slot = 0;
+			while (slot < set_metal->_tracked_resource_count && set_metal->_tracked_argument_indices[slot] != argument_index)
+				slot++;
+			if (slot < SPUDGPU_METAL_MAX_TRACKED_RESOURCES_PER_SET) {
+				set_metal->_tracked_argument_indices[slot]    = argument_index;
+				set_metal->_tracked_resources_mtl[slot]       = tracked_resource;
+				set_metal->_tracked_resource_usages_mtl[slot] = tracked_usage;
+				if (slot == set_metal->_tracked_resource_count)
+					set_metal->_tracked_resource_count++;
+			}
 		}
 	}
 }

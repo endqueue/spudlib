@@ -765,8 +765,15 @@ void spudgpu_destroy_command_list(spudgpu_command_list cmd);
  *
  * Resets the command list's state tracking and puts it in recording mode.
  *
+ * What is recorded between this and spudgpu_end_command_list() is submitted
+ * once. To run the same commands again, open the list and record them
+ * again: a Metal command buffer is committed once, and Vulkan's is begun as
+ * a one-time submit.
+ *
  * @warning A command list must not be recorded from more than one thread at a
  * time.
+ *
+ * @warning Submitting one recording a second time is undefined behavior.
  *
  * @param[in] cmd Command list to open.
  */
