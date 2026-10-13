@@ -342,14 +342,6 @@ static MTLPrimitiveTopologyClass spudgpumetal___internal_topology_class(SPUDGPU_
 	}
 }
 
-static MTLCullMode spudgpumetal___internal_cull_mode(SPUDGPU_CULL_MODE mode) {
-	switch (mode) {
-	case SPUDGPU_CULL_MODE_FRONT: return MTLCullModeFront;
-	case SPUDGPU_CULL_MODE_BACK:  return MTLCullModeBack;
-	default:                      return MTLCullModeNone;
-	}
-}
-
 static MTLCompareFunction spudgpumetal___internal_compare_function(SPUDGPU_COMPARE_OP op) {
 	switch (op) {
 	case SPUDGPU_COMPARE_OP_NEVER:            return MTLCompareFunctionNever;

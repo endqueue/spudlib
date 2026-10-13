@@ -5,11 +5,13 @@
 #include <windows.h>
 #include <Psapi.h>
 #elif SPUDLIB_PLATFORM_LINUX
+#include <errno.h>
 #include <stdio.h>
 #include <time.h>
 #include <stdint.h>
 #elif SPUDLIB_PLATFORM_APPLE
 #include <mach/mach.h>
+#include <mach/mach_time.h>
 #include <stdint.h>
 #include <time.h>
 #endif
@@ -135,6 +137,95 @@ uint64_t spudperf_get_monotonic_time_ns(void) {
 #error "Unsupported platform"
 	return 0;
 #endif
+}
+
+void spudperf_sleep_until_monotonic_ns(uint64_t deadline_ns) {
+#if SPUDLIB_PLATFORM_WIN32
+	// Windows has no wait on an absolute QueryPerformanceCounter time, so
+	// each pass waits for what is left and the loop reads the clock again.
+	// The high-resolution flag is Windows 10 1803 and later; without it the
+	// timer fires on the system's timer interrupt.
+	HANDLE timer = CreateWaitableTimerExW(NULL, NULL, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS);
+	if (!timer)
+		timer = CreateWaitableTimerExW(NULL, NULL, 0, TIMER_ALL_ACCESS);
+
+	for (;;) {
+		uint64_t now = spudperf_get_monotonic_time_ns();
+		if (now >= deadline_ns)
+			break;
+
+		uint64_t remaining_ns = deadline_ns - now;
+		if (!timer) {
+			// No timer to be had: the coarse wait, a millisecond at least.
+			Sleep((DWORD)(remaining_ns / 1000000ULL) + 1);
+			continue;
+		}
+
+		// Negative is relative, in 100 ns units; rounded up so that one
+		// pass is usually enough.
+		LARGE_INTEGER due;
+		due.QuadPart = -(LONGLONG)((remaining_ns + 99ULL) / 100ULL);
+		if (!SetWaitableTimer(timer, &due, 0, NULL, NULL, FALSE)) {
+			Sleep((DWORD)(remaining_ns / 1000000ULL) + 1);
+			continue;
+		}
+		WaitForSingleObject(timer, INFINITE);
+	}
+
+	if (timer)
+		CloseHandle(timer);
+#elif SPUDLIB_PLATFORM_APPLE
+	// mach_wait_until waits on mach_absolute_time, which is the clock
+	// CLOCK_UPTIME_RAW reports in nanoseconds, but takes its own ticks:
+	// nanoseconds * denom / numer, rounded up so the wait doesn't end a tick
+	// short. The timebase is fixed for the life of the system; it is read
+	// each call, as the Windows frequency is, to keep no state here.
+	mach_timebase_info_data_t timebase;
+	if (mach_timebase_info(&timebase) != KERN_SUCCESS)
+		return;
+	if (timebase.numer == 0)
+		return;
+
+	const unsigned __int128 scaled = (unsigned __int128)deadline_ns * timebase.denom + (timebase.numer - 1);
+	const uint64_t deadline_ticks  = (uint64_t)(scaled / timebase.numer);
+
+	// It can come back early (KERN_ABORTED), so go by the clock, not by
+	// what it returns.
+	while (clock_gettime_nsec_np(CLOCK_UPTIME_RAW) < deadline_ns)
+		mach_wait_until(deadline_ticks);
+#elif SPUDLIB_PLATFORM_LINUX
+	struct timespec deadline;
+	deadline.tv_sec  = (time_t)(deadline_ns / 1000000000ULL);
+	deadline.tv_nsec = (long)(deadline_ns % 1000000000ULL);
+
+	// Returns the error, not -1: EINTR is a signal that ended the wait
+	// early, and the deadline being absolute, it is simply waited for again.
+	while (clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &deadline, NULL) == EINTR) {
+	}
+#else
+#error "Unsupported platform"
+#endif
+}
+
+void spudperf_sleep_until_monotonic_ms(uint64_t deadline_ms) {
+	// The same on every platform: what is left on the millisecond clock,
+	// waited for on the nanosecond one, and the millisecond clock read
+	// again. On Windows and Linux the two are one clock and a single pass
+	// does it; on Apple they are two (see the header), which is why the
+	// deadline isn't simply multiplied up.
+	for (;;) {
+		uint64_t now_ms = spudperf_get_current_time_milliseconds();
+		if (now_ms >= deadline_ms)
+			return;
+
+		// Kept to what fits in nanoseconds: a deadline further off than
+		// that is waited for in more than one pass.
+		uint64_t remaining_ms = deadline_ms - now_ms;
+		if (remaining_ms > UINT64_MAX / 2000000ULL)
+			remaining_ms = UINT64_MAX / 2000000ULL;
+
+		spudperf_sleep_until_monotonic_ns(spudperf_get_monotonic_time_ns() + remaining_ms * 1000000ULL);
+	}
 }
 
 #if __cplusplus

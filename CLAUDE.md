@@ -41,7 +41,7 @@ codes) rather than inventing its own error convention.
 | SpudNet | `spudnet.h` | `spudnet_` | TCP sockets: Winsock2, BSD sockets (Linux + Apple, one file). HTTP + WebSocket: WinHTTP, libcurl, NSURLSession |
 | SpudAudio | `spudaudio.h` | `spudaudio_` / `SPUDRESULT_SAUD_*` | WASAPI (Windows), ALSA (Linux), CoreAudio (macOS); an argument-checking stub where no API is compiled in (iOS, watchOS) |
 | SpudCore | `spudcore.h` | `spud_` / `SPUDRESULT` | platform-agnostic |
-| SpudPerf | `spudperf.h` | `spudperf_` | Windows, Linux |
+| SpudPerf | `spudperf.h` | `spudperf_` | Windows, Linux, Apple |
 
 SpudGPU dominates the codebase (99 functions across 21 opaque handles) and is where
 most work happens. The others are small, focused translation shims — don't let their
@@ -548,7 +548,14 @@ on Windows has not been run this way.
   silently rendered solid black until this landed (these were unimplemented
   placeholders before, per the file comment in `spudgpumetalrenderpass.m`).
   `spudgpu_cmd_blit_image` remains an unimplemented placeholder — no caller needs it
-  yet.
+  yet. A pipeline's `cull_mode`, `front_face_ccw` and `wireframe` are applied since
+  2026-10-13 (set on the encoder at `spudgpu_cmd_bind_pipeline`); before that Metal
+  dropped all three and drew every triangle filled and unculled, which no caller had
+  noticed because none culled. Back-face culling with counter-clockwise fronts is
+  verified by a caller's read-back test; `SPUDGPU_CULL_MODE_FRONT`, clockwise fronts
+  and wireframe are written and not run. A command list's command buffer is taken
+  inside an autorelease pool of the backend's own, so a caller that is plain C with
+  no run loop works; before, such a caller hung at its 65th command list.
 
 ## Build system
 
@@ -633,11 +640,15 @@ one.
   a caller outside this repo so far; HTTP and WebSocket are exercised by
   `tests/spudnet_test` alone. On Linux, WebSocket needs libcurl 8.11+ (older ones
   return `SPUDRESULT_SPUDNET_UNSUPPORTED`; HTTP works regardless).
-- No CTest target exists. `tests/` holds two hardware tests, built behind
+- One CTest target exists: `spudperf_test` (the monotonic clocks,
+  `spudperf_sleep_until_monotonic_ns` and `spudperf_sleep_until_monotonic_ms`),
+  which needs nothing but the machine. It has run on macOS; the Windows and
+  Linux halves of the nanosecond sleep, which the millisecond one waits
+  through, are written and have not been compiled. `tests/` also holds two hardware tests, built behind
   `SPUDLIB_BUILD_TESTS` but deliberately not registered with ctest because each
   needs something real: `spudaudio_sine` (an audio device and someone listening)
   and `spudnet_test` (a local server, started by `tests/run_spudnet_test.sh`).
-  SpudGPU, SpudFiles, SpudMemory and SpudPerf have no committed tests; SpudGPU is
+  SpudGPU, SpudFiles and SpudMemory have no committed tests; SpudGPU is
   verified by running the `spudgpusamples` samples.
 - No static/immutable sampler support. `spudgpu_sampler` (added alongside
   `SpudGPUDynamicIndexing`) only covers the dynamic, descriptor-bound case — a real

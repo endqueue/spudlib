@@ -462,6 +462,13 @@ if(NOT TARGET spudlib)
     # listener), so they're built but not registered with ctest.
     option(SPUDLIB_BUILD_TESTS "Build SpudLib's hardware tests" ON)
     if(SPUDLIB_BUILD_TESTS)
+        # SpudPerf's clocks and its wait. No hardware and nobody watching, so
+        # this one is a ctest.
+        enable_testing()
+        add_executable(spudperf_test tests/spudperf_test.c)
+        target_link_libraries(spudperf_test PRIVATE spudlib)
+        add_test(NAME spudperf_test COMMAND spudperf_test)
+
         add_executable(spudaudio_sine tests/spudaudio_sine.c)
         target_link_libraries(spudaudio_sine PRIVATE spudlib)
         if(UNIX AND NOT APPLE)

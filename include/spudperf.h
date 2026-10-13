@@ -1,11 +1,14 @@
 /**
  * @file spudperf.h
- * @brief SpudPerf: the platform's clocks and the process's memory counters.
+ * @brief SpudPerf: the platform's clocks, its wait on one of them, and the
+ * process's memory counters.
  *
  * Each call reads one value from the operating system or the CPU and returns
- * it. Nothing is measured, averaged or kept between calls, and no call takes
- * a handle: there is no state to own. Every function may be called from any
- * thread.
+ * it, or, for spudperf_sleep_until_monotonic_ns() and
+ * spudperf_sleep_until_monotonic_ms(), hands the calling thread to the
+ * operating system until a time. Nothing is measured, averaged or
+ * kept between calls, and no call takes a handle: there is no state to own.
+ * Every function may be called from any thread.
  *
  * No function here returns a SPUDRESULT. The clocks cannot fail, and
  * spudperf_get_ram_usage() reports a failed read as 0.
@@ -101,6 +104,68 @@ uint64_t spudperf_get_current_time_milliseconds();
  * @return Nanoseconds since the clock's epoch.
  */
 uint64_t spudperf_get_monotonic_time_ns(void);
+
+/**
+ * @brief Blocks the calling thread until the monotonic clock reaches a time.
+ *
+ * The time is a reading of spudperf_get_monotonic_time_ns(), or one worked
+ * out from a reading: the wait is on that clock on every platform. It is a
+ * point in time, not a length of time, so a caller that wakes late and waits
+ * for its next point does not fall further behind.
+ *
+ * | Platform | The wait |
+ * |---|---|
+ * | Windows | A waitable timer (`CREATE_WAITABLE_TIMER_HIGH_RESOLUTION` where the system has it), set for what is left on `QueryPerformanceCounter` |
+ * | Apple | `mach_wait_until` |
+ * | Linux | `clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME)` |
+ *
+ * It never returns before the clock has reached @p deadline_ns: a wait the
+ * system ends early (a signal, a spurious wake) is taken up again. It
+ * returns at once if the clock is already there. How long after the
+ * deadline it returns is the operating system's scheduler's to say, and no
+ * bound is promised. On macOS it has been measured at a quarter of a
+ * millisecond for a wait of one millisecond and at five milliseconds for
+ * waits of twenty and more, which the system's timer coalescing allows
+ * itself; on Windows expect the system's timer resolution where the
+ * high-resolution timer is missing.
+ *
+ * On Apple platforms the clock stops while the system sleeps, so a wait
+ * that spans a sleep is that much longer in time of day.
+ *
+ * Nothing wakes the thread early: there is no cancel. A caller that has to
+ * stop a waiting thread waits in pieces short enough for it.
+ *
+ * @param[in] deadline_ns When to return, in nanoseconds since the epoch of
+ *                        spudperf_get_monotonic_time_ns().
+ */
+void spudperf_sleep_until_monotonic_ns(uint64_t deadline_ns);
+
+/**
+ * @brief Blocks the calling thread until the millisecond clock reaches a
+ * time.
+ *
+ * As spudperf_sleep_until_monotonic_ns(), for a time on the clock
+ * spudperf_get_current_time_milliseconds() reads: @p deadline_ms is a
+ * reading of that function, or one worked out from a reading. It is not a
+ * reading of spudperf_get_monotonic_time_ns() divided down: on Apple
+ * platforms the two are different clocks.
+ *
+ * It waits for what is left on the millisecond clock, by
+ * spudperf_sleep_until_monotonic_ns(), and reads the millisecond clock
+ * again, until that clock has reached @p deadline_ms. So it never returns
+ * before then, returns at once if the clock is already there, and is as
+ * late as spudperf_sleep_until_monotonic_ns() is, plus up to the
+ * millisecond the clock counts in.
+ *
+ * On Apple platforms the millisecond clock keeps counting while the system
+ * sleeps and the clock the wait is made on does not, so a wait that spans a
+ * system sleep returns after the deadline by up to the time left on it when
+ * the system went to sleep.
+ *
+ * @param[in] deadline_ms When to return, in milliseconds since the epoch of
+ *                        spudperf_get_current_time_milliseconds().
+ */
+void spudperf_sleep_until_monotonic_ms(uint64_t deadline_ms);
 
 #if __cplusplus
 }

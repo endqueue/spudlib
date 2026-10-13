@@ -149,6 +149,16 @@ static spudgpu_command_queue_metal *spudgpumetal___internal_resolve_allocator_qu
 // spudgpu_begin_command_list call that reuses the same public handle across
 // frames. -commandBuffer returns an autoreleased object (unlike -newCommandQueue),
 // so it must be retained to survive past the current autorelease pool.
+//
+// The pool here is drained before this returns, which leaves the retain
+// above as the buffer's only reference. Without it the autoreleased
+// reference waits for a pool of the caller's, and a caller that is plain C
+// with no run loop has none that ever drains: a buffer released without
+// being committed (the initial one of every command list, replaced at its
+// first begin) would then never be deallocated, and a buffer that is never
+// committed only gives its place back to the queue when it is. A queue
+// hands out a fixed number at once, so after that many -commandBuffer
+// blocks for good.
 static void spudgpumetal___internal_acquire_command_buffer(
     spudgpu_command_list_metal *cmd_list_metal) {
 	spudgpu_command_allocator_metal *allocator_metal = cmd_list_metal->_parent_allocator;
@@ -161,7 +171,9 @@ static void spudgpumetal___internal_acquire_command_buffer(
 	if (cmd_list_metal->_command_buffer_mtl) {
 		[cmd_list_metal->_command_buffer_mtl release];
 	}
-	cmd_list_metal->_command_buffer_mtl = [[queue_mtl commandBuffer] retain];
+	@autoreleasepool {
+		cmd_list_metal->_command_buffer_mtl = [[queue_mtl commandBuffer] retain];
+	}
 }
 
 SPUDRESULT spudgpu_create_command_allocator(
@@ -589,6 +601,14 @@ void spudgpu_cmd_draw_indexed_instanced(
 	             baseInstance:start_instance_location];
 }
 
+static MTLCullMode spudgpumetal___internal_cull_mode(SPUDGPU_CULL_MODE mode) {
+	switch (mode) {
+	case SPUDGPU_CULL_MODE_FRONT: return MTLCullModeFront;
+	case SPUDGPU_CULL_MODE_BACK:  return MTLCullModeBack;
+	default:                      return MTLCullModeNone;
+	}
+}
+
 void spudgpu_cmd_bind_pipeline(
     spudgpu_command_list cmd,
     spudgpu_shader_pipeline pipeline) {
@@ -607,6 +627,19 @@ void spudgpu_cmd_bind_pipeline(
 		// in spudgpumetalshader.m), bound alongside the render pipeline
 		// state rather than as part of binding it.
 		[cmd_list_metal->_active_render_encoder setDepthStencilState:pipeline_metal->_depth_stencil_state_mtl];
+		// Likewise the rasterizer state Vulkan/D3D12 bake into the pipeline
+		// (spudgpu_shader_pipeline_desc::cull_mode, front_face_ccw,
+		// wireframe): Metal has it on the encoder, and an encoder starts
+		// with no culling, clockwise fronts and filled triangles whatever
+		// the pipeline was created with. So it is set with every bind.
+		[cmd_list_metal->_active_render_encoder
+		    setCullMode:spudgpumetal___internal_cull_mode(pipeline_metal->_desc.cull_mode)];
+		[cmd_list_metal->_active_render_encoder
+		    setFrontFacingWinding:pipeline_metal->_desc.front_face_ccw ? MTLWindingCounterClockwise
+		                                                               : MTLWindingClockwise];
+		[cmd_list_metal->_active_render_encoder
+		    setTriangleFillMode:pipeline_metal->_desc.wireframe ? MTLTriangleFillModeLines
+		                                                        : MTLTriangleFillModeFill];
 	}
 }
 
