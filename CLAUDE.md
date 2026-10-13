@@ -522,6 +522,12 @@ at compile time; the table is at the top of `spudaudio.h`.
 
 ## Backend status
 
+All three backends have run a caller's full renderer on real hardware (as of
+2026-10-12): D3D12 on Windows, Vulkan on Linux, Metal on macOS, the same caller
+code on each. That covers the calls that caller makes. A call nothing above
+SpudLib uses is only as verified as its sample in `spudgpusamples`, and Vulkan
+on Windows has not been run this way.
+
 - **Vulkan** — reference backend, plain C23, complete. Build against this first;
   D3D12 and Metal follow its shape.
 - **D3D12** — complete, C++26. Cross-compiles the project's SPIR-V shaders to HLSL at
