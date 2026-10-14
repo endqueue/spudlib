@@ -671,15 +671,28 @@ one.
   part assumes and what the macOS run settled. Only TCP and the resolver have
   a caller outside this repo so far; HTTP and WebSocket are exercised by
   `tests/spudnet_test` alone. On Linux, WebSocket needs libcurl 8.11+ (older ones
-  return `SPUDRESULT_SPUDNET_UNSUPPORTED`; HTTP works regardless).
+  return `SPUDRESULT_SPUDNET_UNSUPPORTED`; HTTP works regardless). iOS: the
+  `iossimulator-metal` preset builds the tests as plain simulator executables,
+  and `SPUDNET_TEST_LAUNCHER="xcrun simctl spawn booted"
+  tests/run_spudnet_test.sh build-iossimulator-metal/Debug/spudnet_test` runs
+  `spudnet_test` in a booted simulator against the server on the Mac's loopback.
+  On 2026-10-14 every target built with no warnings and `spudnet_test` passed
+  all 261 checks three runs in a row in an iPhone 17 Pro simulator (iOS 26.5),
+  its `websocket` part 46 of them; `spudperf_test` and `spudinput_test` pass
+  there too. A device can't run a bare executable, so on a device SpudNet has
+  only been built (trellislib's xcframework), not run.
 - SpudInput was written on 2026-10-13: the header, the front end and the
   GameController backend (`src/input/backends/apple/spudinputgamecontroller.m`).
-  It builds with the `macos-metal` preset and `tests/spudinput_test` passes,
-  with no gamepad connected, so only what needs no device has run: argument
-  checks, absent-gamepad results, polls that find nothing, instance create and
-  destroy. Nothing in the backend that reads or drives a controller has ever
-  run: buttons and axes, the change handler behind `buttons_went_down`,
-  battery, touch, motion, lights, labels and the CoreHaptics rumble. Known to
+  It builds with the `macos-metal` preset and `tests/spudinput_test` passes
+  with no gamepad connected (argument checks, absent-gamepad results, polls
+  that find nothing, instance create and destroy). On 2026-10-14 a caller
+  read a gamepad through it on macOS, held and used by a person, polling
+  once a frame on the main thread: it was found when connected, both sticks
+  and both triggers moved what they should in the directions and ranges the
+  header states, and the left stick pressed in read down and up. Not run:
+  the other buttons one by one, a press and release between two polls (the
+  change handler's `buttons_went_down` with the button up again), battery,
+  touch, motion, lights, labels and the CoreHaptics rumble. Known to
   be approximate on GameController: a touch exactly at a surface's middle
   reads as no touch; a motion sample's time is its arrival, not its capture;
   the motion frame and the sign of acceleration are from documentation and

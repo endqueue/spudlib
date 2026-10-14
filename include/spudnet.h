@@ -2,9 +2,9 @@
 /**
  * @file spudnet.h
  * @brief SpudNet: the platform's network APIs behind one C interface. Known
- * problem: only the Apple backends have been built and run, and only over the
- * loopback interface; the Windows and Linux backends have never been built
- * with their own toolchains and have never run.
+ * problem: every backend has been run only over the loopback interface (on
+ * macOS, the iOS simulator, Windows 11 and Fedora 44), and never on an
+ * iPhone or iPad.
  *
  * The overview, and everything that holds for the whole module, is under
  * @ref spudnet "SpudNet".
@@ -24,10 +24,10 @@ extern "C" {
 /**
  * @defgroup spudnet SpudNet
  * @brief The platform's network APIs behind one C interface. Known problem:
- * only the Apple backends have been built and run (macOS, against a server on
- * the same machine); the Windows and Linux backends have never been built
- * with their own toolchains and have never run, so what this header says of
- * them is what they were written to do.
+ * every backend has been run only against a server on the same machine - on
+ * macOS, the iOS simulator, Windows 11 and Fedora 44 - and never on an iPhone
+ * or iPad, so what this header says of a real network is what they were
+ * written to do.
  *
  * Three parts, each a translation of what the platform already has:
  *
@@ -2545,8 +2545,7 @@ void spudnet_websocket_destroy(spudnet_websocket socket);
  * members - fine for hundreds, not for thousands; an object destroyed while
  * still in a set is not caught, and the set then polls a closed descriptor
  * or asks a freed WebSocket; an HTTP transfer can't be a member; a libcurl
- * WebSocket is not named for a close this side made; and the Windows half
- * (a wake socket under WSAPoll) has never been compiled or run.
+ * WebSocket is not named for a close this side made.
  *
  * Every waiting call above waits on one object. A wait set is how one
  * thread waits on several - a server's listener and all its connections -
@@ -2816,8 +2815,7 @@ void spudnet_wait_set_abort(spudnet_wait_set set);
 
 /**
  * @brief Ends one wait and leaves the set usable, which is what an abort
- * can't do. Known problem: the Windows half of this has never been compiled
- * or run.
+ * can't do.
  *
  * From any thread, at any point after `_create`, but like abort not racing
  * destroy. The spudnet_wait_set_wait() in progress - or, when none is, the

@@ -2,8 +2,9 @@
  * @file spudinput.h
  * @brief SpudInput: input devices read directly, with no window. Gamepads
  * only so far. Known problems: the GameController (Apple), evdev (Linux)
- * and GameInput (Windows) backends are written, and none has run with a
- * gamepad being pressed; XInput is not written.
+ * and GameInput (Windows) backends are written; only GameController has
+ * run with a gamepad being used, and only its sticks, triggers and one
+ * button; XInput is not written.
  *
  * The overview is under @ref spudinput "SpudInput". Its result codes are
  * `SPUDRESULT_SPUDINPUT_*`, in spudcore.h.
@@ -27,7 +28,12 @@ extern "C" {
  * connected, what each is, and what state each is in. Gamepads only so far.
  * Known problems: only the GameController, evdev and GameInput backends
  * are written.
- * No part of GameController that needs a gamepad has been run; on it, a
+ * GameController has read a gamepad held and used on macOS, through a
+ * caller polling once a frame on the main thread: found when connected,
+ * both sticks and both triggers read in the directions and ranges stated
+ * here, and a button (the left stick, pressed in) read down and up. Its
+ * other buttons one by one, the rumble, battery, motion, touch surfaces,
+ * lights and labels have not been run. On it, a
  * finger resting exactly on the middle of a touch surface is not seen, a
  * motion sample's time is when it reached the process and not when it was
  * taken, and the direction of the motion axes has not been checked against

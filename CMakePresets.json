@@ -53,6 +53,22 @@
         "GRAPHICS_BACKEND": "Metal",
         "CMAKE_CONFIGURATION_TYPES": "Debug;Release;RelWithDebInfo"
       }
+    },
+    {
+      "name": "iossimulator-metal",
+      "displayName": "SpudLib iOS Metal (simulator)",
+      "generator": "Ninja Multi-Config",
+      "binaryDir": "${sourceDir}/build-iossimulator-metal",
+      "cacheVariables": {
+        "GRAPHICS_BACKEND": "Metal",
+        "CMAKE_SYSTEM_NAME": "iOS",
+        "CMAKE_OSX_SYSROOT": "iphonesimulator",
+        "CMAKE_OSX_ARCHITECTURES": "arm64",
+        "CMAKE_OSX_DEPLOYMENT_TARGET": "26.5",
+        "CMAKE_FIND_ROOT_PATH_MODE_PROGRAM": "NEVER",
+        "CMAKE_MACOSX_BUNDLE": "OFF",
+        "CMAKE_CONFIGURATION_TYPES": "Debug;Release;RelWithDebInfo"
+      }
     }
   ],
   "buildPresets": [
@@ -144,6 +160,24 @@
       "name": "macos-metal-xcode-relwithdebinfo",
       "displayName": "SpudLib macOS Metal (Xcode) (RelWithDebInfo)",
       "configurePreset": "macos-metal-xcode",
+      "configuration": "RelWithDebInfo"
+    },
+    {
+      "name": "iossimulator-metal-debug",
+      "displayName": "SpudLib iOS Metal (simulator) (Debug)",
+      "configurePreset": "iossimulator-metal",
+      "configuration": "Debug"
+    },
+    {
+      "name": "iossimulator-metal-release",
+      "displayName": "SpudLib iOS Metal (simulator) (Release)",
+      "configurePreset": "iossimulator-metal",
+      "configuration": "Release"
+    },
+    {
+      "name": "iossimulator-metal-relwithdebinfo",
+      "displayName": "SpudLib iOS Metal (simulator) (RelWithDebInfo)",
+      "configurePreset": "iossimulator-metal",
       "configuration": "RelWithDebInfo"
     }
   ]

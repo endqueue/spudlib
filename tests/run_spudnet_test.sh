@@ -5,6 +5,13 @@
 #   tests/run_spudnet_test.sh <path to spudnet_test> [part]
 #
 # Needs python3 and the openssl command. Exits with spudnet_test's status.
+#
+# SPUDNET_TEST_LAUNCHER, if set, is put in front of the program: for a build
+# that runs somewhere other than this shell, but on this machine's loopback
+# and file system. The iOS simulator is one:
+#
+#   SPUDNET_TEST_LAUNCHER="xcrun simctl spawn booted" \
+#       tests/run_spudnet_test.sh build-iossimulator-metal/Debug/spudnet_test
 
 set -u
 if [ $# -lt 1 ]; then
@@ -32,4 +39,5 @@ done
 
 program=$1
 shift
-"$program" "$info" "$@"
+# Unquoted on purpose: the launcher is a command and its arguments.
+${SPUDNET_TEST_LAUNCHER:-} "$program" "$info" "$@"
