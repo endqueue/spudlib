@@ -55,10 +55,12 @@ if(NOT TARGET spudlib)
         include/spudcore.h
         include/spudfiles.h
         include/spudgpu.h
+        include/spudinput.h
         include/spudmemory.h
         include/spudnet.h
         include/spudperf.h
         src/net/spudnetshared.h
+        src/input/spudinputshared.h
         src/spudcore.c
         src/spudmemory.c
         src/spudfiles.c
@@ -67,6 +69,7 @@ if(NOT TARGET spudlib)
         src/net/spudnethttp.c
         src/net/spudnetwaitset.c
         src/spudaudio.c
+        src/spudinput.c
         src/gpu/spudgpuformat.c
     )
     # Determine which backend sources to append.
@@ -95,6 +98,23 @@ if(NOT TARGET spudlib)
             src/net/backends/posix/spudnetsockets.c
             src/net/backends/apple/spudneturlsession.m
         )
+    endif()
+
+    # SpudInput: the native input APIs built for the target platform, published
+    # as PUBLIC SPUDINPUT_COMPILE_<api> definitions (after add_library). See
+    # the table in include/spudinput.h. The front end (src/spudinput.c) is in
+    # every build; with no API it has nothing to bind an instance to.
+    set(SPUDINPUT_APIS "")
+    if(APPLE)
+        # GameController is on macOS, iOS and iPadOS; watchOS has none.
+        if(CMAKE_SYSTEM_NAME STREQUAL "Darwin" OR CMAKE_SYSTEM_NAME STREQUAL "iOS")
+            set(SPUDINPUT_APIS GAMECONTROLLER)
+        endif()
+    endif()
+    message(STATUS "SpudInput: native APIs: ${SPUDINPUT_APIS}")
+    if("GAMECONTROLLER" IN_LIST SPUDINPUT_APIS)
+        # Objective-C; OBJC is already enabled for Apple above.
+        list(APPEND SPUDLIB_SOURCES src/input/backends/apple/spudinputgamecontroller.m)
     endif()
 
     # SpudAudio: the target platform and the native audio APIs built for it,
@@ -258,6 +278,15 @@ if(NOT TARGET spudlib)
         # Foundation: NSURLSession, for SpudNet's HTTP and WebSocket clients.
         # Security: SecTrust, for their certificate checks.
         target_link_libraries(spudlib PRIVATE "-framework Foundation" "-framework Security")
+    endif()
+
+    # SpudInput definitions and libraries, from the choice made above.
+    foreach(api IN LISTS SPUDINPUT_APIS)
+        target_compile_definitions(spudlib PUBLIC SPUDINPUT_COMPILE_${api}=1)
+    endforeach()
+    if("GAMECONTROLLER" IN_LIST SPUDINPUT_APIS)
+        # CoreHaptics is what GameController plays a gamepad's motors through.
+        target_link_libraries(spudlib PRIVATE "-framework GameController" "-framework CoreHaptics" "-framework Foundation")
     endif()
 
     # SpudAudio definitions and libraries, from the choice made above.
@@ -468,6 +497,17 @@ if(NOT TARGET spudlib)
         add_executable(spudperf_test tests/spudperf_test.c)
         target_link_libraries(spudperf_test PRIVATE spudlib)
         add_test(NAME spudperf_test COMMAND spudperf_test)
+
+        # SpudInput's front end, and whatever gamepads happen to be plugged
+        # in. It passes with none, so it is a ctest too.
+        add_executable(spudinput_test tests/spudinput_test.c)
+        target_link_libraries(spudinput_test PRIVATE spudlib)
+        if(APPLE)
+            # The test runs the main run loop itself, which is how
+            # GameController's devices arrive.
+            target_link_libraries(spudinput_test PRIVATE "-framework CoreFoundation")
+        endif()
+        add_test(NAME spudinput_test COMMAND spudinput_test)
 
         add_executable(spudaudio_sine tests/spudaudio_sine.c)
         target_link_libraries(spudaudio_sine PRIVATE spudlib)

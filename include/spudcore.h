@@ -44,8 +44,9 @@ extern "C" {
  *
  * The values are grouped by module: 1-11 are general, 199-354 are SpudGPU
  * (`SPUDRESULT_GPU_*`), 1001-1007 SpudFiles (`SPUDRESULT_SFS_*`), 2001-2026
- * SpudMemory (`SPUDRESULT_SMEM_*`), 3001-3033 SpudNet (`SPUDRESULT_SPUDNET_*`)
- * and 4001-4012 SpudAudio (`SPUDRESULT_SAUD_*`). A value is never reused for
+ * SpudMemory (`SPUDRESULT_SMEM_*`), 3001-3033 SpudNet (`SPUDRESULT_SPUDNET_*`),
+ * 4001-4012 SpudAudio (`SPUDRESULT_SAUD_*`) and 5001-5005 SpudInput
+ * (`SPUDRESULT_SPUDINPUT_*`). A value is never reused for
  * a different meaning.
  */
 typedef enum SPUDRESULT {
@@ -225,6 +226,12 @@ typedef enum SPUDRESULT {
 	SPUDRESULT_SAUD_THREAD_PRIORITY_DENIED      = 4010,
 	SPUDRESULT_SAUD_SAMPLE_RATE_NOT_SETTABLE    = 4011,
 	SPUDRESULT_SAUD_OS_CONVERSION_UNAVAILABLE   = 4012,
+
+	SPUDRESULT_SPUDINPUT_INVALID_INSTANCE      = 5001,
+	SPUDRESULT_SPUDINPUT_GAMEPAD_NOT_CONNECTED = 5002, /**< The id names no gamepad as of the last poll. */
+	SPUDRESULT_SPUDINPUT_UNSUPPORTED           = 5003, /**< The native API doesn't offer the choice asked of it. */
+	SPUDRESULT_SPUDINPUT_FEATURE_NOT_PRESENT   = 5004, /**< The device doesn't have what the call is about. */
+	SPUDRESULT_SPUDINPUT_ACCESS_DENIED         = 5005, /**< The platform won't let this process read or write the device. */
 
 } SPUDRESULT;
 

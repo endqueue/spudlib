@@ -40,6 +40,7 @@ codes) rather than inventing its own error convention.
 | SpudMemory | `spudmemory.h` | `smem_` | Windows, Linux |
 | SpudNet | `spudnet.h` | `spudnet_` | TCP sockets: Winsock2, BSD sockets (Linux + Apple, one file). HTTP + WebSocket: WinHTTP, libcurl, NSURLSession |
 | SpudAudio | `spudaudio.h` | `spudaudio_` / `SPUDRESULT_SAUD_*` | WASAPI (Windows), ALSA (Linux), CoreAudio (macOS); an argument-checking stub where no API is compiled in (iOS, watchOS) |
+| SpudInput | `spudinput.h` | `spudinput_` / `SPUDRESULT_SPUDINPUT_*` | GameController (macOS, iOS, iPadOS). Not written: GameInput and XInput (Windows), evdev (Linux); with no API built in, no instance can be made |
 | SpudCore | `spudcore.h` | `spud_` / `SPUDRESULT` | platform-agnostic |
 | SpudPerf | `spudperf.h` | `spudperf_` | Windows, Linux, Apple |
 
@@ -94,6 +95,25 @@ caller set `SPUDAUDIO_STREAM_FLAG_ALLOW_OS_CONVERSION`. Which native APIs are bu
 in is decided in `CMakeLists.txt` and published as PUBLIC
 `SPUDAUDIO_PLATFORM_*` / `SPUDAUDIO_COMPILE_*` definitions, so a caller tests those
 at compile time; the table is at the top of `spudaudio.h`.
+SpudInput is "what devices are connected and what state they are in," read with
+no window: gamepads only so far. Nothing that arrives as a window's event (keys,
+the pointer, typed text) belongs in it, since SpudLib owns no window. It never
+picks a device or numbers players, applies no dead zone or curve, lists only
+what the platform itself presents as a gamepad (no table of other devices'
+layouts), and starts no thread: the caller polls. A gamepad is named by a
+`spudinput_gamepad_id` value, not a handle, so that one unplugged is told apart
+from one still there. What a gamepad has beyond buttons and axes (rumble motors,
+battery, motion sensors, touch surfaces, lights, labels) is a per-device feature
+bit, and asking for one it lacks is `SPUDRESULT_SPUDINPUT_FEATURE_NOT_PRESENT`,
+never a silent no-op. Outputs are set and held, with no durations or patterns;
+motion is every sample between two polls, raw, in one stated frame, with no
+orientation worked out; labels are only the platform's own words, and no table
+of devices or button art lives here. The public API is one front end,
+`src/spudinput.c`: every argument check and the table of gamepads and ids are
+there, once, and a backend only finds devices and reads them into the front
+end's records through the `spudinput_backend_*` functions of
+`src/input/spudinputshared.h`. A new rule about a call goes in the front end,
+not in each backend.
 
 ## SpudGPU conventions
 
@@ -640,7 +660,19 @@ one.
   a caller outside this repo so far; HTTP and WebSocket are exercised by
   `tests/spudnet_test` alone. On Linux, WebSocket needs libcurl 8.11+ (older ones
   return `SPUDRESULT_SPUDNET_UNSUPPORTED`; HTTP works regardless).
-- One CTest target exists: `spudperf_test` (the monotonic clocks,
+- SpudInput was written on 2026-10-13: the header, the front end and the
+  GameController backend (`src/input/backends/apple/spudinputgamecontroller.m`).
+  It builds with the `macos-metal` preset and `tests/spudinput_test` passes,
+  with no gamepad connected, so only what needs no device has run: argument
+  checks, absent-gamepad results, polls that find nothing, instance create and
+  destroy. Nothing in the backend that reads or drives a controller has ever
+  run: buttons and axes, the change handler behind `buttons_went_down`,
+  battery, touch, motion, lights, labels and the CoreHaptics rumble. Known to
+  be approximate on GameController: a touch exactly at a surface's middle
+  reads as no touch; a motion sample's time is its arrival, not its capture;
+  the motion frame and the sign of acceleration are from documentation and
+  unchecked. iOS has not been built.
+- Two CTest targets exist: `spudinput_test` (above) and `spudperf_test` (the monotonic clocks,
   `spudperf_sleep_until_monotonic_ns` and `spudperf_sleep_until_monotonic_ms`),
   which needs nothing but the machine. It has run on macOS; the Windows and
   Linux halves of the nanosecond sleep, which the millisecond one waits
