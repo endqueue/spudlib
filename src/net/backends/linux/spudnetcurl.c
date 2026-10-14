@@ -1387,6 +1387,10 @@ SPUDRESULT spudnet_websocket_send(
 		result = SPUDRESULT_SPUDNET_SEND_FAILED;
 	if (!SPUDFAIL(result) && timeout_ms == SPUDNET_NO_WAIT)
 		result = SPUDRESULT_SPUDNET_TIMED_OUT;
+	// libcurl frames whatever it is given as text. Refused here, nothing is
+	// sent and the connection carries on.
+	if (!SPUDFAIL(result) && type == SPUDNET_WEBSOCKET_MESSAGE_TEXT && !spudnet_utf8_valid((const uint8_t *)data, (size_t)size))
+		result = SPUDRESULT_SPUDNET_SEND_FAILED;
 	if (!SPUDFAIL(result)) {
 		unsigned int flags = type == SPUDNET_WEBSOCKET_MESSAGE_TEXT ? CURLWS_TEXT : CURLWS_BINARY;
 		switch (spudnet_curl_send_frame(socket, size > 0 ? data : "", (size_t)size, flags, start, timeout_ms)) {

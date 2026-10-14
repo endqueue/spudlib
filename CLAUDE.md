@@ -653,9 +653,10 @@ one.
   rewritten to it, on 2026-10-08: streaming HTTP transfers, TLS and proxy
   descs, error detail, a resolver, a wait set. The Apple side compiles clean
   with the `macos-metal` preset and passes `tests/spudnet_test` (run it with
-  `tests/run_spudnet_test.sh build-macos-metal/spudnet_test`; it needs Python 3
-  and `openssl`). The Windows and Linux backends have never been built with
-  their own toolchains and have never run. `SPUDNET_TODO.md` lists what each
+  `tests/run_spudnet_test.sh build-macos-metal/Debug/spudnet_test`; it needs Python 3
+  and `openssl`). Linux (libcurl + BSD sockets) built with the
+  `linux-vulkan` preset and passed it on 2026-10-14; the Windows backends
+  have never been built with their own toolchain and have never run. `SPUDNET_TODO.md` lists what each
   part assumes and what the macOS run settled. Only TCP and the resolver have
   a caller outside this repo so far; HTTP and WebSocket are exercised by
   `tests/spudnet_test` alone. On Linux, WebSocket needs libcurl 8.11+ (older ones

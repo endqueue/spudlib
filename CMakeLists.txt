@@ -235,6 +235,16 @@ if(NOT TARGET spudlib)
     # After determing source backends, add_library to SpudLib target.
     add_library(spudlib STATIC ${SPUDLIB_SOURCES})
 
+    # _DEBUG in a Debug build, for every compiler. MSVC's debug CRT defines it
+    # already (CMAKE_MSVC_RUNTIME_LIBRARY pairs the two per config); GCC and
+    # Clang define nothing, so without this a Debug build there leaves out
+    # everything under `#if _DEBUG`. PUBLIC because spudcore.h and spudgpu.h
+    # test it: structs in them change with it, so spudlib and whatever links
+    # it must agree.
+    if(NOT MSVC)
+        target_compile_definitions(spudlib PUBLIC $<$<CONFIG:Debug>:_DEBUG>)
+    endif()
+
     # Now set the compile-time macros and packages and whatnot.
     if(WIN32)
         target_compile_definitions(spudlib PUBLIC SPUDLIB_PLATFORM_WIN32=1)

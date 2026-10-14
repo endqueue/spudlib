@@ -2167,8 +2167,10 @@ void spudnet_http_transfer_destroy(spudnet_http_transfer transfer);
  * close reason can't be read, and a ping can't be sent; bad arguments to
  * send and close return SPUDRESULT_SPUDNET_SEND_FAILED where an
  * invalid-argument result is meant; a text message handed over in parts can
- * be split in the middle of a UTF-8 character; and the result codes say
- * `WS_` where the functions say `websocket`.
+ * be split in the middle of a UTF-8 character; on libcurl a redirect of the
+ * opening request is never followed (see
+ * spudnet_websocket_connect_desc::follow_redirects); and the result codes
+ * say `WS_` where the functions say `websocket`.
  *
  * The order of use: create, connect once, then send and recv for as long
  * as the connection lasts, then destroy. close is the polite ending and
@@ -2239,7 +2241,13 @@ typedef struct spudnet_websocket_connect_desc {
 	 * as spudnet_http_transfer_desc::follow_redirects does. The socket is
 	 * then connected to wherever that led, and SpudNet doesn't say where:
 	 * the headers above, credentials among them, may have gone to a host
-	 * the caller never named, and `tls` and `proxy` apply to every hop. */
+	 * the caller never named, and `tls` and `proxy` apply to every hop.
+	 *
+	 * Known problem: libcurl refuses any answer to the opening request
+	 * other than 101 before its redirect handling is reached, and keeps no
+	 * record of where a 3xx pointed. On Linux, true therefore behaves as
+	 * false does: a redirect is handed back as
+	 * SPUDRESULT_SPUDNET_WS_UPGRADE_REFUSED with the 3xx. */
 	bool follow_redirects;
 	/** For a wss:// connection. See @ref spudnet_tls "TLS". */
 	spudnet_tls_desc tls;

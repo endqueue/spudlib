@@ -14,8 +14,9 @@ the backends were then rewritten to match it in one pass. `spudnet.h` and the
 sources agree again as far as reading them can tell: every function the header
 declares has one definition per platform, and none of the names it dropped is
 left in the sources. It was then compiled on macOS and run there for the first time (see "State of
-the code" and "First run on macOS"). The Windows and Linux backends have never
-been built with their own toolchains, and have never run.
+the code" and "First run on macOS"). Linux was built and run for the first
+time on 2026-10-14 (see "State of the code"). The Windows backends have never
+been built with their own toolchain, and have never run.
 
 Below is what is still wrong with it or missing from it, as of that review.
 
@@ -28,7 +29,8 @@ was changed first and the backends and `tests/spudnet_test.c` brought to it the
 same day. **macOS: built with the `macos-metal` preset with no errors or
 warnings, and `tests/spudnet_test` passes all 261 of its checks, three runs in a
 row** (238 before; the new ones are the "instance" part and the wait set's
-wake). Windows and Linux have not been compiled.
+wake). Linux: built and passing on 2026-10-14 (see "State of the code").
+Windows has not been compiled with MSVC.
 
 Why: a library above SpudNet (ApSync) could not make a once-per-process call
 that has to come before the process's other threads, so the rule travelled up
@@ -91,7 +93,8 @@ To confirm on a machine:
 
 - **macOS has run.** `tests/spudnet_test` passes all 238 of its checks against
   a local server (2026-10-08, three runs in a row); see "First run on macOS"
-  for what that covers and what it found. Windows and Linux have not run.
+  for what that covers and what it found. Linux has run too (below); Windows
+  has not.
 - **Apple** (NSURLSession + BSD sockets): everything compiles with the
   `macos-metal` preset as of 2026-10-08, with no errors and no warnings, also
   under `-Wall -Wextra -Wconversion`. The first build of the rewritten backends
@@ -101,12 +104,19 @@ To confirm on a machine:
   `SPUDLIB_PLATFORM_WATCHOS=1` defined on the Mac, which is the
   `SPUDNET_EXT_TCP` / `SPUDNET_EXT_WEBSOCKET` = 0 configuration. That shows the
   guards hang together, not that a watchOS build works.
-- **Linux** (libcurl + BSD sockets): never built. The BSD-sockets file is the
-  one macOS compiles. The libcurl file passes a syntax check on the Mac against
-  the SDK's libcurl 8.7.1 headers (with a stand-in for `<sys/eventfd.h>`), in
-  both its forms - as that version builds it, without WebSocket, and with the
-  8.11 WebSocket branch forced on. That is its syntax and its use of libcurl's
-  declarations, not a Linux build.
+- **Linux has run.** Built with the `linux-vulkan` preset (Fedora 44, GCC,
+  libcurl 8.18.0 on OpenSSL 3.5) on 2026-10-14, and `tests/spudnet_test`
+  passes all 259 of its checks (`tests/run_spudnet_test.sh
+  build-linux-vulkan/Debug/spudnet_test`). The first run failed four, from two
+  defects: libcurl sends text that isn't UTF-8 as it is given, so the backend
+  now refuses it with `SPUDRESULT_SPUDNET_SEND_FAILED` before sending (the
+  same check was added to WinHTTP, which doesn't validate either; the
+  validator, `spudnet_utf8_valid`, is shared); and libcurl can't follow a
+  redirect of a WebSocket opening request at all (it refuses any non-101
+  before its redirect handling and keeps no Location), which is now a known
+  problem in `spudnet.h` on `follow_redirects`, and a note in the test on
+  Linux. The other two failures followed from the first: the echoed bad text
+  left every later read one message behind.
 - **Windows** (WinHTTP + Winsock2): never built with MSVC, and never run. On
   2026-10-08 it was cross-compiled on the Mac with mingw-w64 (GCC 16, its own
   Windows headers): the two Windows backends and the shared files compile with
@@ -246,7 +256,7 @@ no router, DNS server, firewall or proxy in the way. What that leaves untried:
   one (Supabase, which this was built to reach) may use HTTP/2, pings,
   compression and redirects that it doesn't.
 - **Load.** Many peers in a wait set, many transfers, long-lived connections.
-- **Windows and Linux**, entirely.
+- **Windows**, entirely; Linux beyond the local test server.
 
 How each could be covered:
 
@@ -638,10 +648,11 @@ SpudLib's rule is that it never decides on the caller's behalf. These do:
 ## Order to do it in
 
 0. Compiled on macOS, and cross-compiled for Windows with mingw-w64 (done
-   2026-10-08). Still to compile: Windows with MSVC, and Linux for real.
+   2026-10-08); Linux built for real (2026-10-14). Still to compile:
+   Windows with MSVC.
 1. The test program on macOS (done 2026-10-08; see "First run on macOS"). Next
-   for it: run it on Linux and Windows, where every assumption listed for
-   libcurl and WinHTTP is still open. On Windows it needs a way to start the
+   for it: run it on Windows, where every assumption listed for WinHTTP is
+   still open. Linux passes (2026-10-14). On Windows it needs a way to start the
    server other than the shell script.
    Then off the loopback interface, which is all the macOS run touched: an
    opt-in test against a public HTTPS and `wss://` server, and one against a

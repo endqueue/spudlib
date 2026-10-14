@@ -1548,6 +1548,10 @@ SPUDRESULT spudnet_websocket_send(
 		result = SPUDRESULT_SPUDNET_SEND_FAILED;
 	if (!SPUDFAIL(result) && timeout_ms == SPUDNET_NO_WAIT)
 		result = SPUDRESULT_SPUDNET_TIMED_OUT;
+	// WinHTTP sends a UTF-8 buffer as it is given. Refused here, nothing is
+	// sent and the connection carries on.
+	if (!SPUDFAIL(result) && type == SPUDNET_WEBSOCKET_MESSAGE_TEXT && !spudnet_utf8_valid((const uint8_t *)data, (size_t)size))
+		result = SPUDRESULT_SPUDNET_SEND_FAILED;
 	spudnet_error *record = &socket->errors[SPUDNET_ERROR_SIDE_SENDING];
 	if (!SPUDFAIL(result)) {
 		// Returns its error rather than leaving it for GetLastError.

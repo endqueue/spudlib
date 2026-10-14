@@ -67,6 +67,11 @@ bool spudnet_ascii_equal_no_case(const char *a, const char *b, size_t length);
 /* True when `url` starts with `scheme` and "://", without regard to case. */
 bool spudnet_url_has_scheme(const char *url, const char *scheme);
 
+/* True when the `size` bytes are UTF-8 as RFC 3629 has it: no overlong
+ * forms, no surrogates, nothing past U+10FFFF. For a stack that sends text
+ * without checking it. */
+bool spudnet_utf8_valid(const uint8_t *bytes, size_t size);
+
 // --------------------------------------------------------------------------
 // Error records
 // --------------------------------------------------------------------------

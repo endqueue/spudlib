@@ -178,6 +178,49 @@ bool spudnet_url_has_scheme(const char *url, const char *scheme) {
 	return spudnet_ascii_equal_no_case(url, scheme, length) && memcmp(url + length, "://", 3) == 0;
 }
 
+bool spudnet_utf8_valid(const uint8_t *bytes, size_t size) {
+	size_t i = 0;
+	while (i < size) {
+		uint8_t lead = bytes[i];
+		if (lead < 0x80) {
+			i++;
+			continue;
+		}
+		// How many bytes follow the lead, and the range the first of them
+		// must be in: narrower than 0x80-0xBF where a wider one would let an
+		// overlong form, a surrogate or a value past U+10FFFF through.
+		size_t  follow;
+		uint8_t low  = 0x80;
+		uint8_t high = 0xBF;
+		if (lead >= 0xC2 && lead <= 0xDF)
+			follow = 1;
+		else if (lead >= 0xE0 && lead <= 0xEF) {
+			follow = 2;
+			if (lead == 0xE0)
+				low = 0xA0;
+			else if (lead == 0xED)
+				high = 0x9F;
+		} else if (lead >= 0xF0 && lead <= 0xF4) {
+			follow = 3;
+			if (lead == 0xF0)
+				low = 0x90;
+			else if (lead == 0xF4)
+				high = 0x8F;
+		} else
+			return false;
+		if (size - i - 1 < follow)
+			return false;
+		if (bytes[i + 1] < low || bytes[i + 1] > high)
+			return false;
+		for (size_t k = 2; k <= follow; ++k) {
+			if (bytes[i + k] < 0x80 || bytes[i + k] > 0xBF)
+				return false;
+		}
+		i += follow + 1;
+	}
+	return true;
+}
+
 // --------------------------------------------------------------------------
 // TLS desc - what is the same on every backend (see net/spudnetshared.h)
 // --------------------------------------------------------------------------
