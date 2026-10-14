@@ -451,6 +451,8 @@ void spudgpu_cmd_bind_descriptor_sets(
 		return;
 	if (set_count > SPUDGPU_MAX_DESCRIPTOR_SET_LAYOUTS)
 		return;
+	if (first_set > SPUDGPU_MAX_DESCRIPTOR_SET_LAYOUTS - set_count)
+		return;
 
 	spudgpu_command_list_metal *cmd_metal = (spudgpu_command_list_metal *)cmd;
 	if (!cmd_metal->_active_render_encoder)
@@ -497,6 +499,8 @@ void spudgpu_cmd_bind_descriptor_sets_compute(
 	if (!cmd || !pipeline || !sets || set_count == 0)
 		return;
 	if (set_count > SPUDGPU_MAX_DESCRIPTOR_SET_LAYOUTS)
+		return;
+	if (first_set > SPUDGPU_MAX_DESCRIPTOR_SET_LAYOUTS - set_count)
 		return;
 
 	spudgpu_command_list_metal *cmd_metal = (spudgpu_command_list_metal *)cmd;

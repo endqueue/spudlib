@@ -40,7 +40,7 @@ codes) rather than inventing its own error convention.
 | SpudMemory | `spudmemory.h` | `smem_` | Windows, Linux |
 | SpudNet | `spudnet.h` | `spudnet_` | TCP sockets: Winsock2, BSD sockets (Linux + Apple, one file). HTTP + WebSocket: WinHTTP, libcurl, NSURLSession |
 | SpudAudio | `spudaudio.h` | `spudaudio_` / `SPUDRESULT_SAUD_*` | WASAPI (Windows), ALSA (Linux), CoreAudio (macOS); an argument-checking stub where no API is compiled in (iOS, watchOS) |
-| SpudInput | `spudinput.h` | `spudinput_` / `SPUDRESULT_SPUDINPUT_*` | GameController (macOS, iOS, iPadOS), evdev (Linux). Not written: GameInput and XInput (Windows); with no API built in, no instance can be made |
+| SpudInput | `spudinput.h` | `spudinput_` / `SPUDRESULT_SPUDINPUT_*` | GameController (macOS, iOS, iPadOS), evdev (Linux), GameInput (Windows). Not written: XInput (Windows); with no API built in, no instance can be made |
 | SpudCore | `spudcore.h` | `spud_` / `SPUDRESULT` | platform-agnostic |
 | SpudPerf | `spudperf.h` | `spudperf_` | Windows, Linux, Apple |
 
@@ -655,8 +655,19 @@ one.
   with the `macos-metal` preset and passes `tests/spudnet_test` (run it with
   `tests/run_spudnet_test.sh build-macos-metal/Debug/spudnet_test`; it needs Python 3
   and `openssl`). Linux (libcurl + BSD sockets) built with the
-  `linux-vulkan` preset and passed it on 2026-10-14; the Windows backends
-  have never been built with their own toolchain and have never run. `SPUDNET_TODO.md` lists what each
+  `linux-vulkan` preset and passed it on 2026-10-14. Windows (WinHTTP +
+  Winsock2) built with MSVC under the `windows-d3d12` preset and passed all
+  261 checks on 2026-10-14, Windows 11 (`tests/run_spudnet_test.sh
+  build-windows-d3d12/Debug/spudnet_test.exe` from Git Bash). The first run
+  failed six. Five came from WinHTTP holding back
+  `WINHTTP_CALLBACK_STATUS_SENDREQUEST_COMPLETE` until the response
+  arrives, which made `_start` wait for the response. `_start` now returns
+  at `WINHTTP_CALLBACK_STATUS_REQUEST_SENT` and leaves the completion in
+  flight for the next call. The sixth was the test: WinHTTP shares
+  connections between every session in a process, so the test's
+  `server_stat` now asks over its own TCP connection. That sharing is
+  WinHTTP's own: it doesn't break the one-transfer-per-client rule, but a
+  new client is not a new connection there. `SPUDNET_TODO.md` lists what each
   part assumes and what the macOS run settled. Only TCP and the resolver have
   a caller outside this repo so far; HTTP and WebSocket are exercised by
   `tests/spudnet_test` alone. On Linux, WebSocket needs libcurl 8.11+ (older ones
@@ -673,6 +684,23 @@ one.
   reads as no touch; a motion sample's time is its arrival, not its capture;
   the motion frame and the sign of acceleration are from documentation and
   unchecked. iOS has not been built.
+- SpudInput's GameInput backend (`src/input/backends/windows/spudinputgameinput.c`)
+  was written on 2026-10-14, on the Windows SDK's GameInput (`GameInput.h`,
+  `gameinput.lib`; no NuGet package). Devices are learnt from a device
+  callback: a blocking enumeration when the instance is made, so the first
+  poll lists what is connected, then a dispatcher so that every later
+  callback runs inside the poll's dispatches. Each poll walks the device's
+  reading history from the reading it took last, falling back to the newest
+  on `GAMEINPUT_E_REFERENCE_READING_TOO_OLD`. `spudinput_test` passes on
+  Windows 11 with a wired Xbox Series X|S controller (045e:0b12): found at
+  the first poll, with four rumble motors and a battery state of none.
+  GameInput gives no name for it, and sends no reading until about 0.7 s
+  after it is first asked, then one only when something changes. Pressing
+  buttons, moving sticks and rumble have not been checked by anyone holding
+  it. No motion sensors, touch surfaces, lights or labels. The SDK header's
+  C macros for `IGameInputDispatcher` are missing a parenthesis, so the file
+  calls every method through `lpVtbl`, and the header needs `<stdbool.h>`
+  before it in C.
 - SpudInput's evdev backend (`src/input/backends/linux/spudinputevdev.c`) was
   written on 2026-10-14. It finds gamepads by `BTN_GAMEPAD`, learns of new
   nodes through inotify on `/dev/input` read at each poll, takes every event

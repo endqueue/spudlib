@@ -498,6 +498,8 @@ void spudgpu_cmd_bind_descriptor_sets(
 		return;
 	if (set_count > SPUDGPU_MAX_DESCRIPTOR_SET_LAYOUTS)
 		return;
+	if (first_set > SPUDGPU_MAX_DESCRIPTOR_SET_LAYOUTS - set_count)
+		return;
 
 	ID3D12GraphicsCommandList *cmdList = cmd->_d3d_cmd_list.Get();
 
@@ -516,26 +518,22 @@ void spudgpu_cmd_bind_descriptor_sets(
 	if (heapCount)
 		cmdList->SetDescriptorHeaps(heapCount, heaps);
 
-	// One root parameter per descriptor set: a descriptor table starting at
-	// the set's base GPU handle. Root parameter index = first_set + i. A set
-	// is homogeneous today -- all-CBV/SRV/UAV or all-sampler, per its
-	// layout's _sampler_count (no current layout mixes both kinds in one
-	// set) -- so which heap/base pair to use is a per-set choice, not a
-	// once-per-call one.
+	// Each set has a table in each heap it uses, at the root parameters its
+	// pipeline's root signature put them at (spudgpu_d3d12_root_layout).
+	const spudgpu_d3d12_root_layout &root = pipeline->_root_layout;
 	for (uint32_t i = 0; i < set_count; ++i) {
-		spudgpu_descriptor_set_d3d12 *set =
-		    (spudgpu_descriptor_set_d3d12 *)sets[i];
-		D3D12_GPU_DESCRIPTOR_HANDLE table;
-		if (set->_layout->_sampler_count && pool->_sampler_heap) {
-			table = pool->_sampler_heap->GetGPUDescriptorHandleForHeapStart();
-			table.ptr += (UINT64)set->_sampler_base * pool->_sampler_increment;
-		} else if (pool->_cbv_srv_uav_heap) {
-			table = pool->_cbv_srv_uav_heap->GetGPUDescriptorHandleForHeapStart();
+		spudgpu_descriptor_set_d3d12 *set = (spudgpu_descriptor_set_d3d12 *)sets[i];
+		const uint32_t s                  = first_set + i;
+		if (root.cbv_srv_uav_param[s] != SPUDGPU_D3D12_NO_ROOT_PARAMETER && pool->_cbv_srv_uav_heap) {
+			D3D12_GPU_DESCRIPTOR_HANDLE table = pool->_cbv_srv_uav_heap->GetGPUDescriptorHandleForHeapStart();
 			table.ptr += (UINT64)set->_cbv_srv_uav_base * pool->_cbv_srv_uav_increment;
-		} else {
-			continue;
+			cmdList->SetGraphicsRootDescriptorTable(root.cbv_srv_uav_param[s], table);
 		}
-		cmdList->SetGraphicsRootDescriptorTable(first_set + i, table);
+		if (root.sampler_param[s] != SPUDGPU_D3D12_NO_ROOT_PARAMETER && pool->_sampler_heap) {
+			D3D12_GPU_DESCRIPTOR_HANDLE table = pool->_sampler_heap->GetGPUDescriptorHandleForHeapStart();
+			table.ptr += (UINT64)set->_sampler_base * pool->_sampler_increment;
+			cmdList->SetGraphicsRootDescriptorTable(root.sampler_param[s], table);
+		}
 	}
 }
 
@@ -548,6 +546,8 @@ void spudgpu_cmd_bind_descriptor_sets_compute(
 	if (!cmd || !pipeline || !sets || !set_count)
 		return;
 	if (set_count > SPUDGPU_MAX_DESCRIPTOR_SET_LAYOUTS)
+		return;
+	if (first_set > SPUDGPU_MAX_DESCRIPTOR_SET_LAYOUTS - set_count)
 		return;
 
 	ID3D12GraphicsCommandList *cmdList = cmd->_d3d_cmd_list.Get();
@@ -565,22 +565,21 @@ void spudgpu_cmd_bind_descriptor_sets_compute(
 	if (heapCount)
 		cmdList->SetDescriptorHeaps(heapCount, heaps);
 
-	// See spudgpu_cmd_bind_descriptor_sets above for why this is per-set
-	// rather than a single cbv_srv_uav-only branch.
+	// As in spudgpu_cmd_bind_descriptor_sets.
+	const spudgpu_d3d12_root_layout &root = pipeline->_root_layout;
 	for (uint32_t i = 0; i < set_count; ++i) {
-		spudgpu_descriptor_set_d3d12 *set =
-		    (spudgpu_descriptor_set_d3d12 *)sets[i];
-		D3D12_GPU_DESCRIPTOR_HANDLE table;
-		if (set->_layout->_sampler_count && pool->_sampler_heap) {
-			table = pool->_sampler_heap->GetGPUDescriptorHandleForHeapStart();
-			table.ptr += (UINT64)set->_sampler_base * pool->_sampler_increment;
-		} else if (pool->_cbv_srv_uav_heap) {
-			table = pool->_cbv_srv_uav_heap->GetGPUDescriptorHandleForHeapStart();
+		spudgpu_descriptor_set_d3d12 *set = (spudgpu_descriptor_set_d3d12 *)sets[i];
+		const uint32_t s                  = first_set + i;
+		if (root.cbv_srv_uav_param[s] != SPUDGPU_D3D12_NO_ROOT_PARAMETER && pool->_cbv_srv_uav_heap) {
+			D3D12_GPU_DESCRIPTOR_HANDLE table = pool->_cbv_srv_uav_heap->GetGPUDescriptorHandleForHeapStart();
 			table.ptr += (UINT64)set->_cbv_srv_uav_base * pool->_cbv_srv_uav_increment;
-		} else {
-			continue;
+			cmdList->SetComputeRootDescriptorTable(root.cbv_srv_uav_param[s], table);
 		}
-		cmdList->SetComputeRootDescriptorTable(first_set + i, table);
+		if (root.sampler_param[s] != SPUDGPU_D3D12_NO_ROOT_PARAMETER && pool->_sampler_heap) {
+			D3D12_GPU_DESCRIPTOR_HANDLE table = pool->_sampler_heap->GetGPUDescriptorHandleForHeapStart();
+			table.ptr += (UINT64)set->_sampler_base * pool->_sampler_increment;
+			cmdList->SetComputeRootDescriptorTable(root.sampler_param[s], table);
+		}
 	}
 }
 
@@ -847,6 +846,11 @@ void spudgpu_cmd_bind_bindless_resources(
     uint32_t set_index) {
 	if (!cmd || !pipeline)
 		return;
+	// The bindless set has only CBV/SRV/UAV descriptors: one table.
+	if (set_index >= SPUDGPU_MAX_DESCRIPTOR_SET_LAYOUTS)
+		return;
+	if (pipeline->_root_layout.cbv_srv_uav_param[set_index] == SPUDGPU_D3D12_NO_ROOT_PARAMETER)
+		return;
 	spudgpu_device_d3d12 *device = cmd->_allocator->_device;
 	if (spudgpud3d12___ensure_bindless_state(device) != SPUD_SUCCESS)
 		return;
@@ -867,7 +871,7 @@ void spudgpu_cmd_bind_bindless_resources(
 
 	D3D12_GPU_DESCRIPTOR_HANDLE tableStart =
 	    state->heap->GetGPUDescriptorHandleForHeapStart();
-	cmdList->SetGraphicsRootDescriptorTable(set_index, tableStart);
+	cmdList->SetGraphicsRootDescriptorTable(pipeline->_root_layout.cbv_srv_uav_param[set_index], tableStart);
 }
 
 void spudgpu_cmd_bind_bindless_resources_compute(
@@ -875,6 +879,11 @@ void spudgpu_cmd_bind_bindless_resources_compute(
     spudgpu_compute_pipeline pipeline,
     uint32_t set_index) {
 	if (!cmd || !pipeline)
+		return;
+	// The bindless set has only CBV/SRV/UAV descriptors: one table.
+	if (set_index >= SPUDGPU_MAX_DESCRIPTOR_SET_LAYOUTS)
+		return;
+	if (pipeline->_root_layout.cbv_srv_uav_param[set_index] == SPUDGPU_D3D12_NO_ROOT_PARAMETER)
 		return;
 	spudgpu_device_d3d12 *device = cmd->_allocator->_device;
 	if (spudgpud3d12___ensure_bindless_state(device) != SPUD_SUCCESS)
@@ -888,7 +897,7 @@ void spudgpu_cmd_bind_bindless_resources_compute(
 
 	D3D12_GPU_DESCRIPTOR_HANDLE tableStart =
 	    state->heap->GetGPUDescriptorHandleForHeapStart();
-	cmdList->SetComputeRootDescriptorTable(set_index, tableStart);
+	cmdList->SetComputeRootDescriptorTable(pipeline->_root_layout.cbv_srv_uav_param[set_index], tableStart);
 }
 
 } // extern "C"

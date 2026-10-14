@@ -33,7 +33,8 @@ HTTP paths:
   /gzip         a gzip-compressed body, unless the request said
                 Accept-Encoding: identity; X-Got-Accept-Encoding says what it said
   /slow?ms=N    waits N milliseconds, then 200 "slow"
-  /early        answers 413 at once, without reading the request body
+  /early        answers 413 at once, without reading the request body; to a
+                request with Expect: 100-continue, in place of the 100
   /empty        204, no body
 
 WebSocket: every text or binary message is sent back as it came, except text
@@ -91,6 +92,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     def log_message(self, *args):
         pass
+
+    def handle_expect_100(self):
+        # /early refuses in place of the 100, as a server refusing a body it
+        # hasn't read does; everything else is told to go on.
+        if urllib.parse.urlparse(self.path).path == "/early":
+            self.close_connection = True
+            self.reply(413, b"too much", [("Connection", "close")])
+            return False
+        return super().handle_expect_100()
 
     def read_body(self):
         """The request body, sized or chunked."""

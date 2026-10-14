@@ -1394,8 +1394,10 @@ SPUDRESULT spudnet_get_local_ipv4_addresses(
  * or the part's own catch-all: SPUDRESULT_SPUDNET_HTTP_FAILED for an HTTP
  * transfer's start and its wait for the response,
  * SPUDRESULT_SPUDNET_SEND_FAILED and SPUDRESULT_SPUDNET_RECV_FAILED for
- * moving a body or a WebSocket message. How finely a failure is told apart
- * is the stack's; treat the catch-alls as "it didn't work" rather than as a
+ * moving a body or a WebSocket message. A connection that breaks after it
+ * was made is the catch-all, not SPUDRESULT_SPUDNET_CONNECT_FAILED. How
+ * finely a failure is told apart is the stack's; treat the catch-alls as
+ * "it didn't work" rather than as a
  * diagnosis. The diagnosis, such as the stack gave one, is the object's
  * `_get_error` (@ref spudnet_error_detail "Error detail").
  * @{
@@ -1649,10 +1651,8 @@ typedef struct spudnet_proxy_desc {
  * @brief The HTTP client, for http:// and https://. Known problems: the rule
  * of one transfer at a time per client is enforced on libcurl and
  * NSURLSession but not on WinHTTP, which would carry several and doesn't
- * check; when a server answers before the request body is all sent (a
- * refusal, usually), libcurl and NSURLSession let the remaining sends
- * through so the caller reaches the response, while WinHTTP reports whatever
- * its write then fails with and the response is lost; several `Set-Cookie`
+ * check; a server's answer that comes before the request body is all sent
+ * may be lost (see spudnet_http_transfer_send()); several `Set-Cookie`
  * headers can't be read apart on any platform; and an HTTP transfer can't go
  * in a wait set.
  *
@@ -1914,6 +1914,17 @@ SPUDRESULT spudnet_http_transfer_start(
  *
  * With SPUDNET_HTTP_BODY_SIZED, the bytes past `body_size` are not taken: a
  * send that would go over is cut to what is left.
+ *
+ * A server may answer before the body is all sent - a refusal, usually -
+ * and stop reading it. What the caller gets then is not the same on every
+ * stack, and is not to be relied on: the rest of the sends may be taken as
+ * sent and spudnet_http_transfer_receive_response() hand over the answer
+ * (libcurl, NSURLSession), or a send may fail and the answer is lost
+ * (WinHTTP, which reads nothing of the response until the body is
+ * finished). An `Expect: 100-continue` header from the caller doesn't change
+ * that on WinHTTP, which sends the body without waiting for the 100. A
+ * caller that needs to hear a refusal before sending a large body asks the
+ * server first, in a request of its own.
  *
  * @param[in]  transfer   The transfer, started and with a body to send.
  * @param[in]  data       The bytes to send.

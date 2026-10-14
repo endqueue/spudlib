@@ -113,6 +113,9 @@ if(NOT TARGET spudlib)
     elseif(UNIX)
         # The kernel's event devices, read with nothing but its own headers.
         set(SPUDINPUT_APIS EVDEV)
+    elseif(WIN32)
+        # GameInput, from the Windows SDK (GameInput.h, gameinput.lib).
+        set(SPUDINPUT_APIS GAMEINPUT)
     endif()
     message(STATUS "SpudInput: native APIs: ${SPUDINPUT_APIS}")
     if("GAMECONTROLLER" IN_LIST SPUDINPUT_APIS)
@@ -121,6 +124,9 @@ if(NOT TARGET spudlib)
     endif()
     if("EVDEV" IN_LIST SPUDINPUT_APIS)
         list(APPEND SPUDLIB_SOURCES src/input/backends/linux/spudinputevdev.c)
+    endif()
+    if("GAMEINPUT" IN_LIST SPUDINPUT_APIS)
+        list(APPEND SPUDLIB_SOURCES src/input/backends/windows/spudinputgameinput.c)
     endif()
 
     # SpudAudio: the target platform and the native audio APIs built for it,
@@ -304,6 +310,9 @@ if(NOT TARGET spudlib)
         # CoreHaptics is what GameController plays a gamepad's motors through.
         target_link_libraries(spudlib PRIVATE "-framework GameController" "-framework CoreHaptics" "-framework Foundation")
     endif()
+    if("GAMEINPUT" IN_LIST SPUDINPUT_APIS)
+        target_link_libraries(spudlib PRIVATE gameinput)
+    endif()
 
     # SpudAudio definitions and libraries, from the choice made above.
     if(SPUDAUDIO_PLATFORM)
@@ -340,6 +349,11 @@ if(NOT TARGET spudlib)
         # Set the Vulkan compile-time packages and macros.
         if(GRAPHICS_BACKEND STREQUAL "Vulkan")
             set_property(TARGET spudlib PROPERTY C_STANDARD 23)
+            # The Vulkan backend counts with <stdatomic.h>, which MSVC's C
+            # compiler only provides behind this switch.
+            if(CMAKE_C_COMPILER_ID STREQUAL "MSVC")
+                target_compile_options(spudlib PRIVATE $<$<COMPILE_LANGUAGE:C>:/experimental:c11atomics>)
+            endif()
             target_compile_definitions(spudlib PUBLIC SPUDGPU_COMPILE_VULKAN_API=1)
 
             if(WIN32)
@@ -382,7 +396,13 @@ if(NOT TARGET spudlib)
 
         # Set the D3D12 compile-time packages and macros.
         if(GRAPHICS_BACKEND STREQUAL "D3D12")
-            set_property(TARGET spudlib PROPERTY CXX_STANDARD 26)
+            # CMake knows no C++26 flag for MSVC; its C++23 maps to /std:c++latest,
+            # the newest dialect MSVC offers.
+            if(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
+                set_property(TARGET spudlib PROPERTY CXX_STANDARD 23)
+            else()
+                set_property(TARGET spudlib PROPERTY CXX_STANDARD 26)
+            endif()
             set_property(TARGET spudlib PROPERTY CXX_SCAN_FOR_MODULES OFF)
             target_compile_definitions(spudlib PUBLIC SPUDGPU_COMPILE_D3D12_API=1)
 

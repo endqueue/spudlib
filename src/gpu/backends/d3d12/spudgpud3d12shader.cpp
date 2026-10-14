@@ -5,7 +5,7 @@
 #include "spudgpud3d12.hpp"
 
 #include <dxcapi.h>
-#include <spirv_cross/spirv_hlsl.hpp>
+#include <spirv_hlsl.hpp>
 
 static const wchar_t *stage_to_dxc_profile(SPUDGPU_SHADER_STAGE stage) {
 	switch (stage) {
@@ -95,8 +95,16 @@ spudgpu_d3d12_primitive_topology_type(SPUDGPU_PRIMITIVE_TOPOLOGY t) {
 }
 
 // Builds and creates a root signature from descriptor set layouts and push
-// constant ranges. Push constants are mapped to b0, space1 to avoid
-// collision with per-set CBV/SRV/UAV descriptors (which use space0..spaceN).
+// constant ranges, and says in [out_layout] where each set's tables and the
+// push constants were put. Push constants are mapped to b0 in a space past
+// every set's (see below).
+//
+// A descriptor table reads from one descriptor heap, and CBV/SRV/UAV
+// descriptors and samplers live in heaps of different types, so a set gets
+// one table per heap it uses: CBV/SRV/UAV first, then samplers, in set
+// order. A COMBINED_IMAGE_SAMPLER binding is in both: its SRV range and its
+// sampler range have the same register number (SPIRV-Cross emits t<n> and
+// s<n> for it). A set with no descriptors gets no table.
 static HRESULT spudgpu_d3d12_build_root_signature(
     ID3D12Device *device,
     uint32_t set_count,
@@ -104,20 +112,28 @@ static HRESULT spudgpu_d3d12_build_root_signature(
     uint32_t pc_range_count,
     const spudgpu_push_constant_range_desc *pc_ranges,
     D3D12_ROOT_SIGNATURE_FLAGS flags,
-    ID3D12RootSignature **out_sig) {
+    ID3D12RootSignature **out_sig,
+    spudgpu_d3d12_root_layout *out_layout) {
+	if (set_count > SPUDGPU_MAX_DESCRIPTOR_SET_LAYOUTS)
+		return E_INVALIDARG;
 
 	D3D12_DESCRIPTOR_RANGE
-	ranges[SPUDGPU_MAX_DESCRIPTOR_SET_LAYOUTS]
-	      [SPUDGPU_MAX_DESCRIPTOR_BINDINGS_PER_SET];
-	uint32_t range_counts[SPUDGPU_MAX_DESCRIPTOR_SET_LAYOUTS] = {};
+	csv_ranges[SPUDGPU_MAX_DESCRIPTOR_SET_LAYOUTS]
+	          [SPUDGPU_MAX_DESCRIPTOR_BINDINGS_PER_SET];
+	D3D12_DESCRIPTOR_RANGE
+	sampler_ranges[SPUDGPU_MAX_DESCRIPTOR_SET_LAYOUTS]
+	              [SPUDGPU_MAX_DESCRIPTOR_BINDINGS_PER_SET];
+	uint32_t csv_counts[SPUDGPU_MAX_DESCRIPTOR_SET_LAYOUTS]     = {};
+	uint32_t sampler_counts[SPUDGPU_MAX_DESCRIPTOR_SET_LAYOUTS] = {};
 
 	for (uint32_t s = 0; s < set_count; ++s) {
 		auto *layout = (spudgpu_descriptor_set_layout_d3d12 *)set_layouts[s];
 		if (!layout)
 			continue;
-		uint32_t rc = 0;
 		for (uint32_t b = 0; b < layout->_desc.binding_count; ++b) {
 			const auto &bind = layout->_desc.bindings[b];
+			bool has_csv     = true;
+			bool has_sampler = false;
 			D3D12_DESCRIPTOR_RANGE_TYPE rt;
 			switch (bind.descriptor_type) {
 			case SPUDGPU_DESCRIPTOR_TYPE_UNIFORM_BUFFER:
@@ -128,44 +144,67 @@ static HRESULT spudgpu_d3d12_build_root_signature(
 				rt = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
 				break;
 			case SPUDGPU_DESCRIPTOR_TYPE_SAMPLED_IMAGE:
-			case SPUDGPU_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER:
 				rt = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
 				break;
+			case SPUDGPU_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER:
+				rt          = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+				has_sampler = true;
+				break;
 			case SPUDGPU_DESCRIPTOR_TYPE_SAMPLER:
-				// A sampler-only set (like this sample's sampler_layout)
-				// produces a single-range, sampler-only table here, which
-				// is valid. A layout that mixed SAMPLER with CBV/SRV/UAV
-				// bindings would need two root parameters (D3D12 tables
-				// can't span both the sampler heap and the CBV/SRV/UAV
-				// heap) -- not needed today, since no current layout mixes
-				// them, but worth knowing if one ever does.
-				rt = D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER;
+				rt          = D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER;
+				has_csv     = false;
+				has_sampler = true;
 				break;
 			default:
 				continue;
 			}
-			ranges[s][rc].RangeType          = rt;
-			ranges[s][rc].NumDescriptors     = bind.count ? bind.count : 1;
-			ranges[s][rc].BaseShaderRegister = bind.binding;
-			ranges[s][rc].RegisterSpace      = s;
-			ranges[s][rc].OffsetInDescriptorsFromTableStart =
-			    D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
-			++rc;
+
+			// Ranges are appended in binding order, the same order
+			// spudgpu_create_descriptor_set_layout lays out each heap's
+			// slots in, so OFFSET_APPEND lands on the same slots.
+			D3D12_DESCRIPTOR_RANGE range;
+			range.NumDescriptors                    = bind.count ? bind.count : 1;
+			range.BaseShaderRegister                = bind.binding;
+			range.RegisterSpace                     = s;
+			range.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+			if (has_csv) {
+				range.RangeType                = rt;
+				csv_ranges[s][csv_counts[s]++] = range;
+			}
+			if (has_sampler) {
+				range.RangeType                        = D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER;
+				sampler_ranges[s][sampler_counts[s]++] = range;
+			}
 		}
-		range_counts[s] = rc;
 	}
 
-	D3D12_ROOT_PARAMETER params[SPUDGPU_MAX_DESCRIPTOR_SET_LAYOUTS + 1];
+	// At most two tables per set, and the push constants.
+	D3D12_ROOT_PARAMETER params[2 * SPUDGPU_MAX_DESCRIPTOR_SET_LAYOUTS + 1];
 	uint32_t param_count = 0;
+	spudgpu_d3d12_root_layout root_layout;
+	for (uint32_t s = 0; s < SPUDGPU_MAX_DESCRIPTOR_SET_LAYOUTS; ++s) {
+		root_layout.cbv_srv_uav_param[s] = SPUDGPU_D3D12_NO_ROOT_PARAMETER;
+		root_layout.sampler_param[s]     = SPUDGPU_D3D12_NO_ROOT_PARAMETER;
+	}
+	root_layout.push_constant_param = SPUDGPU_D3D12_NO_ROOT_PARAMETER;
 
 	for (uint32_t s = 0; s < set_count; ++s) {
-		params[param_count].ParameterType =
-		    D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
-		params[param_count].DescriptorTable.NumDescriptorRanges =
-		    range_counts[s];
-		params[param_count].DescriptorTable.pDescriptorRanges = ranges[s];
-		params[param_count].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
-		++param_count;
+		if (csv_counts[s]) {
+			root_layout.cbv_srv_uav_param[s]                        = param_count;
+			params[param_count].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+			params[param_count].DescriptorTable.NumDescriptorRanges = csv_counts[s];
+			params[param_count].DescriptorTable.pDescriptorRanges   = csv_ranges[s];
+			params[param_count].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_ALL;
+			++param_count;
+		}
+		if (sampler_counts[s]) {
+			root_layout.sampler_param[s]                            = param_count;
+			params[param_count].ParameterType                       = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+			params[param_count].DescriptorTable.NumDescriptorRanges = sampler_counts[s];
+			params[param_count].DescriptorTable.pDescriptorRanges   = sampler_ranges[s];
+			params[param_count].ShaderVisibility                    = D3D12_SHADER_VISIBILITY_ALL;
+			++param_count;
+		}
 	}
 
 	uint32_t total_pc_words = 0;
@@ -176,6 +215,7 @@ static HRESULT spudgpu_d3d12_build_root_signature(
 	}
 
 	if (total_pc_words > 0) {
+		root_layout.push_constant_param = param_count;
 		params[param_count].ParameterType =
 		    D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
 		params[param_count].Constants.ShaderRegister = 0; // b0
@@ -224,9 +264,12 @@ static HRESULT spudgpu_d3d12_build_root_signature(
 		return hr;
 	}
 
-	return device->CreateRootSignature(
+	hr = device->CreateRootSignature(
 	    0, sig_blob->GetBufferPointer(), sig_blob->GetBufferSize(),
 	    IID_PPV_ARGS(out_sig));
+	if (SUCCEEDED(hr))
+		*out_layout = root_layout;
+	return hr;
 }
 
 // ---------------------------------------------------------------------------
@@ -575,7 +618,7 @@ SPUDRESULT spudgpu_create_shader_pipeline(
 	    pResult->_is_mesh_pipeline
 	        ? D3D12_ROOT_SIGNATURE_FLAG_NONE
 	        : D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT,
-	    &pResult->_d3d_root_signature);
+	    &pResult->_d3d_root_signature, &pResult->_root_layout);
 	if (FAILED(hr)) {
 		pResult->~spudgpu_shader_pipeline_d3d12();
 		free(pResult);
@@ -805,12 +848,11 @@ void spudgpu_cmd_push_constants(
     const void *data) {
 	if (!cmd || !pipeline || !data || !size)
 		return;
-	if (!pipeline->_desc.push_constant_range_count)
+	if (pipeline->_root_layout.push_constant_param == SPUDGPU_D3D12_NO_ROOT_PARAMETER)
 		return;
-	// Push constants are at root param index = descriptor_set_layout_count.
 	// [data] is the bytes to write, starting at its first byte; [offset] is
 	// only where in the block they go.
-	uint32_t rootIdx  = pipeline->_desc.descriptor_set_layout_count;
+	uint32_t rootIdx  = pipeline->_root_layout.push_constant_param;
 	uint32_t offset32 = offset / 4;
 	uint32_t count32  = (size + 3) / 4;
 	cmd->_d3d_cmd_list->SetGraphicsRoot32BitConstants(
@@ -825,12 +867,9 @@ void spudgpu_cmd_push_constants_compute(
     const void *data) {
 	if (!cmd || !pipeline || !data || !size)
 		return;
-	if (!pipeline->_desc.push_constant_range_count)
+	if (pipeline->_root_layout.push_constant_param == SPUDGPU_D3D12_NO_ROOT_PARAMETER)
 		return;
-	// The compute root signature is built by the same
-	// spudgpu_d3d12_build_root_signature as a graphics one, so the constants
-	// are at the same place: root param index = descriptor_set_layout_count.
-	uint32_t rootIdx  = pipeline->_desc.descriptor_set_layout_count;
+	uint32_t rootIdx  = pipeline->_root_layout.push_constant_param;
 	uint32_t offset32 = offset / 4;
 	uint32_t count32  = (size + 3) / 4;
 	cmd->_d3d_cmd_list->SetComputeRoot32BitConstants(
@@ -863,7 +902,8 @@ SPUDRESULT spudgpu_create_compute_pipeline(
 	    device->_d3d_device.Get(), desc->descriptor_set_layout_count,
 	    (void *const *)desc->descriptor_set_layouts,
 	    desc->push_constant_range_count, desc->push_constant_ranges,
-	    D3D12_ROOT_SIGNATURE_FLAG_NONE, &pResult->_d3d_root_signature);
+	    D3D12_ROOT_SIGNATURE_FLAG_NONE, &pResult->_d3d_root_signature,
+	    &pResult->_root_layout);
 	if (FAILED(hr)) {
 		pResult->~spudgpu_compute_pipeline_d3d12();
 		free(pResult);

@@ -408,6 +408,7 @@ void spudgpu_cmd_bind_descriptor_sets(
     uint32_t set_count) {
     if (!cmd || !pipeline || !sets || !set_count) return;
     if (set_count > SPUDGPU_MAX_DESCRIPTOR_SET_LAYOUTS) return;
+    if (first_set > SPUDGPU_MAX_DESCRIPTOR_SET_LAYOUTS - set_count) return;
 
     // The command list's internal VkCommandBuffer lives at the front of the struct,
     // matching the pattern used in spudgpuvulkanbuffer.c / the command list implementation.
@@ -441,6 +442,7 @@ void spudgpu_cmd_bind_descriptor_sets_compute(
     uint32_t set_count) {
     if (!cmd || !pipeline || !sets || !set_count) return;
     if (set_count > SPUDGPU_MAX_DESCRIPTOR_SET_LAYOUTS) return;
+    if (first_set > SPUDGPU_MAX_DESCRIPTOR_SET_LAYOUTS - set_count) return;
 
     VkDescriptorSet vk_sets[SPUDGPU_MAX_DESCRIPTOR_SET_LAYOUTS] = {0};
     for (uint32_t i = 0; i < set_count; i++) {

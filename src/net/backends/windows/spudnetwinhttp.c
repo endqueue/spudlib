@@ -77,8 +77,9 @@ static SPUDRESULT spudnet_win_result(DWORD error, SPUDRESULT otherwise) {
 	case ERROR_WINHTTP_NAME_NOT_RESOLVED:
 		return SPUDRESULT_SPUDNET_RESOLVE_FAILED;
 	case ERROR_WINHTTP_CANNOT_CONNECT:
-	case ERROR_WINHTTP_CONNECTION_ERROR:
 		return SPUDRESULT_SPUDNET_CONNECT_FAILED;
+	// ERROR_WINHTTP_CONNECTION_ERROR is a connection that was made and then
+	// broke, which is the calling part's catch-all, not a failure to connect.
 	case ERROR_WINHTTP_SECURE_FAILURE:
 	case ERROR_WINHTTP_CLIENT_AUTH_CERT_NEEDED:
 		return SPUDRESULT_SPUDNET_TLS_FAILED;
@@ -514,6 +515,10 @@ struct spudnet_win_http {
 	HANDLE step_event;
 	DWORD  step_error; // 0 for none
 	DWORD  step_bytes; // what a finished read delivered
+	// The request line and headers are out. WinHTTP may hold the send's
+	// completion back until the response arrives, so start waits for this
+	// instead and leaves the completion in flight.
+	HANDLE sent_event;
 	// The callback turned the server's certificate away and closed the
 	// request, and why.
 	bool          tls_refused;
@@ -557,6 +562,9 @@ static void CALLBACK spudnet_win_http_callback(
 		}
 		break;
 
+	case WINHTTP_CALLBACK_STATUS_REQUEST_SENT:
+		SetEvent(http->sent_event);
+		break;
 	case WINHTTP_CALLBACK_STATUS_SENDREQUEST_COMPLETE:
 	case WINHTTP_CALLBACK_STATUS_HEADERS_AVAILABLE:
 	case WINHTTP_CALLBACK_STATUS_WRITE_COMPLETE:
@@ -687,6 +695,27 @@ static SPUDRESULT spudnet_win_http_wait(struct spudnet_win_http *http, ULONGLONG
 	return spudnet_win_http_failed(http, http->step_error, otherwise);
 }
 
+/* Waits for WinHttpSendRequest to have put the request line and headers on
+ * the wire. Its completion is left in flight when it hasn't come yet, for
+ * the next call to wait on: WinHTTP may hold that back until the response
+ * arrives, and start must not wait for the response. */
+static SPUDRESULT spudnet_win_http_wait_sent(struct spudnet_win_http *http, ULONGLONG start, uint32_t timeout_ms) {
+	// Abort is listed first so it wins, and the completion before sent so a
+	// failure is reported here rather than by the next call.
+	HANDLE waits[3] = {http->abort_event, http->step_event, http->sent_event};
+	DWORD  waited   = WaitForMultipleObjects(3, waits, FALSE, spudnet_win_remaining(start, timeout_ms));
+	if (waited == WAIT_OBJECT_0)
+		return SPUDRESULT_SPUDNET_ABORTED;
+	if (waited == WAIT_OBJECT_0 + 2)
+		return SPUD_SUCCESS;
+	if (waited != WAIT_OBJECT_0 + 1)
+		return SPUDRESULT_SPUDNET_TIMED_OUT;
+	http->operation_pending = false;
+	if (http->step_error == ERROR_SUCCESS)
+		return SPUD_SUCCESS;
+	return spudnet_win_http_failed(http, http->step_error, SPUDRESULT_SPUDNET_HTTP_FAILED);
+}
+
 /* Status and headers of a request whose response has started arriving.
  * These are already in WinHTTP's hands, so nothing here waits. */
 static SPUDRESULT spudnet_win_read_headers(HINTERNET request, struct spudnet_http_head *head) {
@@ -749,10 +778,11 @@ SPUDRESULT spudnet_http_backend_create(struct spudnet_http_transfer_t *transfer)
 	http->abort_event  = CreateEventW(NULL, TRUE, FALSE, NULL);
 	http->closed_event = CreateEventW(NULL, TRUE, FALSE, NULL);
 	http->step_event   = CreateEventW(NULL, FALSE, FALSE, NULL);
+	http->sent_event   = CreateEventW(NULL, TRUE, FALSE, NULL);
 	http->write_buffer = (uint8_t *)malloc(SPUDNET_WIN_HTTP_BUFFER_SIZE + SPUDNET_WIN_HTTP_CHUNK_FRAME);
 	http->read_buffer  = (uint8_t *)malloc(SPUDNET_WIN_HTTP_BUFFER_SIZE);
 	transfer->backend  = http;
-	if (!http->abort_event || !http->closed_event || !http->step_event || !http->write_buffer || !http->read_buffer) {
+	if (!http->abort_event || !http->closed_event || !http->step_event || !http->sent_event || !http->write_buffer || !http->read_buffer) {
 		spudnet_http_backend_destroy(transfer);
 		return SPUDRESULT_OUT_OF_MEMORY;
 	}
@@ -779,6 +809,8 @@ void spudnet_http_backend_destroy(struct spudnet_http_transfer_t *transfer) {
 		CloseHandle(http->closed_event);
 	if (http->step_event)
 		CloseHandle(http->step_event);
+	if (http->sent_event)
+		CloseHandle(http->sent_event);
 	free(http->write_buffer);
 	free(http->read_buffer);
 	free(http);
@@ -898,7 +930,7 @@ SPUDRESULT spudnet_http_backend_start(
 		result                  = spudnet_win_http_failed(http, GetLastError(), SPUDRESULT_SPUDNET_HTTP_FAILED);
 		goto done;
 	}
-	result = spudnet_win_http_wait(http, start, desc->timeout_ms, SPUDRESULT_SPUDNET_HTTP_FAILED);
+	result = spudnet_win_http_wait_sent(http, start, desc->timeout_ms);
 
 done:
 	free(method);

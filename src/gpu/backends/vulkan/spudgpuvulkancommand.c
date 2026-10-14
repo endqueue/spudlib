@@ -530,6 +530,7 @@ void spudgpu_cmd_bind_bindless_resources(
     spudgpu_shader_pipeline pipeline,
     uint32_t set_index) {
     if (!cmd || !pipeline) return;
+    if (set_index >= SPUDGPU_MAX_DESCRIPTOR_SET_LAYOUTS) return;
     spudgpu_device_vulkan *device = &cmd->_allocator._device;
     if (!device->_bindless) return;
 
@@ -547,6 +548,7 @@ void spudgpu_cmd_bind_bindless_resources_compute(
     spudgpu_compute_pipeline pipeline,
     uint32_t set_index) {
     if (!cmd || !pipeline) return;
+    if (set_index >= SPUDGPU_MAX_DESCRIPTOR_SET_LAYOUTS) return;
     spudgpu_device_vulkan *device = &cmd->_allocator._device;
     if (!device->_bindless) return;
 

@@ -835,7 +835,60 @@ static spudnet_http_client plain_client(void) {
 	return client;
 }
 
-/* A number from the server's /stat, asked on a client of its own. */
+/* The number called `name` in a /stat response, or -1. */
+static long stat_value(const char *response, const char *name) {
+	char needle[64];
+	snprintf(needle, sizeof(needle), "%s=", name);
+	const char *found = strstr(response, needle);
+	return found ? atol(found + strlen(needle)) : -1;
+}
+
+#if SPUDNET_EXT_TCP
+/* A number from the server's /stat, asked over a TCP connection of its own
+ * and closed after, so that it is always one connection to the server. An
+ * HTTP client won't do: WinHTTP shares its connections between every
+ * session in the process, so a new client may ask on one already open. */
+static long server_stat(const char *name) {
+	spudnet_tcp_socket socket = NULL;
+	if (SPUDFAIL(spudnet_tcp_socket_create(g_instance, &socket)))
+		return -1;
+	spudnet_tcp_socket_connect_desc connect_desc;
+	memset(&connect_desc, 0, sizeof(connect_desc));
+	connect_desc.address    = "127.0.0.1";
+	connect_desc.port       = (uint16_t)g_server.http_port;
+	connect_desc.timeout_ms = PATIENCE_MS;
+	long value              = -1;
+	if (!SPUDFAIL(spudnet_tcp_socket_connect(socket, &connect_desc))) {
+		const char request[] = "GET /stat HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n";
+		size_t     sent      = 0;
+		bool       ok        = true;
+		while (ok && sent < sizeof(request) - 1) {
+			uint64_t count = 0;
+			ok             = !SPUDFAIL(spudnet_tcp_socket_send(socket, request + sent, sizeof(request) - 1 - sent, PATIENCE_MS, &count));
+			sent += (size_t)count;
+		}
+		// The server closes the connection after the response.
+		char   response[4096];
+		size_t size = 0;
+		while (ok && size < sizeof(response) - 1) {
+			uint64_t count = 0;
+			ok             = !SPUDFAIL(spudnet_tcp_socket_recv(socket, response + size, sizeof(response) - 1 - size, PATIENCE_MS, &count));
+			if (count == 0)
+				break;
+			size += (size_t)count;
+		}
+		response[size]   = '\0';
+		const char *body = ok ? strstr(response, "\r\n\r\n") : NULL;
+		if (body)
+			value = stat_value(body, name);
+	}
+	spudnet_tcp_socket_destroy(socket);
+	return value;
+}
+#else
+/* A number from the server's /stat, asked on a client of its own. With no
+ * TCP to ask over, a stack that shares connections between clients makes
+ * this one no more than a connection of its own. */
 static long server_stat(const char *name) {
 	spudnet_http_client client = plain_client();
 	struct exchange     stat;
@@ -843,17 +896,13 @@ static long server_stat(const char *name) {
 	stat.method = "GET";
 	stat.path   = "/stat";
 	long value  = -1;
-	if (!SPUDFAIL(exchange_run(client, &stat)) && stat.response) {
-		char needle[64];
-		snprintf(needle, sizeof(needle), "%s=", name);
-		const char *found = strstr((const char *)stat.response, needle);
-		if (found)
-			value = atol(found + strlen(needle));
-	}
+	if (!SPUDFAIL(exchange_run(client, &stat)) && stat.response)
+		value = stat_value((const char *)stat.response, name);
 	exchange_free(&stat);
 	spudnet_http_client_destroy(client);
 	return value;
 }
+#endif
 
 struct abort_transfer_later {
 	uint32_t              delay_ms;
@@ -1243,6 +1292,28 @@ static void test_http(void) {
 		}
 	}
 	exchange_free(&x);
+
+	// The same with Expect: 100-continue, the caller asking to hear a
+	// refusal before the body goes.
+	{
+		const spudnet_header expect_continue = {"Expect", "100-continue"};
+		memset(&x, 0, sizeof(x));
+		x.method          = "POST";
+		x.path            = "/early";
+		x.headers         = &expect_continue;
+		x.header_count    = 1;
+		x.body            = SPUDNET_HTTP_BODY_SIZED;
+		x.body_data       = upload;
+		x.body_size       = upload_size;
+		SPUDRESULT result = exchange_run(client, &x);
+		if (!SPUDFAIL(result))
+			note("the same with Expect: 100-continue: this stack reaches its response (status %u)", x.status);
+		else {
+			note("the same with Expect: 100-continue: this stack fails in %s with %s", x.failed_in, spudresult_str(result));
+			note_error("early answer, Expect: 100-continue", &x.error);
+		}
+		exchange_free(&x);
+	}
 	free(upload);
 
 	// A download bigger than anyone would want in memory, read slowly: is
@@ -1295,8 +1366,8 @@ static void test_http(void) {
 		spudnet_http_transfer_create(client, &transfer);
 		spudnet_http_transfer_start(transfer, &desc);
 		spudnet_http_transfer_receive_response(transfer, PATIENCE_MS);
-		uint8_t small[1024];
-		spudnet_http_transfer_recv(transfer, small, sizeof(small), PATIENCE_MS, &received);
+		uint8_t partial[1024];
+		spudnet_http_transfer_recv(transfer, partial, sizeof(partial), PATIENCE_MS, &received);
 		uint64_t before = now_ms();
 		spudnet_http_transfer_destroy(transfer);
 		check(now_ms() - before < 2000, "destroying a transfer 1 KiB into a 256 MiB response returns promptly (%llu ms)", (unsigned long long)(now_ms() - before));
@@ -1667,18 +1738,18 @@ static void test_websocket(void) {
 	// A message taken in pieces through a small buffer.
 	expect(spudnet_websocket_send(socket, SPUDNET_WEBSOCKET_MESSAGE_TEXT, "send:100000", 11, PATIENCE_MS), SPUD_SUCCESS, "ask the server for a 100000-byte message");
 	{
-		uint8_t    small[1000];
+		uint8_t    piece[1000];
 		size_t     total  = 0;
 		int        pieces = 0;
 		bool       intact = true;
 		SPUDRESULT result = SPUD_SUCCESS;
 		complete          = false;
 		while (!complete) {
-			result = spudnet_websocket_recv(socket, small, sizeof(small), PATIENCE_MS, &received, &type, &complete);
+			result = spudnet_websocket_recv(socket, piece, sizeof(piece), PATIENCE_MS, &received, &type, &complete);
 			if (SPUDFAIL(result))
 				break;
 			for (uint64_t i = 0; i < received; ++i)
-				intact = intact && small[i] == pattern_at(total + i);
+				intact = intact && piece[i] == pattern_at(total + i);
 			total += (size_t)received;
 			pieces++;
 		}

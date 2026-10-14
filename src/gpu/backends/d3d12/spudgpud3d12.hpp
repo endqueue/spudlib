@@ -354,6 +354,24 @@ typedef struct spudgpu_image_view_t {
 	D3D12_UNORDERED_ACCESS_VIEW_DESC _d3d_uav;
 } spudgpu_image_view_d3d12;
 
+// A root parameter index that no table or constant block was given.
+#define SPUDGPU_D3D12_NO_ROOT_PARAMETER UINT32_MAX
+
+// Where spudgpu_d3d12_build_root_signature (spudgpud3d12shader.cpp) put each
+// descriptor set's tables and the push constants among a root signature's
+// parameters. A D3D12 descriptor table reads from one heap, so a set with
+// both CBV/SRV/UAV and sampler descriptors takes two tables, one per heap;
+// a set's index is therefore not its root parameter index, and every call
+// that sets a root parameter looks it up here.
+typedef struct spudgpu_d3d12_root_layout {
+	// Indexed by set number; SPUDGPU_D3D12_NO_ROOT_PARAMETER where the set
+	// has no descriptor of that heap.
+	uint32_t cbv_srv_uav_param[SPUDGPU_MAX_DESCRIPTOR_SET_LAYOUTS];
+	uint32_t sampler_param[SPUDGPU_MAX_DESCRIPTOR_SET_LAYOUTS];
+	// SPUDGPU_D3D12_NO_ROOT_PARAMETER with no push constant range.
+	uint32_t push_constant_param;
+} spudgpu_d3d12_root_layout;
+
 typedef struct spudgpu_shader_module_t {
 #if _DEBUG
 	const char *_debug_name;
@@ -371,6 +389,7 @@ typedef struct spudgpu_shader_pipeline_t {
 	spudgpu_shader_pipeline_desc _desc;
 	Microsoft::WRL::ComPtr<ID3D12PipelineState> _d3d_pipeline_state;
 	Microsoft::WRL::ComPtr<ID3D12RootSignature> _d3d_root_signature;
+	spudgpu_d3d12_root_layout _root_layout;
 	D3D_PRIMITIVE_TOPOLOGY _d3d_primitive_topology;
 	// True when built from desc->mesh_module (SPUDGPU_EXT_MESH_SHADING) via
 	// the D3D12_PIPELINE_STATE_STREAM_DESC path instead of the classic
@@ -388,6 +407,7 @@ typedef struct spudgpu_compute_pipeline_t {
 	spudgpu_compute_pipeline_desc _desc;
 	Microsoft::WRL::ComPtr<ID3D12PipelineState> _d3d_pipeline_state;
 	Microsoft::WRL::ComPtr<ID3D12RootSignature> _d3d_root_signature;
+	spudgpu_d3d12_root_layout _root_layout;
 } spudgpu_compute_pipeline_d3d12;
 
 typedef struct spudgpu_fence_t {

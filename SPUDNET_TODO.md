@@ -14,9 +14,9 @@ the backends were then rewritten to match it in one pass. `spudnet.h` and the
 sources agree again as far as reading them can tell: every function the header
 declares has one definition per platform, and none of the names it dropped is
 left in the sources. It was then compiled on macOS and run there for the first time (see "State of
-the code" and "First run on macOS"). Linux was built and run for the first
-time on 2026-10-14 (see "State of the code"). The Windows backends have never
-been built with their own toolchain, and have never run.
+the code" and "First run on macOS"). Linux and Windows were each built and
+run for the first time on 2026-10-14 (see "State of the code" and "First run
+on Windows").
 
 Below is what is still wrong with it or missing from it, as of that review.
 
@@ -29,8 +29,8 @@ was changed first and the backends and `tests/spudnet_test.c` brought to it the
 same day. **macOS: built with the `macos-metal` preset with no errors or
 warnings, and `tests/spudnet_test` passes all 261 of its checks, three runs in a
 row** (238 before; the new ones are the "instance" part and the wait set's
-wake). Linux: built and passing on 2026-10-14 (see "State of the code").
-Windows has not been compiled with MSVC.
+wake). Linux and Windows: built and passing on 2026-10-14 (see "State of the
+code").
 
 Why: a library above SpudNet (ApSync) could not make a once-per-process call
 that has to come before the process's other threads, so the rule travelled up
@@ -81,9 +81,11 @@ To confirm on a machine:
 
 - macOS is done (above). What that run doesn't reach is the same as before:
   everything in it is on the loopback interface.
-- **Windows:** that `WSACleanup` from an instance being destroyed leaves another
-  instance's sockets working (Winsock's count is documented; not tried), and
-  what a lookup in `GetAddrInfoExW` does when its instance's cleanup was the
+- **Windows:** the "instance" part passes (a second instance, one made on
+  another thread, a resolver run after its instance was destroyed). Still not
+  tried: that `WSACleanup` from an instance being destroyed leaves another
+  instance's sockets working (Winsock's count is documented), and what a
+  lookup in `GetAddrInfoExW` does when its instance's cleanup was the
   second-to-last.
 - **Linux:** that the libcurl in use counts its global init as its documentation
   says, which several instances rely on; and which distributions the 7.84 floor
@@ -93,8 +95,8 @@ To confirm on a machine:
 
 - **macOS has run.** `tests/spudnet_test` passes all 238 of its checks against
   a local server (2026-10-08, three runs in a row); see "First run on macOS"
-  for what that covers and what it found. Linux has run too (below); Windows
-  has not.
+  for what that covers and what it found. Linux and Windows have run too
+  (below).
 - **Apple** (NSURLSession + BSD sockets): everything compiles with the
   `macos-metal` preset as of 2026-10-08, with no errors and no warnings, also
   under `-Wall -Wextra -Wconversion`. The first build of the rewritten backends
@@ -117,25 +119,23 @@ To confirm on a machine:
   problem in `spudnet.h` on `follow_redirects`, and a note in the test on
   Linux. The other two failures followed from the first: the echoed bad text
   left every later read one message behind.
-- **Windows** (WinHTTP + Winsock2): never built with MSVC, and never run. On
-  2026-10-08 it was cross-compiled on the Mac with mingw-w64 (GCC 16, its own
-  Windows headers): the two Windows backends and the shared files compile with
-  no errors or warnings, also under `-Wall -Wextra -Wconversion`, and link
-  against `shlwapi ws2_32 winhttp crypt32` - the libraries `CMakeLists.txt`
-  names - with no undefined symbol. So every Windows function the code calls
-  exists and is called with types mingw accepts. What that leaves: mingw's
-  headers are a reimplementation of Microsoft's and can differ, MSVC is a
-  different compiler with its own complaints, and nothing has run. One
-  difference already met: mingw's `ws2tcpip.h` lacks `GetAddrInfoExCancel` and
-  `GetAddrInfoExOverlappedResult`, so `spudnetwindows.c` declares them for that
-  toolchain alone. The WinHTTP file and the Winsock event handling are still
-  the least certain to *work* there; across all three, NSURLSession's streaming
-  transfer is.
+- **Windows has run.** Built with MSVC under the `windows-d3d12` preset on
+  Windows 11 on 2026-10-14, and `tests/spudnet_test` passes all 261 of its
+  checks, three runs in a row (`tests/run_spudnet_test.sh
+  build-windows-d3d12/Debug/spudnet_test.exe`, from Git Bash). The backends
+  compiled as written; only the test needed a change to build, a variable
+  named `small`, which the Windows headers define as `char`. The first run
+  failed six; see "First run on Windows" for both causes and what the run
+  settled. (Before that, on 2026-10-08, the backends had been cross-compiled
+  on the Mac with mingw-w64, whose `ws2tcpip.h` lacks `GetAddrInfoExCancel`
+  and `GetAddrInfoExOverlappedResult`; `spudnetwindows.c` still declares them
+  for that toolchain alone.)
 - **One test program, not in ctest:** `tests/spudnet_test.c` with its server,
   `tests/spudnet_test_server.py` (Python 3 standard library and the `openssl`
   command), started and stopped by `tests/run_spudnet_test.sh
-  <path to spudnet_test> [part]`. The C side has a thread and clock shim for
-  Windows but has only been built on macOS, and the runner is a shell script.
+  <path to spudnet_test> [part]`. The C side builds on all three. The runner
+  is a shell script, which on Windows runs from Git Bash with a Windows
+  Python 3 and Git's own `openssl`.
 - **Only caller:** ApricotFields' ApSync (TCP, the resolver and the wait set),
   rewritten on 2026-10-08 as a session, channel and snapshot layer that no
   longer touches Aprend. It is back in ApricotFields' build and has not been
@@ -209,7 +209,8 @@ list their assumptions as open; for Apple, this is what the run settles.
   `Accept-Language` (the user's language), `Connection: keep-alive`,
   `Accept-Encoding: gzip, deflate`, and a `User-Agent` naming the program,
   CFNetwork and the Darwin version. This is the first row of the table the
-  header should have; Windows and Linux are still to be looked at.
+  header should have; Windows' row is under "First run on Windows", and
+  Linux is still to be looked at.
 - **A POST with `SPUDNET_HTTP_BODY_NONE`** gets a `Content-Length` added by the
   stack. A GET with none does not.
 - **A connect failure** is reported from `spudnet_http_transfer_receive_response`,
@@ -256,7 +257,7 @@ no router, DNS server, firewall or proxy in the way. What that leaves untried:
   one (Supabase, which this was built to reach) may use HTTP/2, pings,
   compression and redirects that it doesn't.
 - **Load.** Many peers in a wait set, many transfers, long-lived connections.
-- **Windows**, entirely; Linux beyond the local test server.
+- **Windows and Linux beyond the local test server**, the same list again.
 
 How each could be covered:
 
@@ -270,6 +271,89 @@ How each could be covered:
 - **The real target:** the same calls against the Supabase project.
 - **By hand, once a host app exists to try them in:** a proxy that wants a
   login, the network changing, sleep.
+
+## First run on Windows (2026-10-14)
+
+The same test, on Windows 11 against WinHTTP and Winsock2, built with MSVC.
+All 261 checks pass, three runs in a row. Like the macOS run, every byte went
+over loopback, so "Not covered by the run" above holds for Windows too.
+
+### Found and fixed by the run
+
+- **WinHTTP holds back `SENDREQUEST_COMPLETE` until the response arrives**
+  for a request with no body: `REQUEST_SENT` came at once and the completion
+  only when the server answered, 1.5 s later against `/slow`. `_start` waited
+  for the completion, so it waited for the response, and
+  `receive_response`'s time limit and abort never got the chance to act
+  (five failures). `_start` now waits for `REQUEST_SENT` (`sent_event`,
+  `spudnet_win_http_wait_sent`) and leaves the completion in flight, which
+  the "whatever is in flight comes first" wait in `_send` and
+  `_receive_response` already picks up. A failure that comes before the
+  request is sent (a refused connection, a refused certificate) still comes
+  from `_start`.
+- **WinHTTP shares connections between every session in the process.** A
+  new `spudnet_http_client` is a new `WinHttpOpen` session, yet across the
+  whole run the server saw one HTTP connection. The test's `server_stat`
+  asked through a client of its own and so never counted as a connection.
+  It now asks over a TCP socket with `Connection: close` (an HTTP client
+  where `SPUDNET_EXT_TCP` is 0). This doesn't break one transfer at a time
+  per client, but on Windows a new client is not a new connection, and the
+  header doesn't say that it is.
+
+### Confirmed on Windows
+
+- **The streaming transfer's WinHTTP assumptions**, as far as 3 MiB goes: a
+  sized body announced by `Content-Length` alone with
+  `WINHTTP_IGNORE_REQUEST_TOTAL_LENGTH`, and an unsized one as
+  `Transfer-Encoding: chunked` with framing written by hand, both echoed
+  back intact. Nothing above 4 GB was sent. Three transfers read to their
+  ends made no new connection.
+- **WinHTTP is held back by a caller that isn't receiving:** with 1 MiB of a
+  256 MiB download taken and the caller idle for two seconds, the server had
+  been able to send 1.4 MiB. The rest then arrived intact.
+- **`Accept-Encoding: identity`** reaches the server as the only
+  `Accept-Encoding` with `WINHTTP_OPTION_DECOMPRESSION` off; left alone,
+  WinHTTP sends `gzip, deflate` and decodes.
+- **TLS desc:** every trust mode, the host-name switch and pins behave as the
+  header says, for HTTP and `wss`, with roots and pins checked in the
+  `SENDING_REQUEST` callback. Whether a refused request stayed off the wire
+  was not checked.
+- **Explicit proxy:** a plain request through it, and an `https` one tunnelled
+  through it with a pin that still held against the server beyond.
+- **Time limits, aborts, `SPUDNET_NO_WAIT`, the wait set** (`WSAPoll` over
+  sockets tied to events by `WSAEventSelect`, the UDP wake socket, and
+  `spudnet_wait_set_wake`) and **the resolver's lifetime rule** all behave as
+  on macOS. Whether the wake socket raises a firewall prompt was not seen.
+- **WebSocket:** echo, a message through a small buffer, close from either
+  side, close codes, redirects stopped (the 302 reaches `out_http_status`)
+  and followed, a message over its limit, `wss` with a custom root.
+
+### What the stack does that the header leaves open (WinHTTP)
+
+- **Request headers it adds** to a plain GET: `Host`,
+  `Connection: Keep-Alive`, and `Accept-Encoding: gzip, deflate` when
+  decoding is on. No `User-Agent` (the session is opened with none), no
+  `Accept`.
+- **A POST with `SPUDNET_HTTP_BODY_NONE`** gets a `Content-Length` added by the
+  stack. A GET with none does not. The same as NSURLSession.
+- **A connect failure** is reported from `_start` (12029,
+  `ERROR_WINHTTP_CANNOT_CONNECT`), where NSURLSession reports it from
+  `_receive_response`. The header allows either.
+- **A server that answers before the body is all sent:** `_send` fails with
+  12030 (`ERROR_WINHTTP_CONNECTION_ERROR`) and the response is lost, as
+  expected under "Streaming HTTP transfer", where there is also why it can't
+  be got back. It first came back as
+  `SPUDRESULT_SPUDNET_CONNECT_FAILED`, the wrong word for a connection that
+  was made. Fixed the same day: the header now says a connection that breaks
+  after it was made is the part's catch-all, and 12030 there is
+  `SPUDRESULT_SPUDNET_SEND_FAILED`. NSURLSession's
+  `NSURLErrorNetworkConnectionLost` had the same mistake and was moved to the
+  catch-all with it (not built since); libcurl already did this.
+- **Codes seen:** 10048 for an address in use, 10061 for a refused TCP
+  connect, 11001 for a name that doesn't exist, 12175
+  (`ERROR_WINHTTP_SECURE_FAILURE`) for an untrusted certificate and for a
+  host-name mismatch alike, and nothing at all for an oversize WebSocket
+  message (`SPUDRESULT_SPUDNET_WS_MESSAGE_TOO_BIG` with no detail).
 
 ## Backends rewritten to the header (2026-10-08): written, nothing confirmed
 
@@ -298,15 +382,17 @@ was done and what it leans on that only a build and a real server can settle.
   and each waited for through the status callback. Request body is copied into
   the transfer's own buffer before it is written, so a `_send` returns as soon
   as WinHTTP has the bytes and a failure to deliver them is the next call's to
-  report. Assumed, not confirmed:
-  - that a sized body can be announced by a `Content-Length` header alone,
-    with `WinHttpSendRequest`'s own length left at 0
-    (`WINHTTP_IGNORE_REQUEST_TOTAL_LENGTH`), for every size and not only above
-    4 GB - this is what removes the 4 GB limit;
-  - that an unsized body works as a `Transfer-Encoding: chunked` header plus
-    chunk framing written by hand, which is what the backend does;
-  - that closing a request handle after its response was read to the end
-    leaves the connection in the session's pool.
+  report. `_start` waits for `REQUEST_SENT`, not the send's completion (see
+  "First run on Windows"). Confirmed on Windows up to 3 MiB:
+  - a sized body announced by a `Content-Length` header alone, with
+    `WinHttpSendRequest`'s own length left at 0
+    (`WINHTTP_IGNORE_REQUEST_TOTAL_LENGTH`) - still not tried above 4 GB,
+    which is what this is for;
+  - an unsized body as a `Transfer-Encoding: chunked` header plus chunk
+    framing written by hand;
+  - a request handle closed after its response was read to the end leaving
+    its connection for the next transfer (the pool is the process's, not the
+    session's).
 - **libcurl.** One easy handle per transfer on the client's multi handle. The
   read and write callbacks pause (`CURL_READFUNC_PAUSE`, `CURL_WRITEFUNC_PAUSE`)
   whenever the caller isn't in `_send` / `_recv`, and each call unpauses and
@@ -337,7 +423,30 @@ was done and what it leans on that only a build and a real server can settle.
 - **A server that answers before the body is all sent** (a refusal, usually).
   libcurl and NSURLSession let the remaining `_send` calls through as if sent,
   so the caller reaches the response. WinHTTP reports whatever its write then
-  fails with, and the response is lost. Not the same, and not in the header.
+  fails with, and the response is lost: on Windows 11 that is 12030,
+  `SPUDRESULT_SPUDNET_SEND_FAILED`. Not the same. Since 2026-10-14 the
+  header states it as a rule on `spudnet_http_transfer_send`: such an answer
+  may be lost, and a caller that needs to hear a refusal asks the server
+  first, in a request of its own. (Before that, the HTTP group's known
+  problems described each stack's behaviour.) Tried on 2026-10-14 and taken out again: after the failed write, calling
+  `WinHttpReceiveResponse` anyway is accepted, then fails with the same
+  12030, so WinHTTP gives no way to the answer once a write has broken the
+  connection. Likely why: the server closes with body bytes unread, which
+  resets the connection, and a reset on Windows drops what the client hadn't
+  read yet, the answer with it. libcurl only has the answer because it reads
+  the socket while it uploads; WinHTTP reads nothing until the body is
+  finished.
+  `Expect: 100-continue` was tried next, the same day. The test sends it in
+  a second early-answer case, and the test server refuses in place of the
+  100 there, as a real server does. WinHTTP passes the header on but doesn't
+  wait for the 100: the body goes straight out and fails the same way. Having
+  the backend call `WinHttpReceiveResponse` before the first write does get
+  the refusal (the 413 at once), but against a server that answers
+  `100 Continue` it takes in the 100 (an `INTERMEDIATE_RESPONSE` callback)
+  and goes on waiting for a final status the server won't send until it has
+  the body: deadlock. WinHTTP allows one operation in flight per request, so
+  the body can't be written under that wait. Neither way works, and all of it
+  was taken out again, leaving the header's rule above.
 - **One transfer at a time per client** is enforced on libcurl (the multi
   handle is driven by one) and NSURLSession (one delegate, one state); a
   second `_start` returns `SPUDRESULT_SPUDNET_INVALID_HTTP_TRANSFER`. WinHTTP
@@ -415,8 +524,8 @@ every backend. Not compiled, not run.
   check in the front end (`spudnethttp.c`), and in each backend's
   `spudnet_http_backend_start` libcurl leaving `CURLOPT_ACCEPT_ENCODING` unset
   and WinHTTP leaving `WINHTTP_OPTION_DECOMPRESSION` off.
-- **WinHTTP:** assumed that with the option off it adds no `Accept-Encoding` of
-  its own and sends the caller's.
+- **WinHTTP:** with the option off it adds no `Accept-Encoding` of its own and
+  sends the caller's (confirmed on Windows, 2026-10-14).
 - **NSURLSession:** assumed that it sends a caller's `Accept-Encoding` in place
   of its own. If it turns out to add or override, `identity` can't be
   guaranteed there and the header's claim has to be narrowed.
@@ -432,8 +541,10 @@ backend leans on that still needs a real server to confirm:
 
 - **WinHTTP** has no "trust these roots" option, so roots and pins are checked in
   the `SENDING_REQUEST` status callback and a refusal closes the request handle
-  from inside it. Assumed: that closing there keeps the request off the wire,
-  that `WINHTTP_OPTION_SERVER_CERT_CONTEXT` is readable at that point and fails
+  from inside it. The test's TLS part passes on Windows with this, so the
+  certificate is readable there and a refusal ends the request. Still
+  assumed: that closing there keeps the request off the wire,
+  that `WINHTTP_OPTION_SERVER_CERT_CONTEXT` fails
   with `ERROR_WINHTTP_INCORRECT_HANDLE_STATE` on a plain-http hop, and that the
   callback is never waited on by the `WinHttpSendRequest` that holds the
   WebSocket's lock.
@@ -522,9 +633,10 @@ compiled, not run.
   the members. Fine for hundreds; a set of thousands wants the real thing behind
   the same header.
 - **The Windows wake socket** is a UDP socket on 127.0.0.1 sending to itself,
-  because `WSAPoll` can't wait on an event or a pipe. Assumed: that it raises no
-  firewall prompt, and that `WSAPoll` reports on a socket that is also tied to an
-  event by `WSAEventSelect` (every TCP socket here is).
+  because `WSAPoll` can't wait on an event or a pipe. `WSAPoll` does report on
+  a socket that is also tied to an event by `WSAEventSelect` (every TCP socket
+  here is): the wait set part passes on Windows. Still assumed: that the wake
+  socket raises no firewall prompt.
 - **NSURLSession and WinHTTP WebSockets** have no socket to poll. Adding one
   starts a receive in the background and the stack's callback wakes the set.
   That relies on the callback and `spudnet_websocket_wait_detach` taking the same
@@ -543,7 +655,7 @@ compiled, not run.
   it is in `tests/spudnet_test.c` ("Wait set"), and passes on macOS: a wake made
   beforehand ends the next wait, one from another thread ends a wait with no
   limit, and the set waits again afterwards. Windows' half (the `woken` flag
-  beside `WSAPoll`) has not been compiled.
+  beside `WSAPoll`) passes it too (2026-10-14).
 - **An object destroyed while still in a set** is the caller's mistake and isn't
   caught; the set would poll a closed descriptor or ask a freed WebSocket.
 - **HTTP isn't in it.** An HTTP transfer now has a `_recv` that could be waited
@@ -647,14 +759,10 @@ SpudLib's rule is that it never decides on the caller's behalf. These do:
 
 ## Order to do it in
 
-0. Compiled on macOS, and cross-compiled for Windows with mingw-w64 (done
-   2026-10-08); Linux built for real (2026-10-14). Still to compile:
-   Windows with MSVC.
-1. The test program on macOS (done 2026-10-08; see "First run on macOS"). Next
-   for it: run it on Windows, where every assumption listed for WinHTTP is
-   still open. Linux passes (2026-10-14). On Windows it needs a way to start the
-   server other than the shell script.
-   Then off the loopback interface, which is all the macOS run touched: an
+0. Compiled on macOS (2026-10-08), Linux and Windows with MSVC (2026-10-14).
+1. The test program passes on macOS (2026-10-08; see "First run on macOS"),
+   Linux and Windows (2026-10-14; see "First run on Windows").
+   Next: off the loopback interface, which is all any run touched: an
    opt-in test against a public HTTPS and `wss://` server, and one against a
    host that never answers. See "Not covered by the run".
 2. Print each object's `_get_error` from that test program wherever a call
@@ -662,4 +770,4 @@ SpudLib's rule is that it never decides on the caller's behalf. These do:
    assumed `EMSGSIZE` for an oversize WebSocket message on Apple among them.
 3. Run the TLS desc against a server with a private root, one with a
    self-signed certificate, and one whose pin doesn't match, on each platform.
-4. Compile and run on Windows and Linux.
+4. ~~Compile and run on Windows and Linux.~~ Done 2026-10-14.

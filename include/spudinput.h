@@ -1,9 +1,9 @@
 /**
  * @file spudinput.h
  * @brief SpudInput: input devices read directly, with no window. Gamepads
- * only so far. Known problems: the GameController (Apple) and evdev (Linux)
- * backends are written, and neither has run with a gamepad being pressed;
- * GameInput and XInput are not written.
+ * only so far. Known problems: the GameController (Apple), evdev (Linux)
+ * and GameInput (Windows) backends are written, and none has run with a
+ * gamepad being pressed; XInput is not written.
  *
  * The overview is under @ref spudinput "SpudInput". Its result codes are
  * `SPUDRESULT_SPUDINPUT_*`, in spudcore.h.
@@ -25,7 +25,8 @@ extern "C" {
  * @brief Input devices the platform lets a process read directly, with no
  * window (GameController / GameInput / XInput / evdev): which are
  * connected, what each is, and what state each is in. Gamepads only so far.
- * Known problems: only the GameController and evdev backends are written.
+ * Known problems: only the GameController, evdev and GameInput backends
+ * are written.
  * No part of GameController that needs a gamepad has been run; on it, a
  * finger resting exactly on the middle of a touch surface is not seen, a
  * motion sample's time is when it reached the process and not when it was
@@ -37,7 +38,9 @@ extern "C" {
  * since sysfs LEDs are root's to write unless the system says otherwise;
  * and its face buttons are where the kernel driver says they are, which for
  * xpad (Xbox) puts the left face button at SPUDINPUT_GAMEPAD_BUTTON_NORTH
- * and the top one at WEST.
+ * and the top one at WEST. GameInput has found an Xbox gamepad and read
+ * its properties and its state at rest; it gives no motion sensors, touch
+ * surfaces, lights or labels, and no name for that gamepad.
  *
  * A translation of the platform's device API, nothing more.
  *
@@ -94,8 +97,8 @@ extern "C" {
  * @defgroup spudinput_config Compile-time configuration
  * @ingroup spudinput
  * @brief Macros that say which native input APIs are built in. Known
- * problem: only SPUDINPUT_COMPILE_GAMECONTROLLER and SPUDINPUT_COMPILE_EVDEV
- * are ever 1; the other backends are not written. With none, no SPUDINPUT_NATIVE_API is accepted
+ * problem: SPUDINPUT_COMPILE_XINPUT is never 1; its backend is not
+ * written. With none, no SPUDINPUT_NATIVE_API is accepted
  * and no instance can be made.
  *
  * spudlib's CMake defines a `SPUDINPUT_COMPILE_*` for each native input API
@@ -426,7 +429,7 @@ typedef struct SPUDINPUT_GAMEPAD_TOUCH_SURFACE {
 typedef struct SPUDINPUT_GAMEPAD_PROPERTIES {
 	/** The platform's name for the device, UTF-8, null-terminated, cut
 	 * short at a whole character if it is longer than fits. Empty where
-	 * the platform has none (XInput). */
+	 * the platform has none (XInput, and GameInput for some devices). */
 	char name[SPUDINPUT_GAMEPAD_NAME_SIZE];
 	/** The device's USB or Bluetooth vendor number; 0 where the platform
 	 * doesn't say (XInput, GameController). */

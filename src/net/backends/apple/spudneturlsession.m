@@ -114,9 +114,10 @@ static SPUDRESULT spudnet_apple_result(NSError *error, SPUDRESULT otherwise) {
 	case NSURLErrorDNSLookupFailed:
 		return SPUDRESULT_SPUDNET_RESOLVE_FAILED;
 	case NSURLErrorCannotConnectToHost:
-	case NSURLErrorNetworkConnectionLost:
 	case NSURLErrorNotConnectedToInternet:
 		return SPUDRESULT_SPUDNET_CONNECT_FAILED;
+	// NSURLErrorNetworkConnectionLost is a connection that was made and then
+	// broke, which is the calling part's catch-all, not a failure to connect.
 	case NSURLErrorSecureConnectionFailed:
 	case NSURLErrorServerCertificateHasBadDate:
 	case NSURLErrorServerCertificateUntrusted:
