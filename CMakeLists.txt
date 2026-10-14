@@ -110,11 +110,17 @@ if(NOT TARGET spudlib)
         if(CMAKE_SYSTEM_NAME STREQUAL "Darwin" OR CMAKE_SYSTEM_NAME STREQUAL "iOS")
             set(SPUDINPUT_APIS GAMECONTROLLER)
         endif()
+    elseif(UNIX)
+        # The kernel's event devices, read with nothing but its own headers.
+        set(SPUDINPUT_APIS EVDEV)
     endif()
     message(STATUS "SpudInput: native APIs: ${SPUDINPUT_APIS}")
     if("GAMECONTROLLER" IN_LIST SPUDINPUT_APIS)
         # Objective-C; OBJC is already enabled for Apple above.
         list(APPEND SPUDLIB_SOURCES src/input/backends/apple/spudinputgamecontroller.m)
+    endif()
+    if("EVDEV" IN_LIST SPUDINPUT_APIS)
+        list(APPEND SPUDLIB_SOURCES src/input/backends/linux/spudinputevdev.c)
     endif()
 
     # SpudAudio: the target platform and the native audio APIs built for it,

@@ -40,7 +40,7 @@ codes) rather than inventing its own error convention.
 | SpudMemory | `spudmemory.h` | `smem_` | Windows, Linux |
 | SpudNet | `spudnet.h` | `spudnet_` | TCP sockets: Winsock2, BSD sockets (Linux + Apple, one file). HTTP + WebSocket: WinHTTP, libcurl, NSURLSession |
 | SpudAudio | `spudaudio.h` | `spudaudio_` / `SPUDRESULT_SAUD_*` | WASAPI (Windows), ALSA (Linux), CoreAudio (macOS); an argument-checking stub where no API is compiled in (iOS, watchOS) |
-| SpudInput | `spudinput.h` | `spudinput_` / `SPUDRESULT_SPUDINPUT_*` | GameController (macOS, iOS, iPadOS). Not written: GameInput and XInput (Windows), evdev (Linux); with no API built in, no instance can be made |
+| SpudInput | `spudinput.h` | `spudinput_` / `SPUDRESULT_SPUDINPUT_*` | GameController (macOS, iOS, iPadOS), evdev (Linux). Not written: GameInput and XInput (Windows); with no API built in, no instance can be made |
 | SpudCore | `spudcore.h` | `spud_` / `SPUDRESULT` | platform-agnostic |
 | SpudPerf | `spudperf.h` | `spudperf_` | Windows, Linux, Apple |
 
@@ -673,6 +673,30 @@ one.
   reads as no touch; a motion sample's time is its arrival, not its capture;
   the motion frame and the sign of acceleration are from documentation and
   unchecked. iOS has not been built.
+- SpudInput's evdev backend (`src/input/backends/linux/spudinputevdev.c`) was
+  written on 2026-10-14. It finds gamepads by `BTN_GAMEPAD`, learns of new
+  nodes through inotify on `/dev/input` read at each poll, takes every event
+  between polls, and plays `FF_RUMBLE` in 2-second plays that each poll past
+  a second renews. `spudinput_test` passes on Fedora 44 with an Xbox Series
+  X|S controller (xpad) connected: its name, ids, buttons, axes, analog
+  triggers and rumble were found and its state at rest read. Pressing
+  buttons, moving sticks and rumble have not been checked by anyone holding
+  it. Battery and lights were added the same day, from sysfs under the
+  node's input device and the device above it: the first `power_supply` of
+  type Battery (files kept open, `pread` from 0 at each poll; `capacity`,
+  else `capacity_level` as 5 steps), a multicolor LED with red, green and
+  blue channels or else three single-colour LEDs, and LEDs named
+  `player-1`... (player n lights `player-n` alone). They are found once,
+  when the gamepad is first seen. No device here has either; they have run
+  only against fake sysfs trees modelled on hid-playstation and hid-sony,
+  with a scratch harness that is not committed. Writing an LED needs root
+  unless a udev rule grants it, so lights usually return
+  `SPUDRESULT_SPUDINPUT_ACCESS_DENIED`. Not written: motion sensors and
+  touch surfaces (sibling event nodes of the same device); no gamepad is
+  given them. xpad reports the Xbox X button
+  (left) as `BTN_X`, which the kernel defines as `BTN_NORTH`, and Y (top) as
+  `BTN_WEST`; SpudInput passes the kernel's code on, as it has no table of
+  devices.
 - Two CTest targets exist: `spudinput_test` (above) and `spudperf_test` (the monotonic clocks,
   `spudperf_sleep_until_monotonic_ns` and `spudperf_sleep_until_monotonic_ms`),
   which needs nothing but the machine. It has run on macOS; the Windows and
