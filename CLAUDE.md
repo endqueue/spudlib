@@ -715,7 +715,8 @@ one.
   `test_cube_storage_views` writes every face of two cubes through a
   `CUBE` and a `CUBE_ARRAY` storage view and reads all twelve layers back;
   against the old views it wrote layer 0 twice and nothing else. It passes
-  on D3D12 (both devices, debug layer clean) and on Vulkan. Shader resource
+  on D3D12 (both devices, debug layer clean), on Vulkan, and on Metal (M5
+  Pro, validation clean with warnings fatal). Shader resource
   views of cubes were right already: a `CUBE` view starts at layer 0 by the
   header's rule, and `CUBE_ARRAY` takes its first face.
 - Until 2026-10-16 the Vulkan device never enabled `imageCubeArray`, so a
@@ -724,8 +725,8 @@ one.
   where reported, and `SPUDGPU_DEVICE_PROPERTIES::cube_array_views` says so
   (always true on D3D12 and Metal); `spudgpu_create_image_view` refuses a
   `CUBE_ARRAY` view without it. Run on Vulkan by `test_cube_storage_views`
-  on both devices here, validation layer clean. The Metal line is written
-  and not compiled.
+  on both devices here, validation layer clean, and on Metal, where the
+  property is true and both cubes ran (validation clean).
 - Since 2026-10-16 the Vulkan device enables `multiDrawIndirect` where it
   is reported, and `SPUDGPU_DEVICE_PROPERTIES::max_draw_indirect_count`
   reports what one indirect call takes (1 without it; UINT32_MAX on D3D12
