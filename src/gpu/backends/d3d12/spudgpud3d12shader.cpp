@@ -450,6 +450,47 @@ static SPUDRESULT spudgpu_d3d12___create_mesh_shader_pipeline(
 	return SPUD_SUCCESS;
 }
 
+// HLSL has no RWTextureCube: a storage image of a cube, or of a cube array, is
+// an RWTexture2DArray there, with the face (or cube * 6 + face) as its array
+// index, which is the third coordinate a SPIR-V store to a cube image already
+// takes. The storage view it is bound to is a 2D array of the same layers
+// (spudgpud3d12image.cpp). Returns a malloc'd copy of [words] with every
+// storage cube image type made a 2D array image type, NULL with
+// [out_needed] false if there is none, or NULL with [out_needed] true when
+// the copy can't be allocated. An imageSize() of a cube, a 2-component
+// result, takes the width and height of the array's three.
+static uint32_t *spudgpu_d3d12_storage_cubes_as_arrays(const uint32_t *words, size_t word_count, bool *out_needed) {
+	// The header, then instructions: word 0 is the word count << 16 | opcode.
+	// OpTypeImage (25) is: result, sampled type, Dim, Depth, Arrayed, MS,
+	// Sampled, Format.
+	const uint32_t op_type_image = 25;
+	const uint32_t dim_2d        = 1;
+	const uint32_t dim_cube      = 3;
+	const uint32_t sampled_storage = 2;
+	*out_needed = false;
+	uint32_t *copy = nullptr;
+	size_t i       = 5;
+	while (i < word_count) {
+		const uint32_t count  = words[i] >> 16;
+		const uint32_t opcode = words[i] & 0xFFFFu;
+		if (count == 0 || count > word_count - i)
+			break; // Malformed: left to SPIRV-Cross to report.
+		if (opcode == op_type_image && count >= 9 && words[i + 3] == dim_cube && words[i + 7] == sampled_storage) {
+			if (!copy) {
+				*out_needed = true;
+				copy        = (uint32_t *)malloc(word_count * sizeof(uint32_t));
+				if (!copy)
+					return nullptr;
+				memcpy(copy, words, word_count * sizeof(uint32_t));
+			}
+			copy[i + 3] = dim_2d;
+			copy[i + 5] = 1;
+		}
+		i += count;
+	}
+	return copy;
+}
+
 extern "C" {
 
 SPUDRESULT spudgpu_create_shader_module(
@@ -472,7 +513,13 @@ SPUDRESULT spudgpu_create_shader_module(
 	const uint32_t *spirv_words = (const uint32_t *)desc->spirv_code;
 	size_t word_count           = desc->spirv_size / sizeof(uint32_t);
 
-	spirv_cross::CompilerHLSL hlsl_compiler(spirv_words, word_count);
+	bool cubes_needed           = false;
+	uint32_t *cubes_as_arrays   = spudgpu_d3d12_storage_cubes_as_arrays(spirv_words, word_count, &cubes_needed);
+	if (cubes_needed && !cubes_as_arrays)
+		return SPUDRESULT_OUT_OF_MEMORY;
+	// The compiler parses the words when it is made and keeps none of them.
+	spirv_cross::CompilerHLSL hlsl_compiler(cubes_as_arrays ? cubes_as_arrays : spirv_words, word_count);
+	free(cubes_as_arrays);
 
 	spirv_cross::CompilerHLSL::Options opts;
 	// Mesh/task shaders need SM 6.5+ (DXC's ms_6_5/as_6_5 profiles below

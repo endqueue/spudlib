@@ -683,6 +683,49 @@ one.
   `SPUDRESULT_API_SPECIFIC_FAILURE`. The CBV/SRV/UAV heap is made in full
   on first use whatever the pools ask for. Run on D3D12 (NVIDIA RTX A2000)
   by the samples and `aprend_gpu_tests`, debug layer clean.
+- A D3D12 `TEXTURE2D` view has no array slice, so until 2026-10-16 every
+  `SPUDGPU_IMAGE_VIEW_TYPE_2D` view on D3D12 saw layer 0 whatever its
+  `base_array_layer` (render target, depth, shader resource and storage
+  views alike). A 2D view of any other layer is now made as a 2D array view
+  of that one layer (`spudgpu_d3d12_view_type`). Found by `apricottests`'
+  `test_generate_mips`, whose layer 1 rendered into and sampled layer 0;
+  it passes on both devices here, debug layer clean. A shader that
+  declares a `Texture2D` and is handed such a view (a 2D view of a layer
+  past the first) gets a `TEXTURE2DARRAY` view of one slice, which D3D12
+  leaves undefined; the drivers here read it right. A caller that samples
+  one layer of an array texture declares an array texture and passes a
+  one-layer 2D array view, as Aprend's downsample shader does since the
+  same day; then the view and the shader agree on every backend. A run
+  of `aprend_gpu_tests` with GPU-based validation on (a temporary
+  `SetEnableGPUBasedValidation(TRUE)`, both devices, 2026-10-16) reported
+  nothing, but it also reported nothing when a storage view was made
+  deliberately of the wrong dimension, which the test itself caught; so
+  this validation doesn't check view dimensions here, and the clean run
+  doesn't settle the question. Render target, depth and storage
+  views have no cube dimension in D3D12, and a `CUBE` or `CUBE_ARRAY` view
+  of one of those kinds was the same single-layer `TEXTURE2D` view; it is
+  now the 2D array of the view's layers, every face, as on Vulkan. HLSL
+  has no `RWTextureCube` either, and SPIRV-Cross emitted a storage
+  `imageCube` as a `TextureCube` at a `u` register, which DXC refuses; so
+  before cross-compiling, the D3D12 backend makes every storage cube
+  image type in the SPIR-V a 2D array image type
+  (`spudgpu_d3d12_storage_cubes_as_arrays`), whose third coordinate is
+  the face as the cube's was. An `imageSize()` of a cube takes the width
+  and height of the array's three (not run). `apricottests`'
+  `test_cube_storage_views` writes every face of two cubes through a
+  `CUBE` and a `CUBE_ARRAY` storage view and reads all twelve layers back;
+  against the old views it wrote layer 0 twice and nothing else. It passes
+  on D3D12 (both devices, debug layer clean) and on Vulkan. Shader resource
+  views of cubes were right already: a `CUBE` view starts at layer 0 by the
+  header's rule, and `CUBE_ARRAY` takes its first face.
+- Until 2026-10-16 the Vulkan device never enabled `imageCubeArray`, so a
+  `SPUDGPU_IMAGE_VIEW_TYPE_CUBE_ARRAY` view, and any shader that declares a
+  cube array, were outside Vulkan's rules on every device. It is enabled
+  where reported, and `SPUDGPU_DEVICE_PROPERTIES::cube_array_views` says so
+  (always true on D3D12 and Metal); `spudgpu_create_image_view` refuses a
+  `CUBE_ARRAY` view without it. Run on Vulkan by `test_cube_storage_views`
+  on both devices here, validation layer clean. The Metal line is written
+  and not compiled.
 - Since 2026-10-16 the Vulkan device enables `multiDrawIndirect` where it
   is reported, and `SPUDGPU_DEVICE_PROPERTIES::max_draw_indirect_count`
   reports what one indirect call takes (1 without it; UINT32_MAX on D3D12

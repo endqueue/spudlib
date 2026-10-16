@@ -496,6 +496,16 @@ typedef struct SPUDGPU_DEVICE_PROPERTIES {
 	 * and `supportsCounterSampling:MTLCounterSamplingPointAtStageBoundary`.
 	 */
 	bool pass_timestamps;
+	/**
+	 * Whether an image view may be SPUDGPU_IMAGE_VIEW_TYPE_CUBE_ARRAY, and a
+	 * shader may declare a cube array image or texture. False means
+	 * spudgpu_create_image_view() refuses such a view with
+	 * SPUDRESULT_GPU_INVALID_IMAGE_VIEW_TYPE.
+	 *
+	 * Vulkan: `VkPhysicalDeviceFeatures::imageCubeArray`, which is then
+	 * enabled on the device. D3D12 and Metal: always true.
+	 */
+	bool cube_array_views;
 } SPUDGPU_DEVICE_PROPERTIES;
 
 /**
@@ -1954,7 +1964,9 @@ typedef struct spudgpu_image_view_desc {
  * @retval SPUDRESULT_GPU_INVALID_IMAGE_VIEW_TYPE `desc->type` is
  *         SPUDGPU_IMAGE_VIEW_TYPE_CUBE or SPUDGPU_IMAGE_VIEW_TYPE_CUBE_ARRAY
  *         and the image was not created with
- *         spudgpu_image_desc::cube_capable.
+ *         spudgpu_image_desc::cube_capable, or it is
+ *         SPUDGPU_IMAGE_VIEW_TYPE_CUBE_ARRAY on a device without
+ *         SPUDGPU_DEVICE_PROPERTIES::cube_array_views.
  * @retval SPUDRESULT_GPU_BUFFER_OR_IMAGE_VIEW_RANGE_OUT_OF_SCOPE `desc->type`
  *         is SPUDGPU_IMAGE_VIEW_TYPE_CUBE and the range is not layers 0 to
  *         5, or it is SPUDGPU_IMAGE_VIEW_TYPE_CUBE_ARRAY and

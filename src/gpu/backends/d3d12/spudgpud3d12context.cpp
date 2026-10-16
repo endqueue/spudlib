@@ -228,6 +228,8 @@ bool ___internal_spudgpu_d3d12_make_device_properties(
 	// D3D12_BLEND_DESC::IndependentBlendEnable are on every device.
 	device->_properties.depth_bias_clamp  = true;
 	device->_properties.independent_blend = true;
+	// TEXTURECUBEARRAY views are in every feature level this backend lists.
+	device->_properties.cube_array_views = true;
 	// ExecuteIndirect takes any MaxCommandCount.
 	device->_properties.max_draw_indirect_count = UINT32_MAX;
 	// A direct queue's command lists can write timestamps anywhere.

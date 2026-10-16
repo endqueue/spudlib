@@ -245,6 +245,9 @@ static VkDevice spudgpuvulkan___initialize_vk_logical_device_internal(
     deviceFeatures.depthBiasClamp    = availableFeatures.depthBiasClamp;
     deviceFeatures.independentBlend  = availableFeatures.independentBlend;
     deviceFeatures.multiDrawIndirect = availableFeatures.multiDrawIndirect;
+    // SPUDGPU_DEVICE_PROPERTIES::cube_array_views: without it Vulkan allows
+    // no VK_IMAGE_VIEW_TYPE_CUBE_ARRAY view and no shader that declares one.
+    deviceFeatures.imageCubeArray    = availableFeatures.imageCubeArray;
 
     // spudgpu_create_buffer/spudgpu_create_image always call
     // vkGetBufferDeviceAddress/equivalent to populate desc.gpu_address_location
@@ -606,6 +609,7 @@ static void spudgpuvulkan___internal_make_device_properties(
     vkGetPhysicalDeviceFeatures(device->_physical_device_vk, &features);
     device->_properties.depth_bias_clamp  = features.depthBiasClamp == VK_TRUE;
     device->_properties.independent_blend = features.independentBlend == VK_TRUE;
+    device->_properties.cube_array_views  = features.imageCubeArray == VK_TRUE;
     // Without multiDrawIndirect, vkCmdDrawIndirect takes a drawCount of 0 or
     // 1, whatever maxDrawIndirectCount says.
     device->_properties.max_draw_indirect_count =

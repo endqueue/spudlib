@@ -281,6 +281,10 @@ SPUDRESULT spudgpu_create_image_view(
     // The cube view rules of spudgpu.h, the same on every backend.
     if (desc->type == SPUDGPU_IMAGE_VIEW_TYPE_CUBE || desc->type == SPUDGPU_IMAGE_VIEW_TYPE_CUBE_ARRAY) {
         if (!image->_desc.cube_capable) return SPUDRESULT_GPU_INVALID_IMAGE_VIEW_TYPE;
+        // SPUDGPU_DEVICE_PROPERTIES::cube_array_views, which D3D12 and Metal
+        // always have.
+        if (desc->type == SPUDGPU_IMAGE_VIEW_TYPE_CUBE_ARRAY && !image->_device._properties.cube_array_views)
+            return SPUDRESULT_GPU_INVALID_IMAGE_VIEW_TYPE;
         if (desc->type == SPUDGPU_IMAGE_VIEW_TYPE_CUBE &&
             (desc->subresource_range.base_array_layer != 0 || desc->subresource_range.array_layer_count != 6))
             return SPUDRESULT_GPU_BUFFER_OR_IMAGE_VIEW_RANGE_OUT_OF_SCOPE;

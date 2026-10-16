@@ -54,6 +54,20 @@ static DXGI_FORMAT spudgpu_d3d12_depth_typeless_format(DXGI_FORMAT format) {
 	}
 }
 
+// The view type D3D12 is given for [desc]. A D3D12 TEXTURE2D view has no
+// array slice and always sees layer 0, so a 2D view of any other layer is
+// made as a 2D array view of its one layer, which Vulkan's and Metal's 2D
+// views of that layer are. Only shader resource views have cube dimensions
+// ([has_cube]); for a render target, depth or storage view a cube or cube
+// array is the 2D array of its layers, every face, as on Vulkan.
+static SPUDGPU_IMAGE_VIEW_TYPE spudgpu_d3d12_view_type(const spudgpu_image_view_desc *desc, bool has_cube) {
+	if (desc->type == SPUDGPU_IMAGE_VIEW_TYPE_2D && desc->subresource_range.base_array_layer != 0)
+		return SPUDGPU_IMAGE_VIEW_TYPE_2D_ARRAY;
+	if (!has_cube && (desc->type == SPUDGPU_IMAGE_VIEW_TYPE_CUBE || desc->type == SPUDGPU_IMAGE_VIEW_TYPE_CUBE_ARRAY))
+		return SPUDGPU_IMAGE_VIEW_TYPE_2D_ARRAY;
+	return desc->type;
+}
+
 // Fills the unordered access view desc of [desc] over an image of [format].
 static void spudgpu_d3d12_fill_uav(
     D3D12_UNORDERED_ACCESS_VIEW_DESC &uav,
@@ -61,7 +75,7 @@ static void spudgpu_d3d12_fill_uav(
     const spudgpu_image_view_desc *desc) {
 	const spudgpu_image_view_desc_subresource_range &sr = desc->subresource_range;
 	uav.Format = spudgpu_d3d12_get_dxgi_format(format);
-	switch (desc->type) {
+	switch (spudgpu_d3d12_view_type(desc, false)) {
 	case SPUDGPU_IMAGE_VIEW_TYPE_1D:
 		uav.ViewDimension      = D3D12_UAV_DIMENSION_TEXTURE1D;
 		uav.Texture1D.MipSlice = (UINT)sr.base_mip_level;
@@ -110,7 +124,7 @@ static void spudgpu_d3d12_fill_srv(
 	                                            D3D12_SHADER_COMPONENT_MAPPING_FORCE_VALUE_0,
 	                                            D3D12_SHADER_COMPONENT_MAPPING_FORCE_VALUE_1)
 	                                      : D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-	switch (desc->type) {
+	switch (spudgpu_d3d12_view_type(desc, true)) {
 	case SPUDGPU_IMAGE_VIEW_TYPE_1D:
 		srv.ViewDimension                 = D3D12_SRV_DIMENSION_TEXTURE1D;
 		srv.Texture1D.MostDetailedMip     = (UINT)sr.base_mip_level;
@@ -391,7 +405,7 @@ SPUDRESULT spudgpu_create_image_view(
 	if (usage & SPUDGPU_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT) {
 		D3D12_DEPTH_STENCIL_VIEW_DESC &dsv = pResult->_d3d_view_desc._dsv;
 		dsv.Format = dxgiFmt;
-		switch (desc->type) {
+		switch (spudgpu_d3d12_view_type(desc, false)) {
 		case SPUDGPU_IMAGE_VIEW_TYPE_1D:
 			dsv.ViewDimension      = D3D12_DSV_DIMENSION_TEXTURE1D;
 			dsv.Texture1D.MipSlice = (UINT)sr.base_mip_level;
@@ -416,7 +430,7 @@ SPUDRESULT spudgpu_create_image_view(
 	} else if (usage & SPUDGPU_IMAGE_USAGE_COLOR_ATTACHMENT) {
 		D3D12_RENDER_TARGET_VIEW_DESC &rtv = pResult->_d3d_view_desc._rtv;
 		rtv.Format = dxgiFmt;
-		switch (desc->type) {
+		switch (spudgpu_d3d12_view_type(desc, false)) {
 		case SPUDGPU_IMAGE_VIEW_TYPE_1D:
 			rtv.ViewDimension      = D3D12_RTV_DIMENSION_TEXTURE1D;
 			rtv.Texture1D.MipSlice = (UINT)sr.base_mip_level;
