@@ -12,6 +12,7 @@
 #include "spudgpu.h"
 #include "spudcore.h"
 #include "spudgpumetal.h"
+#include "../../spudgpushared.h"
 #include <Metal/Metal.h>
 #include <spirv_cross_c.h>
 
@@ -380,6 +381,28 @@ static MTLBlendOperation spudgpumetal___internal_blend_operation(SPUDGPU_BLEND_O
 	}
 }
 
+// The pipeline's colour attachments, each with its format and blend state
+// (spudgpu_shader_pipeline_desc::color_attachment_formats and
+// blend_attachments). Every format has been checked.
+static void spudgpumetal___internal_set_color_attachments(
+    MTLRenderPipelineColorAttachmentDescriptorArray *attachments,
+    const spudgpu_shader_pipeline_desc *desc) {
+	for (uint32_t i = 0; i < desc->color_attachment_count; ++i) {
+		MTLRenderPipelineColorAttachmentDescriptor *attachment = attachments[i];
+		const spudgpu_blend_attachment_desc *blend             = &desc->blend_attachments[i];
+		attachment.pixelFormat     = spudgpumetal___internal_image_pixel_format(desc->color_attachment_formats[i]);
+		attachment.blendingEnabled = blend->blend_enable;
+		if (blend->blend_enable) {
+			attachment.sourceRGBBlendFactor        = spudgpumetal___internal_blend_factor(blend->src_color_blend_factor);
+			attachment.destinationRGBBlendFactor   = spudgpumetal___internal_blend_factor(blend->dst_color_blend_factor);
+			attachment.rgbBlendOperation           = spudgpumetal___internal_blend_operation(blend->color_blend_op);
+			attachment.sourceAlphaBlendFactor      = spudgpumetal___internal_blend_factor(blend->src_alpha_blend_factor);
+			attachment.destinationAlphaBlendFactor = spudgpumetal___internal_blend_factor(blend->dst_alpha_blend_factor);
+			attachment.alphaBlendOperation         = spudgpumetal___internal_blend_operation(blend->alpha_blend_op);
+		}
+	}
+}
+
 SPUDRESULT spudgpu_create_shader_pipeline(
     spudgpu_device device,
     const spudgpu_shader_pipeline_desc *desc,
@@ -394,6 +417,9 @@ SPUDRESULT spudgpu_create_shader_pipeline(
 		return SPUDRESULT_GPU_VERTEX_AND_FRAGMENT_SHADER_REQUIRED;
 	if (desc->vertex_module && desc->mesh_module)
 		return SPUDRESULT_GPU_INVALID_SHADER_STAGE; // Mutually exclusive - see spudgpu.h.
+	SPUDRESULT outputs = spudgpu___internal_check_pipeline_outputs(desc, &((spudgpu_device_metal *)device)->_properties);
+	if (outputs != SPUD_SUCCESS)
+		return outputs;
 	// Metal has no geometry-shader stage at all, and tessellation goes
 	// through a completely different pipeline shape (post-tessellation
 	// vertex functions + -drawPatches:/-drawIndexedPatches:, not a
@@ -412,9 +438,9 @@ SPUDRESULT spudgpu_create_shader_pipeline(
 	if (!fragment_module_metal->_function_mtl)
 		return SPUDRESULT_GPU_INVALID_SHADER_MODULE;
 
-	MTLPixelFormat color_format = spudgpumetal___internal_image_pixel_format(desc->color_attachment_format);
-	if (color_format == MTLPixelFormatInvalid)
-		return SPUDRESULT_GPU_INVALID_FORMAT;
+	for (uint32_t i = 0; i < desc->color_attachment_count; ++i)
+		if (spudgpumetal___internal_image_pixel_format(desc->color_attachment_formats[i]) == MTLPixelFormatInvalid)
+			return SPUDRESULT_GPU_INVALID_FORMAT;
 	MTLPixelFormat depth_format = MTLPixelFormatInvalid;
 	if (desc->depth_format != SPUDGPU_FORMAT_UNKNOWN) {
 		depth_format = spudgpumetal___internal_image_pixel_format(desc->depth_format);
@@ -441,18 +467,7 @@ SPUDRESULT spudgpu_create_shader_pipeline(
 		MTLMeshRenderPipelineDescriptor *pipeline_desc = [[MTLMeshRenderPipelineDescriptor alloc] init];
 		pipeline_desc.meshFunction                     = mesh_module_metal->_function_mtl;
 		pipeline_desc.fragmentFunction                 = fragment_module_metal->_function_mtl;
-		pipeline_desc.colorAttachments[0].pixelFormat  = color_format;
-
-		const spudgpu_blend_attachment_desc *blend = &desc->blend_attachment;
-		pipeline_desc.colorAttachments[0].blendingEnabled = blend->blend_enable;
-		if (blend->blend_enable) {
-			pipeline_desc.colorAttachments[0].sourceRGBBlendFactor   = spudgpumetal___internal_blend_factor(blend->src_color_blend_factor);
-			pipeline_desc.colorAttachments[0].destinationRGBBlendFactor = spudgpumetal___internal_blend_factor(blend->dst_color_blend_factor);
-			pipeline_desc.colorAttachments[0].rgbBlendOperation      = spudgpumetal___internal_blend_operation(blend->color_blend_op);
-			pipeline_desc.colorAttachments[0].sourceAlphaBlendFactor = spudgpumetal___internal_blend_factor(blend->src_alpha_blend_factor);
-			pipeline_desc.colorAttachments[0].destinationAlphaBlendFactor = spudgpumetal___internal_blend_factor(blend->dst_alpha_blend_factor);
-			pipeline_desc.colorAttachments[0].alphaBlendOperation    = spudgpumetal___internal_blend_operation(blend->alpha_blend_op);
-		}
+		spudgpumetal___internal_set_color_attachments(pipeline_desc.colorAttachments, desc);
 
 		if (depth_format != MTLPixelFormatInvalid) {
 			pipeline_desc.depthAttachmentPixelFormat = depth_format;
@@ -512,18 +527,7 @@ SPUDRESULT spudgpu_create_shader_pipeline(
 		// (spudgpu_rendering_begin_desc::layer_count) unless this is given,
 		// and a pipeline isn't created against a pass, so it is always given.
 		pipeline_desc.inputPrimitiveTopology = spudgpumetal___internal_topology_class(desc->primitive_topology);
-		pipeline_desc.colorAttachments[0].pixelFormat = color_format;
-
-		const spudgpu_blend_attachment_desc *blend = &desc->blend_attachment;
-		pipeline_desc.colorAttachments[0].blendingEnabled = blend->blend_enable;
-		if (blend->blend_enable) {
-			pipeline_desc.colorAttachments[0].sourceRGBBlendFactor   = spudgpumetal___internal_blend_factor(blend->src_color_blend_factor);
-			pipeline_desc.colorAttachments[0].destinationRGBBlendFactor = spudgpumetal___internal_blend_factor(blend->dst_color_blend_factor);
-			pipeline_desc.colorAttachments[0].rgbBlendOperation      = spudgpumetal___internal_blend_operation(blend->color_blend_op);
-			pipeline_desc.colorAttachments[0].sourceAlphaBlendFactor = spudgpumetal___internal_blend_factor(blend->src_alpha_blend_factor);
-			pipeline_desc.colorAttachments[0].destinationAlphaBlendFactor = spudgpumetal___internal_blend_factor(blend->dst_alpha_blend_factor);
-			pipeline_desc.colorAttachments[0].alphaBlendOperation    = spudgpumetal___internal_blend_operation(blend->alpha_blend_op);
-		}
+		spudgpumetal___internal_set_color_attachments(pipeline_desc.colorAttachments, desc);
 
 		if (depth_format != MTLPixelFormatInvalid) {
 			pipeline_desc.depthAttachmentPixelFormat = depth_format;

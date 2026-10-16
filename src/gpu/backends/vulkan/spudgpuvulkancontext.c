@@ -237,6 +237,11 @@ static VkDevice spudgpuvulkan___initialize_vk_logical_device_internal(
     vkGetPhysicalDeviceFeatures(physicalDevice, &availableFeatures);
     deviceFeatures.depthBounds = availableFeatures.depthBounds;
     device->_depth_bounds_test_supported = availableFeatures.depthBounds == VK_TRUE;
+    // The same for a clamped depth bias and colour attachments that blend
+    // differently (SPUDGPU_DEVICE_PROPERTIES::depth_bias_clamp,
+    // independent_blend): enabled where the device has them, and reported.
+    deviceFeatures.depthBiasClamp   = availableFeatures.depthBiasClamp;
+    deviceFeatures.independentBlend = availableFeatures.independentBlend;
 
     // spudgpu_create_buffer/spudgpu_create_image always call
     // vkGetBufferDeviceAddress/equivalent to populate desc.gpu_address_location
@@ -350,6 +355,13 @@ static VkDevice spudgpuvulkan___initialize_vk_logical_device_internal(
         return NULL;
     }
 
+    // NULL where the instance has no VK_EXT_debug_utils: the label calls
+    // then record nothing.
+    device->_vkCmdBeginDebugUtilsLabelEXT = (PFN_vkCmdBeginDebugUtilsLabelEXT)
+        vkGetDeviceProcAddr(result, "vkCmdBeginDebugUtilsLabelEXT");
+    device->_vkCmdEndDebugUtilsLabelEXT = (PFN_vkCmdEndDebugUtilsLabelEXT)
+        vkGetDeviceProcAddr(result, "vkCmdEndDebugUtilsLabelEXT");
+
     device->_mesh_shading_supported = meshShaderFeatureSupported;
     if (meshShaderFeatureSupported) {
         device->_vkCmdDrawMeshTasksEXT = (PFN_vkCmdDrawMeshTasksEXT)
@@ -392,19 +404,43 @@ static VkDevice spudgpuvulkan___initialize_vk_logical_device_internal(
     return result;
 };
 
-static void spudgpuvulkan__determine_vulkan_extensions(VkInstanceCreateInfo *pOutput) {
+// Whether the Vulkan loader offers instance extension [name].
+static bool spudgpuvulkan__instance_extension_available(const char *name) {
+    uint32_t count = 0;
+    if (vkEnumerateInstanceExtensionProperties(NULL, &count, NULL) != VK_SUCCESS || count == 0)
+        return false;
+    VkExtensionProperties *properties = malloc(sizeof(VkExtensionProperties) * count);
+    if (!properties)
+        return false;
+    bool found = false;
+    if (vkEnumerateInstanceExtensionProperties(NULL, &count, properties) == VK_SUCCESS)
+        for (uint32_t i = 0; i < count && !found; i++)
+            found = strcmp(properties[i].extensionName, name) == 0;
+    free(properties);
+    return found;
+}
+
+// The instance extensions, into [names] (room for 4), and their count.
+static void spudgpuvulkan__determine_vulkan_extensions(VkInstanceCreateInfo *pOutput, const char **names) {
     if (!pOutput) return;
+    uint32_t count = 0;
 #if defined(_WIN32)
-    static const char *extensions[] = {"VK_KHR_surface", "VK_KHR_win32_surface"};
-    pOutput->enabledExtensionCount = 2;
+    names[count++] = "VK_KHR_surface";
+    names[count++] = "VK_KHR_win32_surface";
 #elif defined(__linux__)
     // SDL picks Wayland vs Xlib at runtime (independent of whichever one
     // SPUDGPU_PLATFORM_* was compiled against), so both surface extensions
     // must be enabled on the instance rather than just one.
-    static const char *extensions[] = {"VK_KHR_surface", "VK_KHR_wayland_surface", "VK_KHR_xlib_surface"};
-    pOutput->enabledExtensionCount = 3;
+    names[count++] = "VK_KHR_surface";
+    names[count++] = "VK_KHR_wayland_surface";
+    names[count++] = "VK_KHR_xlib_surface";
 #endif
-    pOutput->ppEnabledExtensionNames = extensions;
+    // Debug labels (spudgpu_cmd_begin_debug_label) and object names: only
+    // read by tools, and enabled wherever the loader has them.
+    if (spudgpuvulkan__instance_extension_available(VK_EXT_DEBUG_UTILS_EXTENSION_NAME))
+        names[count++] = VK_EXT_DEBUG_UTILS_EXTENSION_NAME;
+    pOutput->enabledExtensionCount   = count;
+    pOutput->ppEnabledExtensionNames = count ? names : NULL;
 }
 
 #if __cplusplus
@@ -438,7 +474,8 @@ SPUDRESULT spudgpu_create_instance(
     createInfo.pNext = NULL;
     createInfo.flags = 0;
     createInfo.pApplicationInfo = &appInfo;
-    spudgpuvulkan__determine_vulkan_extensions(&createInfo);
+    const char *extensionNames[4] = {0};
+    spudgpuvulkan__determine_vulkan_extensions(&createInfo, extensionNames);
 
     createInfo.enabledLayerCount = 0;
     createInfo.ppEnabledLayerNames = NULL;
@@ -561,6 +598,27 @@ static void spudgpuvulkan___internal_make_device_properties(
     // A heap of any kind is a vkAllocateMemory of that kind's memory type,
     // which every kind has wherever spudgpu_create_buffer can make it.
     device->_properties.mappable_heaps = true;
+
+    // Enabled on the device wherever they are reported (device creation).
+    VkPhysicalDeviceFeatures features = {0};
+    vkGetPhysicalDeviceFeatures(device->_physical_device_vk, &features);
+    device->_properties.depth_bias_clamp  = features.depthBiasClamp == VK_TRUE;
+    device->_properties.independent_blend = features.independentBlend == VK_TRUE;
+
+    // Timestamps are written by command lists on the graphics queue, whose
+    // family says whether it counts time at all.
+    uint32_t familyCount = 0;
+    vkGetPhysicalDeviceQueueFamilyProperties(device->_physical_device_vk, &familyCount, NULL);
+    device->_properties.pass_timestamps = false;
+    if (device->_graphics_queue_family_index < familyCount) {
+        VkQueueFamilyProperties *families = malloc(sizeof(VkQueueFamilyProperties) * familyCount);
+        if (families) {
+            vkGetPhysicalDeviceQueueFamilyProperties(device->_physical_device_vk, &familyCount, families);
+            device->_properties.pass_timestamps =
+                families[device->_graphics_queue_family_index].timestampValidBits > 0;
+            free(families);
+        }
+    }
 }
 
 SPUDRESULT spudgpu_enumerate_devices(

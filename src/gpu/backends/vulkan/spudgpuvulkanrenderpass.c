@@ -2,6 +2,7 @@
 #if SPUDGPU_COMPILE_VULKAN_API
 
 #include "spudgpuvulkan.h"
+#include "../../spudgpushared.h"
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -330,6 +331,30 @@ void spudgpu_get_image_buffer_copy_size(
 		*out_total_size = row_pitch * mip_height * mip_depth;
 }
 
+SPUDRESULT spudgpu_get_image_buffer_copy_offset_alignment(
+    spudgpu_image image,
+    uint64_t *out_alignment) {
+	if (!image)
+		return SPUDRESULT_GPU_INVALID_IMAGE;
+	if (!out_alignment)
+		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
+	const uint64_t block = spudgpu___internal_format_block_bytes(image->_desc.format);
+	if (block == 0)
+		return SPUDRESULT_GPU_INVALID_FORMAT;
+	// VkBufferImageCopy::bufferOffset: a multiple of the texel block size,
+	// and of 4 for a depth/stencil format or on a queue with neither
+	// graphics nor compute. The least common multiple of the two meets every
+	// case, on whatever queue the copy is recorded for.
+	uint64_t a = block, b = 4;
+	while (b) {
+		const uint64_t r = a % b;
+		a                = b;
+		b                = r;
+	}
+	*out_alignment = block / a * 4;
+	return SPUD_SUCCESS;
+}
+
 // ---------------------------------------------------------------------------
 // Public API: spudgpu_cmd_blit_image
 // ---------------------------------------------------------------------------
@@ -474,6 +499,16 @@ void spudgpu_cmd_begin_rendering(
 	                                               ? VK_RENDERING_CONTENTS_SECONDARY_COMMAND_BUFFERS_BIT
 	                                               : 0;
 
+    // The pass's start: when the first of its work reaches the top of the
+    // pipe. Written outside the rendering instance, as its end is.
+    cmd->_end_timestamp_pool_vk = VK_NULL_HANDLE;
+    if (desc->timestamp_set) {
+        vkCmdWriteTimestamp(cmd->_command_buffer_vk, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                            desc->timestamp_set->_query_pool_vk, desc->timestamp_begin_index);
+        cmd->_end_timestamp_pool_vk = desc->timestamp_set->_query_pool_vk;
+        cmd->_end_timestamp_index   = desc->timestamp_end_index;
+    }
+
     vkCmdBeginRendering(cmd->_command_buffer_vk, &rendering_info);
 
     // Recorded so spudgpu_cmd_clear_color_attachment/depth_attachment can
@@ -491,6 +526,12 @@ void spudgpu_cmd_end_rendering(spudgpu_command_list cmd) {
     if (!cmd)
         return;
     vkCmdEndRendering(cmd->_command_buffer_vk);
+    // The pass's end: once all of its work has left the pipe.
+    if (cmd->_end_timestamp_pool_vk) {
+        vkCmdWriteTimestamp(cmd->_command_buffer_vk, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
+                            cmd->_end_timestamp_pool_vk, cmd->_end_timestamp_index);
+        cmd->_end_timestamp_pool_vk = VK_NULL_HANDLE;
+    }
     cmd->_rendering_active = false;
     cmd->_bound_color_attachment_count = 0;
     cmd->_bound_depth_attachment_view = VK_NULL_HANDLE;
@@ -514,7 +555,13 @@ void spudgpu_begin_bundle_command_list(
 
     vkResetCommandBuffer(bundle->_command_buffer_vk, 0);
 
-    VkFormat color_format = convert_spud_to_vulkan_format(desc->color_attachment_format);
+    // Past SPUDGPU_MAX_COLOR_ATTACHMENTS is not read.
+    uint32_t color_count = desc->color_attachment_count;
+    if (color_count > SPUDGPU_MAX_COLOR_ATTACHMENTS)
+        color_count = SPUDGPU_MAX_COLOR_ATTACHMENTS;
+    VkFormat color_formats[SPUDGPU_MAX_COLOR_ATTACHMENTS] = {0};
+    for (uint32_t i = 0; i < color_count; ++i)
+        color_formats[i] = convert_spud_to_vulkan_format(desc->color_attachment_formats[i]);
     VkFormat depth_format = (desc->depth_format != SPUDGPU_FORMAT_UNKNOWN)
         ? convert_spud_to_vulkan_format(desc->depth_format)
         : VK_FORMAT_UNDEFINED;
@@ -523,8 +570,8 @@ void spudgpu_begin_bundle_command_list(
 
     VkCommandBufferInheritanceRenderingInfo inheritance_rendering = {0};
     inheritance_rendering.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_INHERITANCE_RENDERING_INFO;
-    inheritance_rendering.colorAttachmentCount = 1;
-    inheritance_rendering.pColorAttachmentFormats = &color_format;
+    inheritance_rendering.colorAttachmentCount = color_count;
+    inheritance_rendering.pColorAttachmentFormats = color_formats;
     inheritance_rendering.depthAttachmentFormat = depth_format;
     inheritance_rendering.stencilAttachmentFormat = has_stencil ? depth_format : VK_FORMAT_UNDEFINED;
     inheritance_rendering.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;

@@ -60,7 +60,7 @@ VkSurfaceFormatKHR spudgpuvulkan___choose_surface_format_internal(
 	VkFormat requestedFormat) {
 	// The caller (pSwapChain->_desc.format) already decided which format it
 	// wants - e.g. so it matches the format a pipeline was created against
-	// (spudgpu_shader_pipeline_desc::color_attachment_format). Picking a
+	// (spudgpu_shader_pipeline_desc::color_attachment_formats). Picking a
 	// different one here on the caller's behalf is exactly the kind of
 	// silent SpudLib-side default this backend must not make; only fall
 	// back to SRGB (still colorSpace-matched) if the exact request isn't

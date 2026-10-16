@@ -109,6 +109,16 @@ static void spudgpumetal___internal_make_device_properties(
 	// made on an Apple GPU and not on any other. Each MTLGPUFamilyApple
 	// family includes the ones before it, so Apple1 is every Apple GPU.
 	device->_properties.mappable_heaps = [device->_device_mtl supportsFamily:MTLGPUFamilyApple1];
+	// setDepthBias:slopeScale:clamp: takes a clamp, and each colour
+	// attachment of a render pipeline descriptor blends on its own, on
+	// every device.
+	device->_properties.depth_bias_clamp  = true;
+	device->_properties.independent_blend = true;
+	// A pass's timestamps are samples of the timestamp counter set at its
+	// stage boundaries.
+	device->_properties.pass_timestamps =
+	    spudgpumetal___internal_timestamp_counter_set(device->_device_mtl) != nil &&
+	    [device->_device_mtl supportsCounterSampling:MTLCounterSamplingPointAtStageBoundary];
 }
 
 static SPUDRESULT spudgpumetal___internal_create_command_queue_family(

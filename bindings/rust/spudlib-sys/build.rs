@@ -28,6 +28,8 @@ fn main() {
         .file(vulkan_backends_src.join("spudgpuvulkanbuffer.c"))
         .file(vulkan_backends_src.join("spudgpuvulkanimage.c"))
         .file(vulkan_backends_src.join("spudgpuvulkanshader.c"))
+        // The pipeline checks every backend shares.
+        .file(root.join("src/gpu/spudgpushared.c"))
         .flag_if_supported("-std=c23");
 
     if cfg!(feature = "vulkan") {
@@ -59,4 +61,5 @@ fn main() {
     println!("cargo:rerun-if-changed={}", root.join("src/gpu/backends/vulkan/spudgpuvulkanbuffer.c").display());
     println!("cargo:rerun-if-changed={}", root.join("src/gpu/backends/vulkan/spudgpuvulkanimage.c").display());
     println!("cargo:rerun-if-changed={}", root.join("src/gpu/backends/vulkan/spudgpuvulkanshader.c").display());
+    println!("cargo:rerun-if-changed={}", root.join("src/gpu/spudgpushared.c").display());
 }

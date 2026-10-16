@@ -298,6 +298,41 @@ void spudgpu_end_command_list(spudgpu_command_list cmd) {
 	spudgpumetal___internal_end_active_blit_encoder((spudgpu_command_list_metal *)cmd);
 }
 
+// A label inside a pass goes on the render encoder; one outside every pass
+// on the command buffer, which takes a debug group only while no encoder is
+// open, so an open compute or blit encoder is ended first.
+void spudgpu_cmd_begin_debug_label(spudgpu_command_list cmd, const char *label) {
+	if (!cmd)
+		return;
+	spudgpu_command_list_metal *cmd_list_metal = (spudgpu_command_list_metal *)cmd;
+	// Allocated and released here rather than autoreleased: a caller in
+	// plain C may have no autorelease pool.
+	NSString *text = [[NSString alloc] initWithUTF8String:label ? label : ""];
+	if (!text)
+		text = [[NSString alloc] initWithUTF8String:""];
+	if (cmd_list_metal->_active_render_encoder) {
+		[cmd_list_metal->_active_render_encoder pushDebugGroup:text];
+	} else {
+		spudgpumetal___internal_end_active_compute_encoder(cmd_list_metal);
+		spudgpumetal___internal_end_active_blit_encoder(cmd_list_metal);
+		[cmd_list_metal->_command_buffer_mtl pushDebugGroup:text];
+	}
+	[text release];
+}
+
+void spudgpu_cmd_end_debug_label(spudgpu_command_list cmd) {
+	if (!cmd)
+		return;
+	spudgpu_command_list_metal *cmd_list_metal = (spudgpu_command_list_metal *)cmd;
+	if (cmd_list_metal->_active_render_encoder) {
+		[cmd_list_metal->_active_render_encoder popDebugGroup];
+	} else {
+		spudgpumetal___internal_end_active_compute_encoder(cmd_list_metal);
+		spudgpumetal___internal_end_active_blit_encoder(cmd_list_metal);
+		[cmd_list_metal->_command_buffer_mtl popDebugGroup];
+	}
+}
+
 // Ends and releases _active_compute_encoder if one is active. Shared with
 // spudgpu_cmd_begin_rendering (spudgpumetalrenderpass.m) - see this
 // function's declaration in spudgpumetal.h.
@@ -640,6 +675,12 @@ void spudgpu_cmd_bind_pipeline(
 		[cmd_list_metal->_active_render_encoder
 		    setTriangleFillMode:pipeline_metal->_desc.wireframe ? MTLTriangleFillModeLines
 		                                                        : MTLTriangleFillModeFill];
+		// The depth bias too, so a pipeline without one doesn't keep the
+		// last pipeline's.
+		[cmd_list_metal->_active_render_encoder
+		    setDepthBias:(float)pipeline_metal->_desc.depth_bias_constant
+		      slopeScale:pipeline_metal->_desc.depth_bias_slope
+		           clamp:pipeline_metal->_desc.depth_bias_clamp];
 	}
 }
 

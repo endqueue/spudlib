@@ -262,6 +262,22 @@ typedef struct spudgpu_command_list_t {
 	uint32_t _compute_push_constants_extent;
 } spudgpu_command_list_metal;
 
+typedef struct spudgpu_timestamp_set_t {
+#if _DEBUG
+	const char *_debug_name;
+#endif
+	// Of the device's timestamp counter set, in shared storage so the CPU
+	// can resolve it. A pass samples it at its stage boundaries
+	// (spudgpumetalrenderpass.m).
+	id<MTLCounterSampleBuffer> _sample_buffer_mtl;
+	id<MTLDevice> _device_mtl;
+	uint32_t _count;
+	// sampleTimestamps:gpuTimestamp: at creation: the CPU and GPU clocks at
+	// one moment, which spudgpu_get_timestamps sets against a second pair.
+	MTLTimestamp _cpu_origin;
+	MTLTimestamp _gpu_origin;
+} spudgpu_timestamp_set_metal;
+
 // Defined in spudgpumetalimage.m - shared so shader pipeline attachment
 // formats agree exactly with what spudgpu_create_image produces for the
 // same SPUDGPU_FORMAT.
@@ -282,6 +298,10 @@ void spudgpumetal___internal_end_active_compute_encoder(spudgpu_command_list_met
 // both of which must end any active blit encoder before opening their own -
 // see _active_blit_encoder's comment above.
 void spudgpumetal___internal_end_active_blit_encoder(spudgpu_command_list_metal *cmd_list_metal);
+
+// The device's timestamp counter set (MTLCommonCounterSetTimestamp), or nil
+// if it has none. Defined in spudgpumetalquery.m.
+id<MTLCounterSet> spudgpumetal___internal_timestamp_counter_set(id<MTLDevice> device);
 
 typedef struct spudgpu_shader_module_t {
 #if _DEBUG

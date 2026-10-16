@@ -93,6 +93,10 @@ typedef enum SPUDRESULT {
 	SPUDRESULT_GPU_INVALID_BUFFER_STRIDE                       = 223,
 	SPUDRESULT_GPU_INVALID_INDEX_STRIDE                        = 224,
 	SPUDRESULT_GPU_MEMORY_KIND_NOT_SUPPORTED                   = 225,
+	SPUDRESULT_GPU_TOO_MANY_COLOR_ATTACHMENTS                  = 226,
+	SPUDRESULT_GPU_DEPTH_BIAS_CLAMP_NOT_SUPPORTED              = 227,
+	SPUDRESULT_GPU_INDEPENDENT_BLEND_NOT_SUPPORTED             = 228,
+	SPUDRESULT_GPU_TIMESTAMPS_NOT_SUPPORTED                    = 229,
 	SPUDRESULT_GPU_INVALID_BUFFER                              = 230,
 	SPUDRESULT_GPU_INVALID_BUFFER_VIEW                         = 231,
 	SPUDRESULT_GPU_INVALID_IMAGE                               = 232,
@@ -113,6 +117,7 @@ typedef enum SPUDRESULT {
 	SPUDRESULT_GPU_PLACEMENT_MISALIGNED                        = 244,
 	/** A placement runs past the end of its heap. */
 	SPUDRESULT_GPU_PLACEMENT_OUT_OF_RANGE                      = 245,
+	SPUDRESULT_GPU_INVALID_TIMESTAMP_SET                       = 246,
 	SPUDRESULT_GPU_INVALID_SEMAPHORE                           = 250,
 	SPUDRESULT_GPU_INVALID_FENCE                               = 251,
 	SPUDRESULT_GPU_FENCE_WAIT_TIMED_OUT                        = 252,

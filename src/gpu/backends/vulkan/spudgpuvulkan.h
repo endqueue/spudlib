@@ -81,6 +81,10 @@ typedef struct spudgpu_device_t {
     // statically linked the way VK_KHR_swapchain's do (the only other
     // device extension this backend has ever enabled).
     PFN_vkCmdDrawMeshTasksEXT _vkCmdDrawMeshTasksEXT;
+    // NULL when the instance has no VK_EXT_debug_utils
+    // (spudgpu_cmd_begin_debug_label records nothing then).
+    PFN_vkCmdBeginDebugUtilsLabelEXT _vkCmdBeginDebugUtilsLabelEXT;
+    PFN_vkCmdEndDebugUtilsLabelEXT _vkCmdEndDebugUtilsLabelEXT;
 
     // Lazily allocated by the first spudgpu_get_bindless_capabilities /
     // spudgpu_bindless_register_* / spudgpu_get_bindless_descriptor_set_layout
@@ -134,7 +138,22 @@ typedef struct spudgpu_command_list_t {
     VkImageView _bound_color_attachments[SPUDGPU_MAX_COLOR_ATTACHMENTS];
     uint32_t _bound_color_attachment_count;
     VkImageView _bound_depth_attachment_view; // VK_NULL_HANDLE if none bound
+    // The timestamp the open pass writes at spudgpu_cmd_end_rendering
+    // (spudgpu_rendering_begin_desc::timestamp_set); VK_NULL_HANDLE for none.
+    VkQueryPool _end_timestamp_pool_vk;
+    uint32_t _end_timestamp_index;
 } spudgpu_command_list_vulkan;
+
+typedef struct spudgpu_timestamp_set_t {
+#if _DEBUG
+    const char *_debug_name;
+#endif
+    VkQueryPool _query_pool_vk;
+    VkDevice _logical_device_vk;
+    uint32_t _count;
+    // VkPhysicalDeviceLimits::timestampPeriod: nanoseconds a tick.
+    float _period_ns;
+} spudgpu_timestamp_set_vulkan;
 
 typedef struct spudgpu_buffer_t {
 #if _DEBUG

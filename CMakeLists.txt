@@ -71,6 +71,8 @@ if(NOT TARGET spudlib)
         src/spudaudio.c
         src/spudinput.c
         src/gpu/spudgpuformat.c
+        src/gpu/spudgpushared.c
+        src/gpu/spudgpushared.h
     )
     # Determine which backend sources to append.
     if(WIN32)
@@ -192,6 +194,7 @@ if(NOT TARGET spudlib)
                 src/gpu/backends/vulkan/spudgpuvulkanrenderpass.c
                 src/gpu/backends/vulkan/spudgpuvulkannative.c
                 src/gpu/backends/vulkan/spudgpuvulkansync.c
+                src/gpu/backends/vulkan/spudgpuvulkanquery.c
                 include/spudgpu_vulkan_natives.h
             )
 
@@ -210,6 +213,7 @@ if(NOT TARGET spudlib)
                 src/gpu/backends/d3d12/spudgpud3d12renderpass.cpp
                 src/gpu/backends/d3d12/spudgpud3d12native.cpp
                 src/gpu/backends/d3d12/spudgpud3d12sync.cpp
+                src/gpu/backends/d3d12/spudgpud3d12query.cpp
                 include/spudgpu_d3d12_natives.h
             )
         endif()
@@ -240,6 +244,7 @@ if(NOT TARGET spudlib)
                 src/gpu/backends/metal/spudgpumetalrenderpass.m
                 src/gpu/backends/metal/spudgpumetalnative.m
                 src/gpu/backends/metal/spudgpumetalsync.m
+                src/gpu/backends/metal/spudgpumetalquery.m
             )
         endif()
     endif()

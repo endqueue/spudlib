@@ -214,10 +214,14 @@ not in each backend.
   `SPUDGPU_LEGACY_*`'s opt-in constrained-hardware path, which exists for one small
   caller-owned object, not a structurally different API.
 - **Backend file split mirrors the header, not guessed.** Each backend (Vulkan, D3D12,
-  Metal) uses the same eleven-file-per-concern layout: `context`, `buffer`, `heap`,
+  Metal) uses the same twelve-file-per-concern layout: `context`, `buffer`, `heap`,
   `image`, `shader`, `swapchain`, `descriptors`, `command`, `renderpass`, `native`,
-  `sync`. If `spudgpu.h` grows a new concern, split a new file for it in every
-  backend rather than dumping new functions into an existing one.
+  `sync`, `query` (timestamp sets, added 2026-10-15). If `spudgpu.h` grows a new
+  concern, split a new file for it in every backend rather than dumping new
+  functions into an existing one. What every backend checks the same way is
+  written once in `src/gpu/spudgpushared.c` (`spudgpushared.h`), as SpudNet and
+  SpudInput keep their front ends: the pipeline's colour-attachment and depth-bias
+  checks are there.
 - **A fence is a counter that only goes up, on every backend.** A submission
   signals it to a value the caller chooses
   (`spudgpu_submit_desc::signal_fence_value`), `spudgpu_wait_for_fences` waits

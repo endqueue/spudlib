@@ -239,7 +239,24 @@ typedef struct spudgpu_command_list_t {
 	// spudgpu_cmd_begin_rendering's will_execute_bundles handling) -- the two
 	// don't mix, so end_rendering must match whichever begin_rendering chose.
 	bool _using_render_pass;
+	// The timestamp the open pass writes at spudgpu_cmd_end_rendering
+	// (spudgpu_rendering_begin_desc::timestamp_set); nullptr for none.
+	ID3D12QueryHeap *_end_timestamp_heap;
+	UINT _end_timestamp_index;
 } spudgpu_command_list_d3d12;
+
+typedef struct spudgpu_timestamp_set_t {
+#if _DEBUG
+	const char *_debug_name;
+#endif
+	Microsoft::WRL::ComPtr<ID3D12QueryHeap> _d3d_query_heap;
+	// What spudgpu_cmd_resolve_timestamps copies the ticks into, entry i at
+	// byte i * 8, and spudgpu_get_timestamps maps.
+	Microsoft::WRL::ComPtr<ID3D12Resource> _d3d_readback;
+	uint32_t _count;
+	// The queue's GetTimestampFrequency: ticks a second.
+	uint64_t _frequency;
+} spudgpu_timestamp_set_d3d12;
 
 typedef struct spudgpu_buffer_t {
 #if _DEBUG

@@ -2,6 +2,7 @@
 #if SPUDGPU_COMPILE_D3D12_API
 
 #include "spudgpud3d12.hpp"
+#include <cstring>
 
 extern "C" {
 
@@ -184,6 +185,22 @@ void spudgpu_end_command_list(spudgpu_command_list cmd)
 {
 	if (!cmd) return;
 	cmd->_d3d_cmd_list->Close();
+}
+
+// PIX's encoding of an event's text: metadata 1 is a null-terminated ANSI
+// string (PIX_EVENT_ANSI_VERSION in pix3.h), which PIX and the debug layer
+// read without WinPixEventRuntime.
+static const UINT spudgpu_d3d12_pix_event_ansi = 1;
+
+void spudgpu_cmd_begin_debug_label(spudgpu_command_list cmd, const char *label) {
+	if (!cmd) return;
+	const char *text = label ? label : "";
+	cmd->_d3d_cmd_list->BeginEvent(spudgpu_d3d12_pix_event_ansi, text, (UINT)(strlen(text) + 1));
+}
+
+void spudgpu_cmd_end_debug_label(spudgpu_command_list cmd) {
+	if (!cmd) return;
+	cmd->_d3d_cmd_list->EndEvent();
 }
 void spudgpu_cmd_set_viewports(
     spudgpu_command_list cmd,

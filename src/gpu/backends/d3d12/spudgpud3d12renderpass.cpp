@@ -2,6 +2,7 @@
 #if SPUDGPU_COMPILE_D3D12_API
 
 #include "spudgpud3d12.hpp"
+#include "../../spudgpushared.h"
 #include <cstdio>
 #include <vector>
 
@@ -404,6 +405,20 @@ void spudgpu_get_image_buffer_copy_size(
 		*out_total_size = totalBytes;
 }
 
+SPUDRESULT spudgpu_get_image_buffer_copy_offset_alignment(
+    spudgpu_image image,
+    uint64_t *out_alignment) {
+	if (!image)
+		return SPUDRESULT_GPU_INVALID_IMAGE;
+	if (!out_alignment)
+		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
+	if (spudgpu___internal_format_block_bytes(image->_desc.format) == 0)
+		return SPUDRESULT_GPU_INVALID_FORMAT;
+	// A placed footprint's Offset, whatever the format.
+	*out_alignment = D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT;
+	return SPUD_SUCCESS;
+}
+
 void spudgpu_cmd_blit_image(
     spudgpu_command_list cmd,
     spudgpu_image src_image,
@@ -584,6 +599,14 @@ void spudgpu_cmd_begin_rendering(
 		    spudgpu_d3d12_store_op_to_ending_access(desc->depth_attachment.stencil_store_op);
 	}
 
+	// The pass's start, written before it begins; its end after it ends.
+	cmd->_end_timestamp_heap = nullptr;
+	if (desc->timestamp_set) {
+		cmdList->EndQuery(desc->timestamp_set->_d3d_query_heap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, desc->timestamp_begin_index);
+		cmd->_end_timestamp_heap  = desc->timestamp_set->_d3d_query_heap.Get();
+		cmd->_end_timestamp_index = desc->timestamp_end_index;
+	}
+
 	// D3D12 disallows ExecuteBundle (and several other calls) between
 	// BeginRenderPass/EndRenderPass -- it's a documented, hard restriction of
 	// the render-pass API, not a policy choice. A pass that's going to
@@ -630,9 +653,12 @@ void spudgpu_cmd_begin_rendering(
 void spudgpu_cmd_end_rendering(spudgpu_command_list cmd) {
 	if (!cmd)
 		return;
-	if (!cmd->_using_render_pass)
-		return;
-	cmd->_d3d_cmd_list->EndRenderPass();
+	if (cmd->_using_render_pass)
+		cmd->_d3d_cmd_list->EndRenderPass();
+	if (cmd->_end_timestamp_heap) {
+		cmd->_d3d_cmd_list->EndQuery(cmd->_end_timestamp_heap, D3D12_QUERY_TYPE_TIMESTAMP, cmd->_end_timestamp_index);
+		cmd->_end_timestamp_heap = nullptr;
+	}
 }
 
 // spudgpu_cmd_clear_color_attachment / spudgpu_cmd_clear_depth_attachment —

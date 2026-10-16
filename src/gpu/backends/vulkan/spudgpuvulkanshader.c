@@ -3,6 +3,7 @@
 
 #include "spudgpu.h"
 #include "spudgpuvulkan.h"
+#include "../../spudgpushared.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -70,6 +71,34 @@ VkResult spudgpuvulkan___create_shader_module_internal(
 // format for VkPipelineRenderingCreateInfo; depth-only formats must leave it
 // VK_FORMAT_UNDEFINED (Vulkan validation rejects a stencil format on a view
 // with no stencil aspect).
+// SPUDGPU_BLEND_FACTOR as VkBlendFactor, whose numbering differs.
+static VkBlendFactor spudgpuvulkan___blend_factor(SPUDGPU_BLEND_FACTOR factor) {
+	switch (factor) {
+	case SPUDGPU_BLEND_FACTOR_ZERO:
+		return VK_BLEND_FACTOR_ZERO;
+	case SPUDGPU_BLEND_FACTOR_ONE:
+		return VK_BLEND_FACTOR_ONE;
+	case SPUDGPU_BLEND_FACTOR_SRC_ALPHA:
+		return VK_BLEND_FACTOR_SRC_ALPHA;
+	case SPUDGPU_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA:
+		return VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+	case SPUDGPU_BLEND_FACTOR_DST_ALPHA:
+		return VK_BLEND_FACTOR_DST_ALPHA;
+	case SPUDGPU_BLEND_FACTOR_ONE_MINUS_DST_ALPHA:
+		return VK_BLEND_FACTOR_ONE_MINUS_DST_ALPHA;
+	case SPUDGPU_BLEND_FACTOR_SRC_COLOR:
+		return VK_BLEND_FACTOR_SRC_COLOR;
+	case SPUDGPU_BLEND_FACTOR_ONE_MINUS_SRC_COLOR:
+		return VK_BLEND_FACTOR_ONE_MINUS_SRC_COLOR;
+	case SPUDGPU_BLEND_FACTOR_DST_COLOR:
+		return VK_BLEND_FACTOR_DST_COLOR;
+	case SPUDGPU_BLEND_FACTOR_ONE_MINUS_DST_COLOR:
+		return VK_BLEND_FACTOR_ONE_MINUS_DST_COLOR;
+	default:
+		return VK_BLEND_FACTOR_ZERO;
+	}
+}
+
 static int spudgpuvulkan___format_has_stencil(VkFormat fmt) {
 	switch (fmt) {
 	case VK_FORMAT_D16_UNORM_S8_UINT:
@@ -161,6 +190,9 @@ SPUDRESULT spudgpu_create_shader_pipeline(
 		return SPUDRESULT_GPU_VERTEX_AND_FRAGMENT_SHADER_REQUIRED;
 	if (desc->vertex_module && desc->mesh_module)
 		return SPUDRESULT_GPU_INVALID_SHADER_STAGE;
+	SPUDRESULT outputs = spudgpu___internal_check_pipeline_outputs(desc, &device->_properties);
+	if (outputs != SPUD_SUCCESS)
+		return outputs;
 
 	spudgpu_shader_pipeline_vulkan result = {0};
 	result._device                        = *device;
@@ -336,7 +368,12 @@ SPUDRESULT spudgpu_create_shader_pipeline(
 	rasterizer.frontFace       = desc->front_face_ccw
 	                                 ? VK_FRONT_FACE_COUNTER_CLOCKWISE
 	                                 : VK_FRONT_FACE_CLOCKWISE;
-	rasterizer.depthBiasEnable = VK_FALSE;
+	// All three 0 is no bias (spudgpu.h). A clamp alone biases nothing.
+	rasterizer.depthBiasEnable =
+	    (desc->depth_bias_constant != 0 || desc->depth_bias_slope != 0.0f) ? VK_TRUE : VK_FALSE;
+	rasterizer.depthBiasConstantFactor = (float)desc->depth_bias_constant;
+	rasterizer.depthBiasSlopeFactor    = desc->depth_bias_slope;
+	rasterizer.depthBiasClamp          = desc->depth_bias_clamp;
 
 	// ------------------------------------------------------------------
 	// 6. Multisampling  (1× — no MSAA for now)
@@ -362,31 +399,33 @@ SPUDRESULT spudgpu_create_shader_pipeline(
 	depthStencil.stencilTestEnable     = VK_FALSE;
 
 	// ------------------------------------------------------------------
-	// 8. Colour blend attachment  (standard alpha blending or opaque)
+	// 8. Colour blend attachments, one for each colour attachment, from
+	// the caller's factors and ops (SPUDGPU_BLEND_OP is VkBlendOp's
+	// numbering; SPUDGPU_BLEND_FACTOR is not VkBlendFactor's).
 	// ------------------------------------------------------------------
-	VkPipelineColorBlendAttachmentState colorBlendAttachment = {0};
-	colorBlendAttachment.colorWriteMask =
-	    VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
-	    VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
-	if (desc->blend_attachment.blend_enable) {
-		colorBlendAttachment.blendEnable         = VK_TRUE;
-		colorBlendAttachment.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
-		colorBlendAttachment.dstColorBlendFactor =
-		    VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
-		colorBlendAttachment.colorBlendOp        = VK_BLEND_OP_ADD;
-		colorBlendAttachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
-		colorBlendAttachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
-		colorBlendAttachment.alphaBlendOp        = VK_BLEND_OP_ADD;
-	} else {
-		colorBlendAttachment.blendEnable = VK_FALSE;
+	VkPipelineColorBlendAttachmentState colorBlendAttachments[SPUDGPU_MAX_COLOR_ATTACHMENTS] = {0};
+	for (uint32_t i = 0; i < desc->color_attachment_count; ++i) {
+		const spudgpu_blend_attachment_desc *ba = &desc->blend_attachments[i];
+		VkPipelineColorBlendAttachmentState *out = &colorBlendAttachments[i];
+		out->colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+		                      VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+		out->blendEnable = ba->blend_enable ? VK_TRUE : VK_FALSE;
+		if (ba->blend_enable) {
+			out->srcColorBlendFactor = spudgpuvulkan___blend_factor(ba->src_color_blend_factor);
+			out->dstColorBlendFactor = spudgpuvulkan___blend_factor(ba->dst_color_blend_factor);
+			out->colorBlendOp        = (VkBlendOp)ba->color_blend_op;
+			out->srcAlphaBlendFactor = spudgpuvulkan___blend_factor(ba->src_alpha_blend_factor);
+			out->dstAlphaBlendFactor = spudgpuvulkan___blend_factor(ba->dst_alpha_blend_factor);
+			out->alphaBlendOp        = (VkBlendOp)ba->alpha_blend_op;
+		}
 	}
 
 	VkPipelineColorBlendStateCreateInfo colorBlending = {0};
 	colorBlending.sType =
 	    VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
 	colorBlending.logicOpEnable   = VK_FALSE;
-	colorBlending.attachmentCount = 1;
-	colorBlending.pAttachments    = &colorBlendAttachment;
+	colorBlending.attachmentCount = desc->color_attachment_count;
+	colorBlending.pAttachments    = colorBlendAttachments;
 
 	// ------------------------------------------------------------------
 	// 9. Dynamic state – viewport + scissor changed per frame via commands
@@ -460,8 +499,9 @@ SPUDRESULT spudgpu_create_shader_pipeline(
 	// Vulkan requires these to match whatever's actually bound at
 	// spudgpu_cmd_begin_rendering time (see spudgpu.h's rendering section).
 	// ------------------------------------------------------------------
-	VkFormat color_format =
-	    convert_spud_to_vulkan_format((VkFormat)desc->color_attachment_format);
+	VkFormat color_formats[SPUDGPU_MAX_COLOR_ATTACHMENTS] = {0};
+	for (uint32_t i = 0; i < desc->color_attachment_count; ++i)
+		color_formats[i] = convert_spud_to_vulkan_format(desc->color_attachment_formats[i]);
 	VkFormat depth_format   = VK_FORMAT_UNDEFINED;
 	VkFormat stencil_format = VK_FORMAT_UNDEFINED;
 	if (desc->depth_format != SPUDGPU_FORMAT_UNKNOWN) {
@@ -472,8 +512,8 @@ SPUDRESULT spudgpu_create_shader_pipeline(
 
 	VkPipelineRenderingCreateInfo renderingInfo = {0};
 	renderingInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
-	renderingInfo.colorAttachmentCount    = 1;
-	renderingInfo.pColorAttachmentFormats = &color_format;
+	renderingInfo.colorAttachmentCount    = desc->color_attachment_count;
+	renderingInfo.pColorAttachmentFormats = color_formats;
 	renderingInfo.depthAttachmentFormat   = depth_format;
 	renderingInfo.stencilAttachmentFormat = stencil_format;
 

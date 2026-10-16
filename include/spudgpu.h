@@ -221,6 +221,8 @@ typedef struct spudgpu_surface_t *spudgpu_surface;
 typedef struct spudgpu_semaphore_t *spudgpu_semaphore;
 /** Opaque handle to a fence, for CPU-to-GPU synchronization. */
 typedef struct spudgpu_fence_t *spudgpu_fence;
+/** Opaque handle to a set of GPU timestamps, written as rendering passes start and end. */
+typedef struct spudgpu_timestamp_set_t *spudgpu_timestamp_set;
 /** Opaque handle to a descriptor set layout. */
 typedef struct spudgpu_descriptor_set_layout_t *spudgpu_descriptor_set_layout;
 /** Opaque handle to a descriptor pool. */
@@ -450,6 +452,37 @@ typedef struct SPUDGPU_DEVICE_PROPERTIES {
 	 * `MTLStorageModePrivate` only.
 	 */
 	bool mappable_heaps;
+	/**
+	 * Whether a pipeline may clamp its depth bias
+	 * (spudgpu_shader_pipeline_desc::depth_bias_clamp other than 0). False
+	 * means spudgpu_create_shader_pipeline() refuses such a pipeline with
+	 * SPUDRESULT_GPU_DEPTH_BIAS_CLAMP_NOT_SUPPORTED.
+	 *
+	 * Vulkan: `VkPhysicalDeviceFeatures::depthBiasClamp`, which is then
+	 * enabled on the device. D3D12 and Metal: always true.
+	 */
+	bool depth_bias_clamp;
+	/**
+	 * Whether a pipeline's color attachments may blend differently from
+	 * each other (spudgpu_shader_pipeline_desc::blend_attachments entries
+	 * that differ). False means spudgpu_create_shader_pipeline() refuses
+	 * such a pipeline with SPUDRESULT_GPU_INDEPENDENT_BLEND_NOT_SUPPORTED.
+	 *
+	 * Vulkan: `VkPhysicalDeviceFeatures::independentBlend`, which is then
+	 * enabled on the device. D3D12 and Metal: always true.
+	 */
+	bool independent_blend;
+	/**
+	 * Whether a rendering pass can write timestamps as it starts and ends
+	 * (spudgpu_create_timestamp_set()). False means
+	 * spudgpu_create_timestamp_set() returns
+	 * SPUDRESULT_GPU_TIMESTAMPS_NOT_SUPPORTED.
+	 *
+	 * Vulkan: the graphics queue family has `timestampValidBits` above 0.
+	 * D3D12: always true. Metal: the device has the timestamp counter set
+	 * and `supportsCounterSampling:MTLCounterSamplingPointAtStageBoundary`.
+	 */
+	bool pass_timestamps;
 } SPUDGPU_DEVICE_PROPERTIES;
 
 /**
@@ -726,6 +759,21 @@ void spudgpu_destroy_command_allocator(spudgpu_command_allocator allocator);
  * @brief Resets a command allocator so its memory can be recorded into
  * again.
  *
+ * Until an allocator is reset, every recording made into it keeps the
+ * memory it took, on a backend that pools command memory in the allocator
+ * (D3D12; Vulkan's pool with its buffers reset one at a time). Opening a
+ * command list again does not give that memory back. A caller that records
+ * every frame resets each allocator once the GPU is done with it, or memory
+ * grows for as long as the allocator lives.
+ *
+ * Two rules hold on every backend:
+ *
+ * - Reset only when no recording made into the allocator is still
+ *   executing on the GPU, and no command list of the allocator is open for
+ *   recording.
+ * - A recording made into the allocator before the reset must not be
+ *   submitted after it. Open the list and record again.
+ *
  * @param[in] allocator Allocator to reset.
  *
  * @retval SPUD_SUCCESS The allocator was reset.
@@ -774,6 +822,10 @@ void spudgpu_destroy_command_list(spudgpu_command_list cmd);
  * time.
  *
  * @warning Submitting one recording a second time is undefined behavior.
+ *
+ * @warning Do not open a list while its last recording may still be
+ * executing on the GPU: Vulkan cannot reset a command buffer that is
+ * pending. To record while that one runs, record into another list.
  *
  * @param[in] cmd Command list to open.
  */
@@ -3721,6 +3773,12 @@ enum {
 #define SPUDGPU_MAX_PUSH_CONSTANT_RANGES 4
 
 /**
+ * @brief Upper bound on simultaneous color attachments: in one rendering
+ * pass, and in one pipeline's spudgpu_shader_pipeline_desc.
+ */
+#define SPUDGPU_MAX_COLOR_ATTACHMENTS 8
+
+/**
  * @brief One vertex attribute: where it sits in a vertex and which shader
  * input it feeds.
  */
@@ -4025,6 +4083,39 @@ typedef struct spudgpu_shader_pipeline_desc {
 	 */
 	bool wireframe;
 
+	/**
+	 * Depth bias, added to each fragment's depth before the depth test and
+	 * the depth write: what keeps a shadow map's surfaces from shadowing
+	 * themselves. The bias is
+	 *
+	 *     depth_bias_constant * r + depth_bias_slope * m
+	 *
+	 * clamped to #depth_bias_clamp, where m is the triangle's greatest depth
+	 * slope and r the smallest difference the depth format resolves. All
+	 * three 0 is no bias. One rule holds on every backend: for a UNORM depth
+	 * format r is 1 / 2^bits; for a float format each graphics API derives
+	 * it from the triangle's exponent in its own way, so the same constant
+	 * may move a float depth by a different amount per backend. What a
+	 * bias does to line and point primitives differs between the APIs and
+	 * is undefined here: bias triangles.
+	 *
+	 * An integer because D3D12's constant is one. Vulkan:
+	 * `VkPipelineRasterizationStateCreateInfo::depthBias*`. D3D12:
+	 * `D3D12_RASTERIZER_DESC::DepthBias`, `SlopeScaledDepthBias`,
+	 * `DepthBiasClamp`. Metal: `setDepthBias:slopeScale:clamp:` on the
+	 * encoder, set by spudgpu_cmd_bind_pipeline().
+	 */
+	int32_t depth_bias_constant;
+	/** The depth slope's factor in the bias. See #depth_bias_constant. */
+	float depth_bias_slope;
+	/**
+	 * The largest bias, if positive, or the smallest, if negative; 0 for no
+	 * clamp. Anything but 0 needs
+	 * SPUDGPU_DEVICE_PROPERTIES::depth_bias_clamp. See
+	 * #depth_bias_constant.
+	 */
+	float depth_bias_clamp;
+
 	// -----------------------------------------------------------------------
 	// Depth / stencil
 	// -----------------------------------------------------------------------
@@ -4062,20 +4153,33 @@ typedef struct spudgpu_shader_pipeline_desc {
 	// -----------------------------------------------------------------------
 
 	/**
-	 * Per-attachment blend configuration.
+	 * Blend configuration for each color attachment: entry i for
+	 * #color_attachment_formats[i]. Only the first #color_attachment_count
+	 * are read. Entries that differ from entry 0 need
+	 * SPUDGPU_DEVICE_PROPERTIES::independent_blend.
 	 * @see spudgpu_blend_attachment_desc
 	 */
-	spudgpu_blend_attachment_desc blend_attachment;
+	spudgpu_blend_attachment_desc blend_attachments[SPUDGPU_MAX_COLOR_ATTACHMENTS];
 
 	// -----------------------------------------------------------------------
 	// Attachment formats
 	// -----------------------------------------------------------------------
 
 	/**
-	 * Pixel format of the color render target this pipeline will write to.
+	 * Pixel format of each color attachment the pipeline writes, in the
+	 * order of the fragment shader's outputs (location i writes attachment
+	 * i) and of spudgpu_rendering_begin_desc::color_attachments in a pass
+	 * that draws with it, which has the same count and formats. Only the
+	 * first #color_attachment_count are read.
 	 * @see SPUDGPU_FORMAT
 	 */
-	SPUDGPU_FORMAT color_attachment_format;
+	SPUDGPU_FORMAT color_attachment_formats[SPUDGPU_MAX_COLOR_ATTACHMENTS];
+	/**
+	 * Number of valid entries in #color_attachment_formats and
+	 * #blend_attachments. 0 for a pipeline that writes depth only. At most
+	 * SPUDGPU_MAX_COLOR_ATTACHMENTS.
+	 */
+	uint32_t color_attachment_count;
 
 	/**
 	 * Pixel format of the depth attachment. Set to SPUDGPU_FORMAT_UNKNOWN for
@@ -4135,6 +4239,16 @@ typedef struct spudgpu_shader_pipeline_desc {
  *         `desc->mesh_module` are.
  * @retval SPUDRESULT_GPU_INVALID_SHADER_STAGE `desc->vertex_module` and
  *         `desc->mesh_module` are both set.
+ * @retval SPUDRESULT_GPU_TOO_MANY_COLOR_ATTACHMENTS
+ *         `desc->color_attachment_count` is above
+ *         SPUDGPU_MAX_COLOR_ATTACHMENTS.
+ * @retval SPUDRESULT_GPU_DEPTH_BIAS_CLAMP_NOT_SUPPORTED
+ *         `desc->depth_bias_clamp` is not 0 and the device can't clamp
+ *         (SPUDGPU_DEVICE_PROPERTIES::depth_bias_clamp).
+ * @retval SPUDRESULT_GPU_INDEPENDENT_BLEND_NOT_SUPPORTED Two of the first
+ *         `desc->color_attachment_count` blend attachments differ and the
+ *         device can't blend them independently
+ *         (SPUDGPU_DEVICE_PROPERTIES::independent_blend).
  * @return Another SPUDRESULT if the backend fails, such as
  *         SPUDRESULT_OUT_OF_MEMORY or SPUDRESULT_API_SPECIFIC_FAILURE.
  *
@@ -4970,6 +5084,32 @@ void spudgpu_get_image_buffer_copy_size(
     uint64_t *out_row_pitch,
     uint64_t *out_total_size);
 
+/**
+ * @brief Gives the alignment the buffer offset of a copy between a buffer
+ * and an image must have.
+ *
+ * spudgpu_image_buffer_copy_desc::buffer_offset of a copy to or from `image`
+ * must be a multiple of the value returned, so a caller that places several
+ * copies in one buffer knows where each may start. The value is the
+ * requirement and no more: an offset of 0 always meets it.
+ *
+ * It depends on the image's format and the graphics API, and is not always a
+ * power of two (a 12-byte texel can give 12).
+ *
+ * @param[in]  image         Image the copy reads or writes.
+ * @param[out] out_alignment Receives the alignment, in bytes.
+ *
+ * @retval SPUD_SUCCESS `out_alignment` was written.
+ * @retval SPUDRESULT_GPU_INVALID_IMAGE `image` is NULL.
+ * @retval SPUDRESULT_NULL_OUTPUT_PARAMETER `out_alignment` is NULL.
+ * @retval SPUDRESULT_GPU_INVALID_FORMAT The image's format has no whole
+ *         number of bytes to a texel or block (see
+ *         spudgpu_format_bit_count()), so no copy of it has a known layout.
+ */
+SPUDRESULT spudgpu_get_image_buffer_copy_offset_alignment(
+    spudgpu_image image,
+    uint64_t *out_alignment);
+
 // ============================================================================
 //  Image Blit
 //  Maps to: vkCmdBlitImage (Vulkan)
@@ -5068,9 +5208,6 @@ enum {
 	/** Discard the result; the driver may skip the writeback. */
 	SPUDGPU_STORE_OP_DONT_CARE,
 };
-
-/** Upper bound on simultaneous color attachments in one rendering pass. */
-#define SPUDGPU_MAX_COLOR_ATTACHMENTS 8
 
 /**
  * @brief One color attachment bound for a rendering pass.
@@ -5201,6 +5338,22 @@ typedef struct spudgpu_rendering_begin_desc {
 	 * without a bundle/secondary-command-buffer distinction.
 	 */
 	bool will_execute_bundles;
+
+	/**
+	 * A timestamp set the pass writes two timestamps into: one as its
+	 * first work starts and one as its last work ends, or NULL for none.
+	 * The set was created for the queue the command list is submitted on,
+	 * and both entries were reset since they were last written
+	 * (spudgpu_cmd_reset_timestamps()). See "Timestamps".
+	 */
+	spudgpu_timestamp_set timestamp_set;
+	/** The entry written as the pass starts. Read only with #timestamp_set. */
+	uint32_t timestamp_begin_index;
+	/**
+	 * The entry written as the pass ends, at spudgpu_cmd_end_rendering().
+	 * Not #timestamp_begin_index. Read only with #timestamp_set.
+	 */
+	uint32_t timestamp_end_index;
 } spudgpu_rendering_begin_desc;
 
 /**
@@ -5309,6 +5462,179 @@ void spudgpu_cmd_clear_depth_attachment(
 #define SPUDGPU_EXT_BUNDLES 0
 #endif
 
+// ============================================================================
+//  Debug labels
+// ============================================================================
+
+/**
+ * @brief Opens a labelled region of a command list, for a capture or
+ * profiling tool to show.
+ *
+ * A label changes nothing the GPU does. Where no tool reads it, or the
+ * graphics API offers no way to record it, the call does nothing.
+ *
+ * Two rules hold on every backend:
+ *
+ * - Regions nest. spudgpu_cmd_end_debug_label() closes the region opened
+ *   last, and every region opened in a command list is closed in it.
+ * - A region opened inside a rendering pass closes inside the same pass,
+ *   and one opened outside every pass closes outside every pass, with any
+ *   pass inside it wholly inside it.
+ *
+ * Vulkan: `vkCmdBeginDebugUtilsLabelEXT`, when the instance has
+ * `VK_EXT_debug_utils` (spudgpu_create_instance() enables it wherever the
+ * Vulkan loader offers it). D3D12: `BeginEvent` in PIX's ANSI encoding.
+ * Metal: `pushDebugGroup:` on the render encoder inside a pass and on the
+ * command buffer outside one.
+ *
+ * @param[in] cmd   Command list being recorded.
+ * @param[in] label Null-terminated text. Only read during the call. NULL is
+ *                  taken as an empty label, so the region still opens.
+ */
+void spudgpu_cmd_begin_debug_label(
+    spudgpu_command_list cmd,
+    const char *label);
+
+/**
+ * @brief Closes the region spudgpu_cmd_begin_debug_label() opened last.
+ *
+ * @param[in] cmd Command list being recorded.
+ */
+void spudgpu_cmd_end_debug_label(spudgpu_command_list cmd);
+
+// ============================================================================
+//  Timestamps
+// ============================================================================
+
+/**
+ * @brief Creates a set of GPU timestamps, written as rendering passes start
+ * and end.
+ *
+ * A timestamp is written only at the start and the end of a rendering pass
+ * (spudgpu_rendering_begin_desc::timestamp_set), because that is what every
+ * backend can do: Apple GPUs sample their counters at the boundaries of a
+ * pass's stages and nowhere in between. One entry is one timestamp. The
+ * entries are used in this order on every backend:
+ *
+ * 1. spudgpu_cmd_reset_timestamps(), outside every pass, before a pass
+ *    writes them.
+ * 2. A pass writes them.
+ * 3. spudgpu_cmd_resolve_timestamps(), outside every pass, after the pass,
+ *    in the same command list or a later one on the same queue.
+ * 4. Once the submission that resolved them has finished, which is the
+ *    caller's to know (a fence), spudgpu_get_timestamps() reads them.
+ *
+ * An entry read without having been through those steps since it was last
+ * reset holds an undefined value.
+ *
+ * Vulkan: a `VK_QUERY_TYPE_TIMESTAMP` query pool. D3D12: a timestamp query
+ * heap and a readback buffer the resolve copies into. Metal: an
+ * `MTLCounterSampleBuffer` of the timestamp counter set, sampled at stage
+ * boundaries.
+ *
+ * @param[in]  device  Device to create the set on.
+ * @param[in]  queue   The queue the command lists that write and resolve
+ *                     the set are submitted on. D3D12 counts time per
+ *                     queue.
+ * @param[in]  count   Number of entries. Not 0.
+ * @param[out] out_set Receives the new set on success.
+ *
+ * @retval SPUD_SUCCESS The set was created.
+ * @retval SPUDRESULT_GPU_INVALID_DEVICE `device` is NULL.
+ * @retval SPUDRESULT_GPU_INVALID_COMMAND_QUEUE `queue` is NULL.
+ * @retval SPUDRESULT_ZERO_SIZE `count` is 0.
+ * @retval SPUDRESULT_NULL_OUTPUT_PARAMETER `out_set` is NULL.
+ * @retval SPUDRESULT_GPU_TIMESTAMPS_NOT_SUPPORTED The device can't write
+ *         timestamps at a pass's boundaries
+ *         (SPUDGPU_DEVICE_PROPERTIES::pass_timestamps).
+ * @return Another SPUDRESULT if the backend fails, such as
+ *         SPUDRESULT_OUT_OF_MEMORY or SPUDRESULT_API_SPECIFIC_FAILURE.
+ */
+SPUDRESULT spudgpu_create_timestamp_set(
+    spudgpu_device device,
+    spudgpu_command_queue queue,
+    uint32_t count,
+    spudgpu_timestamp_set *out_set);
+
+/**
+ * @brief Destroys a timestamp set.
+ *
+ * @warning Command lists that write or resolve it must have finished
+ * executing.
+ *
+ * @param[in] set Set to destroy. NULL does nothing.
+ */
+void spudgpu_destroy_timestamp_set(spudgpu_timestamp_set set);
+
+/**
+ * @brief Records the reset of entries of a timestamp set, before a pass
+ * writes them.
+ *
+ * Outside every rendering pass. Vulkan: `vkCmdResetQueryPool`. D3D12 and
+ * Metal have nothing to reset, and record nothing.
+ *
+ * @param[in] cmd   Command list being recorded.
+ * @param[in] set   Timestamp set.
+ * @param[in] first First entry.
+ * @param[in] count Number of entries, all below the set's count.
+ */
+void spudgpu_cmd_reset_timestamps(
+    spudgpu_command_list cmd,
+    spudgpu_timestamp_set set,
+    uint32_t first,
+    uint32_t count);
+
+/**
+ * @brief Records what makes written entries of a timestamp set readable by
+ * spudgpu_get_timestamps().
+ *
+ * Outside every rendering pass, after the passes that wrote them. D3D12:
+ * `ResolveQueryData` into the set's readback buffer. Vulkan and Metal read
+ * the results where they were written, and record nothing.
+ *
+ * @param[in] cmd   Command list being recorded.
+ * @param[in] set   Timestamp set.
+ * @param[in] first First entry.
+ * @param[in] count Number of entries, all below the set's count.
+ */
+void spudgpu_cmd_resolve_timestamps(
+    spudgpu_command_list cmd,
+    spudgpu_timestamp_set set,
+    uint32_t first,
+    uint32_t count);
+
+/**
+ * @brief Reads resolved entries of a timestamp set, in nanoseconds.
+ *
+ * Call once the submission that resolved them has finished. The values are
+ * nanoseconds from an origin of the backend's: only the difference between
+ * two entries of one set means anything, such as a pass's end less its
+ * start. Vulkan: the ticks times `VkPhysicalDeviceLimits::timestampPeriod`.
+ * D3D12: the ticks over the queue's `GetTimestampFrequency`. Metal: the
+ * GPU's ticks set against the CPU's clock with `sampleTimestamps:` at the
+ * set's creation and at this call, as Apple describes for converting GPU
+ * timestamps.
+ *
+ * @param[in]  set     Timestamp set.
+ * @param[in]  first   First entry.
+ * @param[in]  count   Number of entries, all below the set's count.
+ * @param[out] out_ns  Receives `count` values.
+ *
+ * @retval SPUD_SUCCESS `out_ns` was written.
+ * @retval SPUDRESULT_GPU_INVALID_TIMESTAMP_SET `set` is NULL.
+ * @retval SPUDRESULT_ZERO_SIZE `count` is 0.
+ * @retval SPUDRESULT_INDEX_OUT_OF_RANGE An entry is at or past the set's
+ *         count.
+ * @retval SPUDRESULT_NULL_OUTPUT_PARAMETER `out_ns` is NULL.
+ * @return Another SPUDRESULT if the backend fails, such as
+ *         SPUDRESULT_API_SPECIFIC_FAILURE.
+ */
+SPUDRESULT spudgpu_get_timestamps(
+    spudgpu_timestamp_set set,
+    uint32_t first,
+    uint32_t count,
+    uint64_t *out_ns);
+
 #if SPUDGPU_EXT_BUNDLES
 
 /**
@@ -5323,8 +5649,14 @@ void spudgpu_cmd_clear_depth_attachment(
  * actually binds when the bundle is executed.
  */
 typedef struct spudgpu_bundle_inheritance_desc {
-	/** @see SPUDGPU_FORMAT */
-	SPUDGPU_FORMAT color_attachment_format;
+	/**
+	 * The pass's color attachment formats, in its order. Only the first
+	 * #color_attachment_count are read.
+	 * @see SPUDGPU_FORMAT
+	 */
+	SPUDGPU_FORMAT color_attachment_formats[SPUDGPU_MAX_COLOR_ATTACHMENTS];
+	/** Number of valid entries in #color_attachment_formats. */
+	uint32_t color_attachment_count;
 
 	/**
 	 * SPUDGPU_FORMAT_UNKNOWN for no depth/stencil attachment.

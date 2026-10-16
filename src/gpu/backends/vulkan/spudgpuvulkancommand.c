@@ -211,6 +211,23 @@ void spudgpu_end_command_list(spudgpu_command_list cmd) {
     vkEndCommandBuffer(cmd->_command_buffer_vk);
 }
 
+void spudgpu_cmd_begin_debug_label(spudgpu_command_list cmd, const char *label) {
+    if (!cmd) return;
+    PFN_vkCmdBeginDebugUtilsLabelEXT begin = cmd->_allocator._device._vkCmdBeginDebugUtilsLabelEXT;
+    if (!begin) return;
+    VkDebugUtilsLabelEXT info = {0};
+    info.sType      = VK_STRUCTURE_TYPE_DEBUG_UTILS_LABEL_EXT;
+    info.pLabelName = label ? label : "";
+    begin(cmd->_command_buffer_vk, &info);
+}
+
+void spudgpu_cmd_end_debug_label(spudgpu_command_list cmd) {
+    if (!cmd) return;
+    PFN_vkCmdEndDebugUtilsLabelEXT end = cmd->_allocator._device._vkCmdEndDebugUtilsLabelEXT;
+    if (!end) return;
+    end(cmd->_command_buffer_vk);
+}
+
 void spudgpu_cmd_set_viewports(
     spudgpu_command_list cmd,
     uint32_t first_viewport,

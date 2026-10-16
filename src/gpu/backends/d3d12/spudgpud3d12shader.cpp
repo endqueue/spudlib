@@ -3,6 +3,7 @@
 
 #include "spudgpu_d3d12_natives.h"
 #include "spudgpud3d12.hpp"
+#include "../../spudgpushared.h"
 
 #include <dxcapi.h>
 #include <spirv_hlsl.hpp>
@@ -55,6 +56,36 @@ static D3D12_BLEND spudgpu_d3d12_blend_factor(SPUDGPU_BLEND_FACTOR f) {
 	default:
 		return D3D12_BLEND_ZERO;
 	}
+}
+
+// The blend state of [desc]: a render target for each colour attachment.
+// IndependentBlendEnable only when they differ, which every D3D12 device
+// allows (SPUDGPU_DEVICE_PROPERTIES::independent_blend).
+static D3D12_BLEND_DESC spudgpu_d3d12___blend_desc(const spudgpu_shader_pipeline_desc *desc) {
+	D3D12_BLEND_DESC blendDesc       = {};
+	blendDesc.AlphaToCoverageEnable  = FALSE;
+	blendDesc.IndependentBlendEnable = FALSE;
+	for (uint32_t i = 1; i < desc->color_attachment_count; ++i)
+		if (!spudgpu___internal_blend_attachments_equal(&desc->blend_attachments[0], &desc->blend_attachments[i]))
+			blendDesc.IndependentBlendEnable = TRUE;
+	// With none, target 0 still has a valid state, unused.
+	const uint32_t count = desc->color_attachment_count ? desc->color_attachment_count : 1;
+	for (uint32_t i = 0; i < count; ++i) {
+		// SPUDGPU blend op + 1 == D3D12_BLEND_OP.
+		const spudgpu_blend_attachment_desc &ba = desc->blend_attachments[i];
+		D3D12_RENDER_TARGET_BLEND_DESC &rt      = blendDesc.RenderTarget[i];
+		rt.BlendEnable                          = ba.blend_enable ? TRUE : FALSE;
+		rt.LogicOpEnable                        = FALSE;
+		rt.SrcBlend                             = spudgpu_d3d12_blend_factor(ba.src_color_blend_factor);
+		rt.DestBlend                            = spudgpu_d3d12_blend_factor(ba.dst_color_blend_factor);
+		rt.BlendOp                              = (D3D12_BLEND_OP)(ba.color_blend_op + 1);
+		rt.SrcBlendAlpha                        = spudgpu_d3d12_blend_factor(ba.src_alpha_blend_factor);
+		rt.DestBlendAlpha                       = spudgpu_d3d12_blend_factor(ba.dst_alpha_blend_factor);
+		rt.BlendOpAlpha                         = (D3D12_BLEND_OP)(ba.alpha_blend_op + 1);
+		rt.LogicOp                              = D3D12_LOGIC_OP_NOOP;
+		rt.RenderTargetWriteMask                = D3D12_COLOR_WRITE_ENABLE_ALL;
+	}
+	return blendDesc;
 }
 
 static D3D_PRIMITIVE_TOPOLOGY spudgpu_d3d12_primitive_topology(
@@ -328,9 +359,9 @@ static SPUDRESULT spudgpu_d3d12___create_mesh_shader_pipeline(
 	    desc->wireframe ? D3D12_FILL_MODE_WIREFRAME : D3D12_FILL_MODE_SOLID;
 	rastDesc.CullMode              = (D3D12_CULL_MODE)(desc->cull_mode + 1);
 	rastDesc.FrontCounterClockwise = desc->front_face_ccw ? TRUE : FALSE;
-	rastDesc.DepthBias             = D3D12_DEFAULT_DEPTH_BIAS;
-	rastDesc.DepthBiasClamp        = D3D12_DEFAULT_DEPTH_BIAS_CLAMP;
-	rastDesc.SlopeScaledDepthBias  = D3D12_DEFAULT_SLOPE_SCALED_DEPTH_BIAS;
+	rastDesc.DepthBias             = desc->depth_bias_constant;
+	rastDesc.DepthBiasClamp        = desc->depth_bias_clamp;
+	rastDesc.SlopeScaledDepthBias  = desc->depth_bias_slope;
 	rastDesc.DepthClipEnable       = TRUE;
 	rastDesc.MultisampleEnable     = FALSE;
 	rastDesc.AntialiasedLineEnable = FALSE;
@@ -352,31 +383,13 @@ static SPUDRESULT spudgpu_d3d12___create_mesh_shader_pipeline(
 	dsDesc.FrontFace        = noOp;
 	dsDesc.BackFace         = noOp;
 
-	const auto &ba             = desc->blend_attachment;
-	D3D12_BLEND_DESC blendDesc = {};
-	blendDesc.AlphaToCoverageEnable         = FALSE;
-	blendDesc.IndependentBlendEnable        = FALSE;
-	blendDesc.RenderTarget[0].BlendEnable   = ba.blend_enable ? TRUE : FALSE;
-	blendDesc.RenderTarget[0].LogicOpEnable = FALSE;
-	blendDesc.RenderTarget[0].SrcBlend =
-	    spudgpu_d3d12_blend_factor(ba.src_color_blend_factor);
-	blendDesc.RenderTarget[0].DestBlend =
-	    spudgpu_d3d12_blend_factor(ba.dst_color_blend_factor);
-	blendDesc.RenderTarget[0].BlendOp = (D3D12_BLEND_OP)(ba.color_blend_op + 1);
-	blendDesc.RenderTarget[0].SrcBlendAlpha =
-	    spudgpu_d3d12_blend_factor(ba.src_alpha_blend_factor);
-	blendDesc.RenderTarget[0].DestBlendAlpha =
-	    spudgpu_d3d12_blend_factor(ba.dst_alpha_blend_factor);
-	blendDesc.RenderTarget[0].BlendOpAlpha =
-	    (D3D12_BLEND_OP)(ba.alpha_blend_op + 1);
-	blendDesc.RenderTarget[0].LogicOp = D3D12_LOGIC_OP_NOOP;
-	blendDesc.RenderTarget[0].RenderTargetWriteMask =
-	    D3D12_COLOR_WRITE_ENABLE_ALL;
+	// Blend, one target for each colour attachment.
+	const D3D12_BLEND_DESC blendDesc = spudgpu_d3d12___blend_desc(desc);
 
 	D3D12_RT_FORMAT_ARRAY rtvFormats = {};
-	rtvFormats.NumRenderTargets = 1;
-	rtvFormats.RTFormats[0] =
-	    spudgpu_d3d12_get_dxgi_format(desc->color_attachment_format);
+	rtvFormats.NumRenderTargets = desc->color_attachment_count;
+	for (uint32_t i = 0; i < desc->color_attachment_count; ++i)
+		rtvFormats.RTFormats[i] = spudgpu_d3d12_get_dxgi_format(desc->color_attachment_formats[i]);
 
 	spudgpu_d3d12_mesh_pipeline_stream stream = {};
 	stream.pRootSignature = pResult->_d3d_root_signature.Get();
@@ -597,6 +610,9 @@ SPUDRESULT spudgpu_create_shader_pipeline(
 		return SPUDRESULT_GPU_VERTEX_AND_FRAGMENT_SHADER_REQUIRED;
 	if (desc->vertex_module && desc->mesh_module)
 		return SPUDRESULT_GPU_INVALID_SHADER_STAGE;
+	SPUDRESULT outputs = spudgpu___internal_check_pipeline_outputs(desc, &device->_properties);
+	if (outputs != SPUD_SUCCESS)
+		return outputs;
 
 	spudgpu_shader_pipeline_d3d12 *pResult =
 	    (spudgpu_shader_pipeline_d3d12 *)malloc(
@@ -660,9 +676,9 @@ SPUDRESULT spudgpu_create_shader_pipeline(
 	    desc->wireframe ? D3D12_FILL_MODE_WIREFRAME : D3D12_FILL_MODE_SOLID;
 	rastDesc.CullMode              = (D3D12_CULL_MODE)(desc->cull_mode + 1);
 	rastDesc.FrontCounterClockwise = desc->front_face_ccw ? TRUE : FALSE;
-	rastDesc.DepthBias             = D3D12_DEFAULT_DEPTH_BIAS;
-	rastDesc.DepthBiasClamp        = D3D12_DEFAULT_DEPTH_BIAS_CLAMP;
-	rastDesc.SlopeScaledDepthBias  = D3D12_DEFAULT_SLOPE_SCALED_DEPTH_BIAS;
+	rastDesc.DepthBias             = desc->depth_bias_constant;
+	rastDesc.DepthBiasClamp        = desc->depth_bias_clamp;
+	rastDesc.SlopeScaledDepthBias  = desc->depth_bias_slope;
 	rastDesc.DepthClipEnable       = TRUE;
 	rastDesc.MultisampleEnable     = FALSE;
 	rastDesc.AntialiasedLineEnable = FALSE;
@@ -685,27 +701,8 @@ SPUDRESULT spudgpu_create_shader_pipeline(
 	dsDesc.FrontFace        = noOp;
 	dsDesc.BackFace         = noOp;
 
-	// Blend  (SPUDGPU blend op + 1 == D3D12_BLEND_OP)
-	const auto &ba                          = desc->blend_attachment;
-	D3D12_BLEND_DESC blendDesc              = {};
-	blendDesc.AlphaToCoverageEnable         = FALSE;
-	blendDesc.IndependentBlendEnable        = FALSE;
-	blendDesc.RenderTarget[0].BlendEnable   = ba.blend_enable ? TRUE : FALSE;
-	blendDesc.RenderTarget[0].LogicOpEnable = FALSE;
-	blendDesc.RenderTarget[0].SrcBlend =
-	    spudgpu_d3d12_blend_factor(ba.src_color_blend_factor);
-	blendDesc.RenderTarget[0].DestBlend =
-	    spudgpu_d3d12_blend_factor(ba.dst_color_blend_factor);
-	blendDesc.RenderTarget[0].BlendOp = (D3D12_BLEND_OP)(ba.color_blend_op + 1);
-	blendDesc.RenderTarget[0].SrcBlendAlpha =
-	    spudgpu_d3d12_blend_factor(ba.src_alpha_blend_factor);
-	blendDesc.RenderTarget[0].DestBlendAlpha =
-	    spudgpu_d3d12_blend_factor(ba.dst_alpha_blend_factor);
-	blendDesc.RenderTarget[0].BlendOpAlpha =
-	    (D3D12_BLEND_OP)(ba.alpha_blend_op + 1);
-	blendDesc.RenderTarget[0].LogicOp = D3D12_LOGIC_OP_NOOP;
-	blendDesc.RenderTarget[0].RenderTargetWriteMask =
-	    D3D12_COLOR_WRITE_ENABLE_ALL;
+	// Blend, one target for each colour attachment.
+	const D3D12_BLEND_DESC blendDesc = spudgpu_d3d12___blend_desc(desc);
 
 	D3D_PRIMITIVE_TOPOLOGY topology = spudgpu_d3d12_primitive_topology(
 	    desc->primitive_topology, desc->patch_control_points);
@@ -746,9 +743,9 @@ SPUDRESULT spudgpu_create_shader_pipeline(
 	psoDesc.IBStripCutValue   = D3D12_INDEX_BUFFER_STRIP_CUT_VALUE_DISABLED;
 	psoDesc.PrimitiveTopologyType =
 	    spudgpu_d3d12_primitive_topology_type(desc->primitive_topology);
-	psoDesc.NumRenderTargets = 1;
-	psoDesc.RTVFormats[0] =
-	    spudgpu_d3d12_get_dxgi_format(desc->color_attachment_format);
+	psoDesc.NumRenderTargets = desc->color_attachment_count;
+	for (uint32_t i = 0; i < desc->color_attachment_count; ++i)
+		psoDesc.RTVFormats[i] = spudgpu_d3d12_get_dxgi_format(desc->color_attachment_formats[i]);
 	psoDesc.DSVFormat  = (desc->depth_format != SPUDGPU_FORMAT_UNKNOWN)
 	                         ? spudgpu_d3d12_get_dxgi_format(desc->depth_format)
 	                         : DXGI_FORMAT_UNKNOWN;

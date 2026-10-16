@@ -220,6 +220,12 @@ bool ___internal_spudgpu_d3d12_make_device_properties(
 	    SUCCEEDED(hr) && options.VPAndRTArrayIndexFromAnyShaderFeedingRasterizerSupportedWithoutGSEmulation;
 	// An ID3D12Heap can have the heap properties of every kind.
 	device->_properties.mappable_heaps = true;
+	// D3D12_RASTERIZER_DESC::DepthBiasClamp and
+	// D3D12_BLEND_DESC::IndependentBlendEnable are on every device.
+	device->_properties.depth_bias_clamp  = true;
+	device->_properties.independent_blend = true;
+	// A direct queue's command lists can write timestamps anywhere.
+	device->_properties.pass_timestamps = true;
 	return true;
 }
 SPUDRESULT spudgpu_enumerate_devices(

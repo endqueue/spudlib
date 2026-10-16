@@ -1,5 +1,6 @@
 
 #include "spudgpu.h"
+#include "spudgpushared.h"
 #include <string.h>
 
 #if __cplusplus
@@ -314,6 +315,18 @@ static const spudgpu_format_name_map spudgpu_format_names[] = {
 	{"BC7_UNORM", SPUDGPU_FORMAT_BC7_UNORM},
 	{"BC7_UNORM_SRGB", SPUDGPU_FORMAT_BC7_UNORM_SRGB},
 };
+
+uint32_t spudgpu___internal_format_block_bytes(SPUDGPU_FORMAT fmt) {
+	const uint32_t bits = spudgpu_format_bit_count(fmt);
+	// spudgpu_format_bit_count gives a block-compressed format's average
+	// over its 16 texels: bits * 16 / 8 bytes a block.
+	if ((fmt >= SPUDGPU_FORMAT_BC1_TYPELESS && fmt <= SPUDGPU_FORMAT_BC5_SNORM) ||
+	    (fmt >= SPUDGPU_FORMAT_BC6H_TYPELESS && fmt <= SPUDGPU_FORMAT_BC7_UNORM_SRGB))
+		return bits * 2;
+	if (bits % 8)
+		return 0;
+	return bits / 8;
+}
 
 SPUDGPU_FORMAT spudgpu_format_from_string(const char *fmt_str) {
 	if (fmt_str == NULL)

@@ -11,6 +11,7 @@
 #include "spudgpu.h"
 #include "spudcore.h"
 #include "spudgpumetal.h"
+#include "../../spudgpushared.h"
 #include <Metal/Metal.h>
 #include <stdio.h>
 
@@ -223,6 +224,23 @@ void spudgpu_get_image_buffer_copy_size(
 		*out_total_size = row_pitch * mip_height * mip_depth;
 }
 
+SPUDRESULT spudgpu_get_image_buffer_copy_offset_alignment(
+    spudgpu_image image,
+    uint64_t *out_alignment) {
+	if (!image)
+		return SPUDRESULT_GPU_INVALID_IMAGE;
+	if (!out_alignment)
+		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
+	spudgpu_image_metal *image_metal = (spudgpu_image_metal *)image;
+	const uint64_t block             = spudgpu___internal_format_block_bytes(image_metal->_desc.format);
+	if (block == 0)
+		return SPUDRESULT_GPU_INVALID_FORMAT;
+	// The blit encoder's sourceOffset/destinationOffset: a multiple of the
+	// pixel size, or of the block size for a compressed format.
+	*out_alignment = block;
+	return SPUD_SUCCESS;
+}
+
 void spudgpu_cmd_blit_image(
     spudgpu_command_list cmd,
     spudgpu_image src_image,
@@ -343,6 +361,18 @@ void spudgpu_cmd_begin_rendering(
 	pass_desc.renderTargetHeight = desc->height;
 	// 0 is Metal's own value for a pass that is not layered.
 	pass_desc.renderTargetArrayLength = desc->layer_count;
+
+	// The pass's start and end are the boundaries of its stages: the
+	// vertex stage's start and the fragment stage's end, which Apple GPUs
+	// sample and nothing in between (spudgpu.h, "Timestamps").
+	if (desc->timestamp_set) {
+		MTLRenderPassSampleBufferAttachmentDescriptor *sample = pass_desc.sampleBufferAttachments[0];
+		sample.sampleBuffer               = desc->timestamp_set->_sample_buffer_mtl;
+		sample.startOfVertexSampleIndex   = desc->timestamp_begin_index;
+		sample.endOfVertexSampleIndex     = MTLCounterDontSample;
+		sample.startOfFragmentSampleIndex = MTLCounterDontSample;
+		sample.endOfFragmentSampleIndex   = desc->timestamp_end_index;
+	}
 
 	// -renderCommandEncoderWithDescriptor: returns an autoreleased encoder
 	// (same as -nextDrawable in spudgpumetalswapchain.m) - retain it so it
