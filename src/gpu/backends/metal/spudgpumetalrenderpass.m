@@ -379,6 +379,9 @@ void spudgpu_cmd_begin_rendering(
 	// survives past this call, to be released in spudgpu_cmd_end_rendering.
 	id<MTLRenderCommandEncoder> encoder = [cmd_metal->_command_buffer_mtl renderCommandEncoderWithDescriptor:pass_desc];
 	cmd_metal->_active_render_encoder   = [encoder retain];
+	cmd_metal->_encoder_pipeline_state_mtl      = nil;
+	cmd_metal->_encoder_depth_stencil_state_mtl = nil;
+	cmd_metal->_encoder_rasterizer_set          = false;
 }
 
 void spudgpu_cmd_end_rendering(spudgpu_command_list cmd) {

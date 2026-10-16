@@ -1,7 +1,8 @@
 //
 // SpudGPU Metal backend - timestamp sets: an MTLCounterSampleBuffer of the
 // timestamp counter set, sampled at a pass's stage boundaries
-// (spudgpumetalrenderpass.m) and resolved on the CPU. Written, not run.
+// (spudgpumetalrenderpass.m) and resolved on the CPU. Run on an Apple M5 Pro
+// by aprend_gpu_tests (2026-10-16).
 //
 
 #if SPUDGPU_COMPILE_METAL_API
@@ -14,13 +15,15 @@
 #include <stdlib.h>
 
 id<MTLCounterSet> spudgpumetal___internal_timestamp_counter_set(id<MTLDevice> device) {
-	// counterSets is autoreleased, and a caller in plain C may have no pool.
-	// The set found is the device's, and outlives the pool.
+	// counterSets is autoreleased, and a caller in plain C may have no pool,
+	// so the lookup drains a pool of its own. The array and its counter sets
+	// are made for the call and freed with that pool, so the set found is
+	// retained before it drains.
 	id<MTLCounterSet> found = nil;
 	@autoreleasepool {
 		for (id<MTLCounterSet> counter_set in device.counterSets)
-			if ([counter_set.name isEqualToString:MTLCommonCounterSetTimestamp])
-				found = counter_set;
+			if (!found && [counter_set.name isEqualToString:MTLCommonCounterSetTimestamp])
+				found = [counter_set retain];
 	}
 	return found;
 }
@@ -47,7 +50,9 @@ SPUDRESULT spudgpu_create_timestamp_set(
 		return SPUDRESULT_OUT_OF_MEMORY;
 
 	MTLCounterSampleBufferDescriptor *buffer_desc = [[MTLCounterSampleBufferDescriptor alloc] init];
-	buffer_desc.counterSet                        = spudgpumetal___internal_timestamp_counter_set(device_metal->_device_mtl);
+	id<MTLCounterSet> counter_set                 = spudgpumetal___internal_timestamp_counter_set(device_metal->_device_mtl);
+	buffer_desc.counterSet                        = counter_set;
+	[counter_set release];
 	buffer_desc.storageMode                       = MTLStorageModeShared;
 	buffer_desc.sampleCount                       = count;
 	NSError *error                                = nil;

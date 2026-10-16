@@ -518,10 +518,9 @@ SPUDRESULT spudgpu_destroy_instance(spudgpu_instance instance) {
     if (!instance) return SPUD_SUCCESS;
 
     // instance owns every spudgpu_device handed out by spudgpu_enumerate_devices
-    // (there is no public spudgpu_destroy_device) — _devices_pointer_array
-    // exists precisely to make that cleanup possible; see its declaration.
+    // (there is no public spudgpu_destroy_device), and the array of them.
     for (uint32_t i = 0; i < instance->_devices_count; i++) {
-        spudgpu_device_vulkan *dev = (spudgpu_device_vulkan *) instance->_devices_pointer_array[i];
+        spudgpu_device_vulkan *dev = (spudgpu_device_vulkan *) instance->_devices[i];
         if (!dev) continue;
         // Created for every device in spudgpu_enumerate_devices.
         spudgpuvulkan___destroy_bindless_state((spudgpu_device) dev);
@@ -531,7 +530,7 @@ SPUDRESULT spudgpu_destroy_instance(spudgpu_instance instance) {
 #endif
         free(dev);
     }
-    free(instance->_devices_pointer_array);
+    free(instance->_devices);
 
     vkDestroyInstance(instance->_instance_vk, NULL);
 #if _DEBUG
@@ -635,6 +634,12 @@ SPUDRESULT spudgpu_enumerate_devices(
     if (!instance) return SPUDRESULT_GPU_INVALID_INSTANCE;
     if (!ppOutputDevices) return SPUDRESULT_NULL_OUTPUT_PARAMETER;
     if (!pOutputDevicesCount) return SPUDRESULT_NULL_OUTPUT_PARAMETER;
+    // The devices are made once; a later call hands out the same array.
+    if (instance->_devices) {
+        *ppOutputDevices = instance->_devices;
+        *pOutputDevicesCount = instance->_devices_count;
+        return SPUD_SUCCESS;
+    }
 
     uint32_t deviceCount = 0;
     vkEnumeratePhysicalDevices(instance->_instance_vk, &deviceCount, NULL);
@@ -645,13 +650,17 @@ SPUDRESULT spudgpu_enumerate_devices(
     VkPhysicalDevice *physicalDevices = malloc(sizeof(VkPhysicalDevice) * deviceCount);
     vkEnumeratePhysicalDevices(instance->_instance_vk, &deviceCount, physicalDevices);
 
-    // Finally initialize the Vulkan logical devices and gather them.
-    *ppOutputDevices = malloc(sizeof(spudgpu_device) * deviceCount);
-    *pOutputDevicesCount = deviceCount;
-
-    // Instance needs to keep track for memory management.
-    instance->_devices_pointer_array = malloc(sizeof(uint64_t) * deviceCount);
+    // Finally initialize the Vulkan logical devices and gather them. The
+    // array is the instance's, and the caller is handed it: the devices and
+    // the array are freed by spudgpu_destroy_instance.
+    instance->_devices = calloc(deviceCount, sizeof(spudgpu_device));
+    if (!instance->_devices) {
+        free(physicalDevices);
+        return SPUDRESULT_OUT_OF_MEMORY;
+    }
     instance->_devices_count = deviceCount;
+    *ppOutputDevices = instance->_devices;
+    *pOutputDevicesCount = deviceCount;
 
     for (size_t i = 0; i < deviceCount; i++) {
         spudgpu_device_vulkan *pDeviceVulkan = malloc(sizeof(spudgpu_device_vulkan));
@@ -673,10 +682,7 @@ SPUDRESULT spudgpu_enumerate_devices(
         // snapshot) — see spudgpuvulkandescriptors.c's bindless section.
         spudgpuvulkan___ensure_bindless_state(pDeviceVulkan);
 
-        (*ppOutputDevices)[i] = (spudgpu_device) pDeviceVulkan;
-
-        // Instance needs to keep track for memory management.
-        instance->_devices_pointer_array[i] = (uint64_t) (*ppOutputDevices)[i];
+        instance->_devices[i] = (spudgpu_device) pDeviceVulkan;
     }
 
     free(physicalDevices);

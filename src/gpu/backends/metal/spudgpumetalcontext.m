@@ -51,7 +51,7 @@ SPUDRESULT spudgpu_destroy_instance(spudgpu_instance instance) {
 	// instance owns every spudgpu_device handed out by spudgpu_enumerate_devices
 	// (there is no public spudgpu_destroy_device) - mirrors the Vulkan backend.
 	for (uint32_t i = 0; i < instance->_devices_count; i++) {
-		spudgpu_device_metal *device = (spudgpu_device_metal *) instance->_devices_pointer_array[i];
+		spudgpu_device_metal *device = (spudgpu_device_metal *) instance->_devices[i];
 		if (!device) continue;
 		spudgpumetal___internal_destroy_command_queue_family(device->_cmd_queues_direct);
 		spudgpumetal___internal_destroy_command_queue_family(device->_cmd_queues_copy);
@@ -62,7 +62,7 @@ SPUDRESULT spudgpu_destroy_instance(spudgpu_instance instance) {
 #endif
 		free(device);
 	}
-	free(instance->_devices_pointer_array);
+	free(instance->_devices);
 #if _DEBUG
 	free((void *)instance->_debug_name);
 #endif
@@ -119,9 +119,10 @@ static void spudgpumetal___internal_make_device_properties(
 	device->_properties.max_draw_indirect_count = UINT32_MAX;
 	// A pass's timestamps are samples of the timestamp counter set at its
 	// stage boundaries.
+	id<MTLCounterSet> timestamp_counter_set = spudgpumetal___internal_timestamp_counter_set(device->_device_mtl);
 	device->_properties.pass_timestamps =
-	    spudgpumetal___internal_timestamp_counter_set(device->_device_mtl) != nil &&
-	    [device->_device_mtl supportsCounterSampling:MTLCounterSamplingPointAtStageBoundary];
+	    timestamp_counter_set != nil && [device->_device_mtl supportsCounterSampling:MTLCounterSamplingPointAtStageBoundary];
+	[timestamp_counter_set release];
 }
 
 static SPUDRESULT spudgpumetal___internal_create_command_queue_family(
@@ -163,6 +164,12 @@ SPUDRESULT spudgpu_enumerate_devices(
     uint32_t *out_devices_count) {
 	if (!instance) return SPUDRESULT_GPU_INVALID_INSTANCE;
 	if (!out_devices || !out_devices_count) return SPUDRESULT_NULL_OUTPUT_PARAMETER;
+	// The devices are made once; a later call hands out the same array.
+	if (instance->_devices) {
+		*out_devices       = instance->_devices;
+		*out_devices_count = instance->_devices_count;
+		return SPUD_SUCCESS;
+	}
 
 	NSArray<id<MTLDevice> > *mtlDevices = MTLCopyAllDevices();
 	uint32_t deviceCount = (uint32_t) mtlDevices.count;
@@ -171,12 +178,16 @@ SPUDRESULT spudgpu_enumerate_devices(
 		return SPUDRESULT_GPU_DEVICE_ENUMERATION_FAILURE;
 	}
 
-	*out_devices = malloc(sizeof(spudgpu_device) * deviceCount);
-	*out_devices_count = deviceCount;
-
-	// Instance needs to keep track for memory management.
-	instance->_devices_pointer_array = malloc(sizeof(uint64_t) * deviceCount);
+	// The array is the instance's, and the caller is handed it: the
+	// devices and the array are freed by spudgpu_destroy_instance.
+	instance->_devices = calloc(deviceCount, sizeof(spudgpu_device));
+	if (!instance->_devices) {
+		[mtlDevices release];
+		return SPUDRESULT_OUT_OF_MEMORY;
+	}
 	instance->_devices_count = deviceCount;
+	*out_devices             = instance->_devices;
+	*out_devices_count       = deviceCount;
 
 	for (uint32_t i = 0; i < deviceCount; i++) {
 		spudgpu_device_metal *device = calloc(1, sizeof(spudgpu_device_metal));
@@ -194,10 +205,7 @@ SPUDRESULT spudgpu_enumerate_devices(
 			return queue_sr;
 		}
 
-		(*out_devices)[i] = (spudgpu_device) device;
-
-		// Instance needs to keep track for memory management.
-		instance->_devices_pointer_array[i] = (uint64_t) (*out_devices)[i];
+		instance->_devices[i] = (spudgpu_device) device;
 	}
 
 	[mtlDevices release];

@@ -244,8 +244,8 @@ not in each backend.
   `_open_list` and asserts in begin (bundle begin too) and in
   `spudgpu_reset_command_allocator`; end and destroy clear it. Vulkan's list
   holds its allocator by value, so it keeps `_debug_allocator` for this.
-  Added 2026-10-16; run on D3D12 and on Vulkan on Windows, Metal not
-  compiled.
+  Added 2026-10-16; run on D3D12 and on Vulkan on Windows, and on Metal
+  (`aprend_gpu_tests`, Debug), never fired.
 - **A buffer's memory is one `SPUDGPU_MEMORY_KIND`, a contract and not a
   set of Vulkan property bits.** `DEVICE`, `UPLOAD`, `READBACK` and
   `DEVICE_MAPPABLE` each say what the CPU and the GPU may do with the buffer
@@ -564,7 +564,18 @@ Xe and NVIDIA RTX A2000, validation layer clean), which found that the
 Vulkan backend passed a descriptor write's image layout and a descriptor set
 layout binding's stage flags to Vulkan untranslated; both are SpudGPU enum
 values and now go through `spud_layout_to_vk` and
-`spudgpuvulkan___shader_stages`.
+`spudgpuvulkan___shader_stages`. Metal ran the same tests on macOS the
+same day (Apple M5 Pro) under Metal API and shader validation with warnings
+fatal, clean after five fixes in the Metal backend: samplers now made with
+`supportArgumentBuffers`; a descriptor set bound only to the stages its
+bindings name (it was bound to vertex and fragment always); a pipeline's
+depth-stencil and rasterizer state set on the encoder only when they change
+(Metal shares one depth-stencil state between equal descriptors, and
+validation refuses setting a state again); the timestamp counter set
+retained out of the autorelease pool that looked it up, which had freed
+it; and the array of devices made once and owned by the instance on every
+backend (Vulkan and Metal leaked a copy to the caller, and made new devices
+on each call).
 
 - **Vulkan** — reference backend, plain C23, complete. Build against this first;
   D3D12 and Metal follow its shape.

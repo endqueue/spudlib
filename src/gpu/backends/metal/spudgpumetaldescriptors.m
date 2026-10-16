@@ -76,6 +76,9 @@ SPUDRESULT spudgpu_create_sampler(
 	sampler_desc.lodMinClamp           = desc->min_lod;
 	sampler_desc.lodMaxClamp           = desc->max_lod;
 	sampler_desc.maxAnisotropy         = desc->max_anisotropy > 1.0f ? (NSUInteger)desc->max_anisotropy : 1;
+	// Every descriptor set is an argument buffer, so any sampler may be
+	// encoded into one; Metal requires the sampler to say so at creation.
+	sampler_desc.supportArgumentBuffers = YES;
 
 	id<MTLSamplerState> state = [device_metal->_device_mtl newSamplerStateWithDescriptor:sampler_desc];
 	[sampler_desc release];
@@ -471,13 +474,31 @@ void spudgpu_cmd_bind_descriptor_sets(
 		if (!set_metal)
 			continue;
 
+		// Bound only to the stages the layout's bindings name, as Vulkan
+		// and D3D12 make a binding visible only to its stage_flags. Binding
+		// it to a stage whose function has no argument at the index is a
+		// Metal validation error.
+		const spudgpu_descriptor_set_layout_desc *layout_desc = &set_metal->_layout->_desc;
+		uint32_t set_stages                                     = 0;
+		for (uint32_t b = 0; b < layout_desc->binding_count; b++)
+			set_stages |= (uint32_t)layout_desc->bindings[b].stage_flags;
+		uint32_t non_fragment_flags = is_mesh_pipeline ? (SPUDGPU_SHADER_STAGE_MESH | SPUDGPU_SHADER_STAGE_TASK) : SPUDGPU_SHADER_STAGE_VERTEX;
+		bool to_non_fragment        = (set_stages & non_fragment_flags) != 0;
+		bool to_fragment            = (set_stages & SPUDGPU_SHADER_STAGE_FRAGMENT) != 0;
+		if (!to_non_fragment && !to_fragment)
+			continue;
+
 		uint32_t buffer_index = SPUDGPU_METAL_DESCRIPTOR_SET_BUFFER_INDEX_BASE + first_set + i;
-		if (is_mesh_pipeline) {
-			[cmd_metal->_active_render_encoder setMeshBuffer:set_metal->_argument_buffer_mtl offset:0 atIndex:buffer_index];
-		} else {
-			[cmd_metal->_active_render_encoder setVertexBuffer:set_metal->_argument_buffer_mtl offset:0 atIndex:buffer_index];
+		if (to_non_fragment) {
+			if (is_mesh_pipeline) {
+				[cmd_metal->_active_render_encoder setMeshBuffer:set_metal->_argument_buffer_mtl offset:0 atIndex:buffer_index];
+			} else {
+				[cmd_metal->_active_render_encoder setVertexBuffer:set_metal->_argument_buffer_mtl offset:0 atIndex:buffer_index];
+			}
 		}
-		[cmd_metal->_active_render_encoder setFragmentBuffer:set_metal->_argument_buffer_mtl offset:0 atIndex:buffer_index];
+		if (to_fragment)
+			[cmd_metal->_active_render_encoder setFragmentBuffer:set_metal->_argument_buffer_mtl offset:0 atIndex:buffer_index];
+		MTLRenderStages resident_stages = (to_non_fragment ? non_fragment_stage : 0) | (to_fragment ? MTLRenderStageFragment : 0);
 
 		// Every resource reached only indirectly through this argument
 		// buffer must be marked resident on this encoder - see
@@ -485,7 +506,7 @@ void spudgpu_cmd_bind_descriptor_sets(
 		for (uint32_t r = 0; r < set_metal->_tracked_resource_count; r++) {
 			[cmd_metal->_active_render_encoder useResource:set_metal->_tracked_resources_mtl[r]
 			                                          usage:set_metal->_tracked_resource_usages_mtl[r]
-			                                         stages:non_fragment_stage | MTLRenderStageFragment];
+			                                         stages:resident_stages];
 		}
 	}
 }

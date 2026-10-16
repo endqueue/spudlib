@@ -244,8 +244,12 @@ SPUDRESULT spudgpu_enumerate_devices(
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
 	if (!pOutputDevicesCount)
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
-	if (instance->_gpu_devices_enumerated)
+	// The devices are made once; a later call hands out the same array.
+	if (instance->_gpu_devices_enumerated) {
+		*pOutputDevicesCount = instance->_gpu_device_count;
+		*ppOutputDevices     = instance->_gpu_devices;
 		return SPUD_SUCCESS;
+	}
 
 	SPUDRESULT sr = SPUD_SUCCESS;
 

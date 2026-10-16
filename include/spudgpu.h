@@ -310,8 +310,10 @@ SPUDRESULT spudgpu_destroy_instance(spudgpu_instance instance);
  * @brief Lists the GPU devices available to an instance.
  *
  * No device is chosen for the caller; inspect each one with
- * spudgpu_get_device_properties() and pick. The devices belong to the instance
- * and are released by spudgpu_destroy_instance().
+ * spudgpu_get_device_properties() and pick. The devices and the array of
+ * them belong to the instance and are released by spudgpu_destroy_instance();
+ * the caller frees neither. The devices are made by the first call, and a
+ * later call hands out the same array.
  *
  * @param[in]  instance          Instance to enumerate devices through.
  * @param[out] out_devices       Receives a pointer to an array of device

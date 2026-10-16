@@ -237,8 +237,8 @@ impl Instance {
         }
 
         // Wrap each raw pointer as a Device.
-        // The C implementation returns a contiguous malloc'd array,
-        // so we index into it directly.
+        // The array belongs to the instance, which frees it, so the
+        // handles are copied out of it and it is never freed here.
         let devices = (0..device_count as usize)
             .map(|i| Device(unsafe { *raw_devices.add(i) }))
             .collect();

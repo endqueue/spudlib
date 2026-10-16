@@ -678,32 +678,48 @@ void spudgpu_cmd_bind_pipeline(
 	cmd_list_metal->_bound_pipeline                = (struct spudgpu_shader_pipeline_t *)pipeline_metal;
 
 	if (cmd_list_metal->_active_render_encoder) {
-		[cmd_list_metal->_active_render_encoder setRenderPipelineState:pipeline_metal->_render_pipeline_state_mtl];
+		// Each state is set only if the encoder doesn't have it already;
+		// see _encoder_depth_stencil_state_mtl.
+		if (cmd_list_metal->_encoder_pipeline_state_mtl != pipeline_metal->_render_pipeline_state_mtl) {
+			[cmd_list_metal->_active_render_encoder setRenderPipelineState:pipeline_metal->_render_pipeline_state_mtl];
+			cmd_list_metal->_encoder_pipeline_state_mtl = pipeline_metal->_render_pipeline_state_mtl;
+		}
 		// Vulkan/D3D12 bake depth/stencil test config into the same
 		// monolithic pipeline object as everything else; Metal keeps it as
 		// a wholly separate native object (see spudgpu_create_shader_pipeline
 		// in spudgpumetalshader.m), bound alongside the render pipeline
 		// state rather than as part of binding it.
-		[cmd_list_metal->_active_render_encoder setDepthStencilState:pipeline_metal->_depth_stencil_state_mtl];
+		if (cmd_list_metal->_encoder_depth_stencil_state_mtl != pipeline_metal->_depth_stencil_state_mtl) {
+			[cmd_list_metal->_active_render_encoder setDepthStencilState:pipeline_metal->_depth_stencil_state_mtl];
+			cmd_list_metal->_encoder_depth_stencil_state_mtl = pipeline_metal->_depth_stencil_state_mtl;
+		}
 		// Likewise the rasterizer state Vulkan/D3D12 bake into the pipeline
 		// (spudgpu_shader_pipeline_desc::cull_mode, front_face_ccw,
 		// wireframe): Metal has it on the encoder, and an encoder starts
 		// with no culling, clockwise fronts and filled triangles whatever
 		// the pipeline was created with. So it is set with every bind.
-		[cmd_list_metal->_active_render_encoder
-		    setCullMode:spudgpumetal___internal_cull_mode(pipeline_metal->_desc.cull_mode)];
-		[cmd_list_metal->_active_render_encoder
-		    setFrontFacingWinding:pipeline_metal->_desc.front_face_ccw ? MTLWindingCounterClockwise
-		                                                               : MTLWindingClockwise];
-		[cmd_list_metal->_active_render_encoder
-		    setTriangleFillMode:pipeline_metal->_desc.wireframe ? MTLTriangleFillModeLines
-		                                                        : MTLTriangleFillModeFill];
+		// Each only when it differs from what the encoder has.
+		MTLCullMode cull_mode   = spudgpumetal___internal_cull_mode(pipeline_metal->_desc.cull_mode);
+		MTLWinding winding      = pipeline_metal->_desc.front_face_ccw ? MTLWindingCounterClockwise : MTLWindingClockwise;
+		MTLTriangleFillMode fill = pipeline_metal->_desc.wireframe ? MTLTriangleFillModeLines : MTLTriangleFillModeFill;
+		bool known              = cmd_list_metal->_encoder_rasterizer_set;
+		if (!known || cmd_list_metal->_encoder_cull_mode != cull_mode)
+			[cmd_list_metal->_active_render_encoder setCullMode:cull_mode];
+		if (!known || cmd_list_metal->_encoder_winding != winding)
+			[cmd_list_metal->_active_render_encoder setFrontFacingWinding:winding];
+		if (!known || cmd_list_metal->_encoder_fill_mode != fill)
+			[cmd_list_metal->_active_render_encoder setTriangleFillMode:fill];
 		// The depth bias too, so a pipeline without one doesn't keep the
 		// last pipeline's.
-		[cmd_list_metal->_active_render_encoder
-		    setDepthBias:(float)pipeline_metal->_desc.depth_bias_constant
-		      slopeScale:pipeline_metal->_desc.depth_bias_slope
-		           clamp:pipeline_metal->_desc.depth_bias_clamp];
+		float depth_bias[3] = {(float)pipeline_metal->_desc.depth_bias_constant, pipeline_metal->_desc.depth_bias_slope,
+		                       pipeline_metal->_desc.depth_bias_clamp};
+		if (!known || memcmp(cmd_list_metal->_encoder_depth_bias, depth_bias, sizeof(depth_bias)) != 0)
+			[cmd_list_metal->_active_render_encoder setDepthBias:depth_bias[0] slopeScale:depth_bias[1] clamp:depth_bias[2]];
+		cmd_list_metal->_encoder_rasterizer_set = true;
+		cmd_list_metal->_encoder_cull_mode      = cull_mode;
+		cmd_list_metal->_encoder_winding        = winding;
+		cmd_list_metal->_encoder_fill_mode      = fill;
+		memcpy(cmd_list_metal->_encoder_depth_bias, depth_bias, sizeof(depth_bias));
 	}
 }
 

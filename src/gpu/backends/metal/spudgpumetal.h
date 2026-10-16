@@ -65,7 +65,9 @@ typedef struct spudgpu_instance_t {
 	// every spudgpu_device handed out by spudgpu_enumerate_devices, matching
 	// the ownership contract the Vulkan/D3D12 backends use (there is no
 	// public spudgpu_destroy_device).
-	uint64_t *_devices_pointer_array;
+	// The array spudgpu_enumerate_devices hands out, made by its first call
+	// and freed with the instance.
+	spudgpu_device *_devices;
 	uint32_t _devices_count;
 } spudgpu_instance_metal;
 
@@ -219,6 +221,20 @@ typedef struct spudgpu_command_list_t {
 	// way Vulkan/D3D12 do - everything is a method on the render encoder
 	// itself, which only exists between begin/end_rendering.
 	id<MTLRenderCommandEncoder> _active_render_encoder;
+	// What spudgpu_cmd_bind_pipeline last set on _active_render_encoder,
+	// cleared when a render encoder is made. Not retained. Metal's
+	// validation refuses setting a state the encoder already has, and two
+	// pipelines can share one depth-stencil state, since Metal returns one
+	// object for equal descriptors.
+	id<MTLRenderPipelineState> _encoder_pipeline_state_mtl;
+	id<MTLDepthStencilState> _encoder_depth_stencil_state_mtl;
+	// Likewise the rasterizer state; meaningful only while
+	// _encoder_rasterizer_set is true, which a new encoder clears.
+	bool _encoder_rasterizer_set;
+	MTLCullMode _encoder_cull_mode;
+	MTLWinding _encoder_winding;
+	MTLTriangleFillMode _encoder_fill_mode;
+	float _encoder_depth_bias[3];
 
 	// Persistent viewport/scissor state - see SPUDGPU_METAL_MAX_VIEWPORTS.
 	SPUDGPU_VIEWPORT _viewports[SPUDGPU_METAL_MAX_VIEWPORTS];
@@ -307,8 +323,9 @@ void spudgpumetal___internal_end_active_compute_encoder(spudgpu_command_list_met
 // see _active_blit_encoder's comment above.
 void spudgpumetal___internal_end_active_blit_encoder(spudgpu_command_list_metal *cmd_list_metal);
 
-// The device's timestamp counter set (MTLCommonCounterSetTimestamp), or nil
-// if it has none. Defined in spudgpumetalquery.m.
+// The device's timestamp counter set (MTLCommonCounterSetTimestamp),
+// retained, which the caller releases; or nil if it has none. Defined in
+// spudgpumetalquery.m.
 id<MTLCounterSet> spudgpumetal___internal_timestamp_counter_set(id<MTLDevice> device);
 
 typedef struct spudgpu_shader_module_t {

@@ -16,9 +16,9 @@ typedef struct spudgpu_instance_t {
     const char *_debug_name;
 #endif
     VkInstance _instance_vk;
-    // Effectively this -- spudgpu_device_t *_device_pointer_array[device_count];
-    // We need to keep track of newly allocated spudgpu_device's to prevent memory leaks.
-    uint64_t *_devices_pointer_array;
+    // The array spudgpu_enumerate_devices hands out, made by its first call
+    // and freed with the instance, devices and all.
+    spudgpu_device *_devices;
     uint32_t _devices_count;
 } spudgpu_instance_vulkan;
 
