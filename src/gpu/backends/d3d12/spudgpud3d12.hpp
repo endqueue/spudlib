@@ -8,6 +8,7 @@
 #include <atomic>
 #include <cstdlib>
 #include <dxgi1_6.h>
+#include <mutex>
 #include <new>
 #include <vector>
 #include <wrl/client.h>
@@ -140,14 +141,66 @@ typedef struct spudgpu_descriptor_set_layout_t spudgpu_descriptor_set_layout_d3d
 // struct above stores spudgpu_device_d3d12* by pointer, never by value, so
 // there is no stale-snapshot risk from initializing this after other objects
 // already exist.
-typedef struct spudgpu_bindless_state_d3d12 {
-	// One shader-visible CBV_SRV_UAV heap, 3 fixed-size ranges back-to-back:
-	// [0, MAX) sampled images, [MAX, 2*MAX) storage images,
-	// [2*MAX, 3*MAX) storage buffers. spudgpu_d3d12_build_root_signature
-	// (spudgpud3d12shader.cpp) already builds exactly this shape from
-	// layout->_desc.bindings[] with no changes needed — see `layout` below.
+
+// One unused range of a spudgpu_d3d12_shader_heap: descriptors
+// [offset, offset + count).
+typedef struct spudgpu_d3d12_heap_range {
+	uint32_t offset;
+	uint32_t count;
+} spudgpu_d3d12_heap_range;
+
+// One of the device's two shader-visible descriptor heaps, which every
+// descriptor pool and the bindless state take a range of. D3D12 lets a
+// command list have one shader-visible CBV_SRV_UAV heap and one sampler heap
+// set at a time, so sets from different pools, and bindless beside them,
+// can only be bound for one draw if they are all in the same two heaps.
+// Each heap is the largest D3D12 allows a shader-visible heap of its type
+// (spudgpud3d12descriptors.cpp).
+typedef struct spudgpu_d3d12_shader_heap {
 	Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> heap;
 	uint32_t increment = 0;
+	// The unused ranges, sorted by offset, with touching neighbours merged:
+	// free_ranges[0, free_count), in an array of free_capacity allocated
+	// with malloc/realloc.
+	spudgpu_d3d12_heap_range *free_ranges = nullptr;
+	uint32_t free_count                   = 0;
+	uint32_t free_capacity                = 0;
+
+	~spudgpu_d3d12_shader_heap() { free(free_ranges); }
+} spudgpu_d3d12_shader_heap;
+
+// A root-signature-less command signature describing one DRAW (or
+// DRAW_INDEXED) argument every `stride` bytes.
+typedef struct spudgpu_d3d12_indirect_signature {
+	ID3D12CommandSignature *signature;
+	uint32_t stride;
+	bool indexed;
+} spudgpu_d3d12_indirect_signature;
+
+// The device's indirect draw signatures: entries[0, count) in an array of
+// capacity allocated with malloc/realloc. Each signature is released, and
+// the array freed, with the device.
+typedef struct spudgpu_d3d12_indirect_signatures {
+	spudgpu_d3d12_indirect_signature *entries = nullptr;
+	uint32_t count                            = 0;
+	uint32_t capacity                         = 0;
+
+	~spudgpu_d3d12_indirect_signatures() {
+		for (uint32_t i = 0; i < count; ++i)
+			entries[i].signature->Release();
+		free(entries);
+	}
+} spudgpu_d3d12_indirect_signatures;
+
+typedef struct spudgpu_bindless_state_d3d12 {
+	// A range of the device's shader-visible CBV_SRV_UAV heap
+	// (spudgpu_device_d3d12::_csv_heap) starting at `offset`, in 3
+	// fixed-size parts back-to-back: [0, MAX) sampled images, [MAX, 2*MAX)
+	// storage images, [2*MAX, 3*MAX) storage buffers.
+	// spudgpu_d3d12_build_root_signature (spudgpud3d12shader.cpp) already
+	// builds exactly this shape from layout->_desc.bindings[] with no
+	// changes needed — see `layout` below.
+	uint32_t offset = 0;
 
 	// Sentinel spudgpu_descriptor_set_layout_d3d12 carrying only the 3
 	// bindings' shape (binding_count/bindings[]) needed to generate the
@@ -188,16 +241,29 @@ typedef struct spudgpu_device_t {
 	// when it is constructed in place (see spudgpud3d12context.cpp), so it
 	// starts nullptr for free. Released with the device.
 	spudgpu_bindless_state_d3d12 *_bindless;
+	// Whether the device has resource binding tier 3, which bindless needs.
+	// Without it _bindless is never made and every bindless call reports
+	// SPUDRESULT_GPU_EXT_BINDLESS_DESCRIPTOR_INDEXING_NOT_SUPPORTED (or
+	// supported = false).
+	bool _bindless_supported;
 
-	// Lazily created by the first spudgpu_cmd_draw_indirect /
-	// _indexed_indirect call on this device. Both are root-signature-less
-	// (nullptr) command signatures describing only a single DRAW/DRAW_INDEXED
-	// argument — the layout is fixed by spudgpu_draw_indirect_args /
-	// spudgpu_draw_indexed_indirect_args, never per-caller, so one signature
-	// per device covers every indirect draw ever issued against it. Both
-	// ComPtrs start empty (nullptr) from the device's constructor.
-	Microsoft::WRL::ComPtr<ID3D12CommandSignature> _draw_indirect_command_signature;
-	Microsoft::WRL::ComPtr<ID3D12CommandSignature> _draw_indexed_indirect_command_signature;
+	// The shader-visible descriptor heaps every descriptor pool and the
+	// bindless state take ranges of (spudgpu_d3d12_shader_heap). Created
+	// together by the first pool or bindless call that needs them; empty
+	// until then. Their free lists are guarded by _shader_heap_mutex, as
+	// pools may be made and destroyed on any thread; once made, the heaps
+	// themselves are not replaced until the device is destroyed.
+	spudgpu_d3d12_shader_heap _csv_heap;
+	spudgpu_d3d12_shader_heap _sampler_heap;
+	std::mutex _shader_heap_mutex;
+
+	// The command signatures spudgpu_cmd_draw_indirect / _indexed_indirect
+	// have used on this device, one for each stride and kind asked for (a
+	// signature fixes its ByteStride), each made by the first call that needs
+	// it. Guarded by _indirect_signature_mutex: lists may be recorded on
+	// several threads.
+	spudgpu_d3d12_indirect_signatures _indirect_signatures;
+	std::mutex _indirect_signature_mutex;
 } spudgpu_device_d3d12;
 
 typedef struct spudgpu_command_queue_t {
@@ -215,6 +281,13 @@ typedef struct spudgpu_command_allocator_t {
 	spudgpu_device_d3d12 *_device;
 	Microsoft::WRL::ComPtr<ID3D12CommandAllocator> _d3d_cmd_allocator;
 	D3D12_COMMAND_LIST_TYPE _d3d_cmd_list_type;
+#if _DEBUG
+	// The list of this allocator that is open for recording, or null. One
+	// at a time (spudgpu_begin_command_list); a debug build asserts it
+	// before D3D12 refuses the Reset and leaves the list closed. Not atomic:
+	// an allocator is used from one thread at a time.
+	spudgpu_command_list _open_list;
+#endif
 } spudgpu_command_allocator_d3d12;
 
 typedef struct spudgpu_command_list_t {
@@ -289,7 +362,6 @@ typedef struct spudgpu_image_t {
 	spudgpu_image_desc _desc;
 	Microsoft::WRL::ComPtr<ID3D12Resource2> _d3d_resource;
 	D3D12_RESOURCE_DESC _d3d_resource_desc;
-	D3D12_GPU_VIRTUAL_ADDRESS _d3d_gpu_address;
 
 	// The resource's actual current D3D12 state, kept in sync by every
 	// spudgpu_cmd_image_barrier* call (spudgpud3d12renderpass.cpp). Needed
@@ -484,14 +556,16 @@ typedef struct spudgpu_descriptor_pool_t {
 #endif
 	spudgpu_device_d3d12 *_device;
 	spudgpu_descriptor_pool_desc _desc;
-	Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> _cbv_srv_uav_heap;
-	Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> _sampler_heap;
+	// The pool's ranges of the device's shader-visible heaps
+	// (spudgpu_device_d3d12::_csv_heap / _sampler_heap): descriptors
+	// [offset, offset + capacity) of each, returned when the pool is
+	// destroyed. A set's slots are indices into these ranges.
+	uint32_t _cbv_srv_uav_offset;
+	uint32_t _sampler_offset;
 	uint32_t _cbv_srv_uav_capacity;
 	uint32_t _sampler_capacity;
 	uint32_t _cbv_srv_uav_cursor; // next free slot index
 	uint32_t _sampler_cursor;
-	uint32_t _cbv_srv_uav_increment;
-	uint32_t _sampler_increment;
 	// Head of the list of every set allocated from this pool, linked through
 	// spudgpu_descriptor_set_d3d12::_next. There is no per-set destroy call,
 	// so the pool is what releases them, on reset and on destroy.
@@ -504,8 +578,8 @@ typedef struct spudgpu_descriptor_set_t {
 #endif
 	spudgpu_descriptor_pool_d3d12 *_pool;
 	spudgpu_descriptor_set_layout_d3d12 *_layout;
-	uint32_t _cbv_srv_uav_base; // base slot index in pool's CBV/SRV/UAV heap
-	uint32_t _sampler_base;     // base slot index in pool's sampler heap
+	uint32_t _cbv_srv_uav_base; // base slot index in pool's CBV/SRV/UAV range
+	uint32_t _sampler_base;     // base slot index in pool's sampler range
 	struct spudgpu_descriptor_set_t *_next; // next set in _pool's _sets list
 } spudgpu_descriptor_set_d3d12;
 

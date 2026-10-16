@@ -315,8 +315,6 @@ SPUDRESULT spudgpu_create_image(
 	}
 	pResult->_current_state = d3dInitialState;
 
-	pResult->_d3d_gpu_address = pResult->_d3d_resource->GetGPUVirtualAddress();
-
 #if _DEBUG
 	if (spud_debug_name_set(pResult, desc->debug_name) != SPUD_SUCCESS) {
 		spudgpu_destroy_image(pResult);

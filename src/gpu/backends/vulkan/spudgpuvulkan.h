@@ -114,6 +114,13 @@ typedef struct spudgpu_command_allocator_t {
     // VK_COMMAND_BUFFER_LEVEL_SECONDARY buffers (see spudgpu_create_command_list);
     // every other type hands out PRIMARY.
     SPUDGPU_COMMAND_LIST_TYPE _type;
+#if _DEBUG
+    // The list of this allocator that is open for recording, or NULL. One
+    // at a time on every backend (spudgpu_begin_command_list): Vulkan allows
+    // more, D3D12 does not, and a debug build asserts so the rule is caught
+    // here too. Not atomic: an allocator is used from one thread at a time.
+    spudgpu_command_list _open_list;
+#endif
 } spudgpu_command_allocator_vulkan;
 
 typedef struct spudgpu_command_list_t {
@@ -122,6 +129,11 @@ typedef struct spudgpu_command_list_t {
 #endif
     VkCommandBuffer _command_buffer_vk;
     spudgpu_command_allocator_vulkan _allocator;
+#if _DEBUG
+    // _allocator is a copy; this is the allocator itself, whose _open_list
+    // the list's begin and end keep.
+    spudgpu_command_allocator_vulkan *_debug_allocator;
+#endif
 
     // Set by spudgpu_cmd_begin_rendering, cleared by spudgpu_cmd_end_rendering
     // (spudgpuvulkanrenderpass.c). Lets spudgpu_cmd_clear_color_attachment/
@@ -348,6 +360,12 @@ typedef struct spudgpu_descriptor_set_t {
 } spudgpu_descriptor_set_vulkan;
 
 VkFormat convert_spud_to_vulkan_format(SPUDGPU_FORMAT format);
+// Defined in spudgpuvulkanrenderpass.c; used by barriers and descriptor
+// writes alike, since a SPUDGPU_IMAGE_LAYOUT is never a VkImageLayout.
+VkImageLayout spud_layout_to_vk(SPUDGPU_IMAGE_LAYOUT layout);
+// Defined in spudgpuvulkanshader.c; push constant ranges and descriptor set
+// layout bindings both take SPUDGPU_SHADER_STAGE bits, never Vulkan's.
+VkShaderStageFlags spudgpuvulkan___shader_stages(SPUDGPU_SHADER_STAGE stages);
 
 // Shared by spudgpu_create_buffer / spudgpu_create_image and the heap calls
 // (spudgpuvulkanheap.c), so a buffer or image is checked and described the
@@ -384,6 +402,15 @@ void spudgpuvulkan___image_create_info(
 // stale NULL from before lazy initialization.
 SPUDRESULT spudgpuvulkan___ensure_bindless_state(spudgpu_device device);
 void spudgpuvulkan___destroy_bindless_state(spudgpu_device device);
+
+#if _DEBUG
+// Defined in spudgpuvulkancommand.c. Keep the allocator's _open_list:
+// opened asserts no list of [cmd]'s allocator is open and records [cmd];
+// closed forgets [cmd] if it is the one recorded. Called by every call that
+// opens or closes a list, bundles included.
+void spudgpuvulkan___debug_list_opened(spudgpu_command_list cmd);
+void spudgpuvulkan___debug_list_closed(spudgpu_command_list cmd);
+#endif
 
 #endif //SPUDLIB_SPUDGPUVULKAN_H
 

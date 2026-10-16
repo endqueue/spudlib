@@ -473,6 +473,17 @@ typedef struct SPUDGPU_DEVICE_PROPERTIES {
 	 */
 	bool independent_blend;
 	/**
+	 * The largest `draw_count` spudgpu_cmd_draw_indirect() and
+	 * spudgpu_cmd_draw_indexed_indirect() take in one call. A call with a
+	 * larger count records nothing; split it into calls at advancing
+	 * offsets. 1 means each call draws one entry at most.
+	 *
+	 * Vulkan: `VkPhysicalDeviceLimits::maxDrawIndirectCount` where
+	 * `VkPhysicalDeviceFeatures::multiDrawIndirect` is reported (and then
+	 * enabled on the device), else 1. D3D12 and Metal: UINT32_MAX.
+	 */
+	uint32_t max_draw_indirect_count;
+	/**
 	 * Whether a rendering pass can write timestamps as it starts and ends
 	 * (spudgpu_create_timestamp_set()). False means
 	 * spudgpu_create_timestamp_set() returns
@@ -823,9 +834,21 @@ void spudgpu_destroy_command_list(spudgpu_command_list cmd);
  *
  * @warning Submitting one recording a second time is undefined behavior.
  *
+ * @warning Recording a spudgpu_cmd_*() call into a list that is not open
+ * (before this call, or after spudgpu_end_command_list()) is undefined
+ * behavior: Vulkan and D3D12 both refuse it, and a driver may fault.
+ *
  * @warning Do not open a list while its last recording may still be
  * executing on the GPU: Vulkan cannot reset a command buffer that is
  * pending. To record while that one runs, record into another list.
+ *
+ * @warning At most one command list of an allocator is open at a time: end
+ * it before opening another list of the same allocator. D3D12 refuses to
+ * open a second list on an allocator another open list is recording into,
+ * and the list is left closed, so what is then recorded into it is
+ * undefined. To keep two lists open at once, make them from two
+ * allocators. A debug build asserts this on every backend, and asserts in
+ * spudgpu_reset_command_allocator() that no list of the allocator is open.
  *
  * @param[in] cmd Command list to open.
  */
@@ -3325,13 +3348,13 @@ typedef struct spudgpu_descriptor_image_info {
 	/**
 	 * @brief The layout the image is expected to be in when shaders access it.
 	 *
-	 * On Vulkan this maps to VkImageLayout. Common values:
+	 * A SPUDGPU_IMAGE_LAYOUT value, never a native one. Common values:
 	 *   - SPUDGPU_IMAGE_LAYOUT_SHADER_READ_ONLY for sampled textures.
 	 *   - SPUDGPU_IMAGE_LAYOUT_GENERAL for storage images (read/write).
 	 *
 	 * @see SPUDGPU_IMAGE_LAYOUT
 	 */
-	uint32_t image_layout;
+	SPUDGPU_IMAGE_LAYOUT image_layout;
 } spudgpu_descriptor_image_info;
 
 /**
@@ -4536,10 +4559,15 @@ typedef struct spudgpu_draw_indexed_indirect_args {
  * @param[in] buffer     Buffer holding `draw_count` consecutive
  *                       spudgpu_draw_indirect_args entries.
  * @param[in] offset     Byte offset of the first entry.
- * @param[in] draw_count Number of draws to issue.
- * @param[in] stride     Byte stride between consecutive entries. Pass
- *                       sizeof(spudgpu_draw_indirect_args) for a tightly
- *                       packed buffer.
+ * @param[in] draw_count Number of draws to issue, at most
+ *                       SPUDGPU_DEVICE_PROPERTIES::max_draw_indirect_count;
+ *                       with more, nothing is recorded.
+ * @param[in] stride     Byte stride between consecutive entries: a multiple
+ *                       of 4, and at least
+ *                       sizeof(spudgpu_draw_indirect_args); otherwise
+ *                       nothing is recorded. Pass that size for a tightly
+ *                       packed buffer; a larger stride skips the caller's
+ *                       own data between entries, on every backend.
  */
 void spudgpu_cmd_draw_indirect(
     spudgpu_command_list cmd,
@@ -4558,10 +4586,15 @@ void spudgpu_cmd_draw_indirect(
  * @param[in] buffer     Buffer holding `draw_count` consecutive
  *                       spudgpu_draw_indexed_indirect_args entries.
  * @param[in] offset     Byte offset of the first entry.
- * @param[in] draw_count Number of draws to issue.
- * @param[in] stride     Byte stride between consecutive entries. Pass
- *                       sizeof(spudgpu_draw_indexed_indirect_args) for a
- *                       tightly packed buffer.
+ * @param[in] draw_count Number of draws to issue, at most
+ *                       SPUDGPU_DEVICE_PROPERTIES::max_draw_indirect_count;
+ *                       with more, nothing is recorded.
+ * @param[in] stride     Byte stride between consecutive entries: a multiple
+ *                       of 4, and at least
+ *                       sizeof(spudgpu_draw_indexed_indirect_args);
+ *                       otherwise nothing is recorded. Pass that size for a
+ *                       tightly packed buffer; a larger stride skips the
+ *                       caller's own data between entries, on every backend.
  */
 void spudgpu_cmd_draw_indexed_indirect(
     spudgpu_command_list cmd,
@@ -5236,9 +5269,11 @@ typedef struct spudgpu_depth_attachment_desc {
 	SPUDGPU_LOAD_OP depth_load_op;
 	/** What happens to the depth values when the pass ends. */
 	SPUDGPU_STORE_OP depth_store_op;
-	/** What happens to the stencil values when the pass begins. */
+	/** What happens to the stencil values when the pass begins. Ignored
+	 *  when the view's format has no stencil. */
 	SPUDGPU_LOAD_OP stencil_load_op;
-	/** What happens to the stencil values when the pass ends. */
+	/** What happens to the stencil values when the pass ends. Ignored when
+	 *  the view's format has no stencil. */
 	SPUDGPU_STORE_OP stencil_store_op;
 
 	/** Only read when depth_load_op == SPUDGPU_LOAD_OP_CLEAR. */
@@ -5445,9 +5480,22 @@ void spudgpu_cmd_clear_depth_attachment(
  * sequence of pipeline, descriptor and draw state once, and is replayed
  * unchanged from inside a spudgpu_cmd_begin_rendering() /
  * spudgpu_cmd_end_rendering() scope of a direct command list, as often as
- * wanted, with nothing recorded again. It inherits the attachments, viewports
- * and scissor rectangles the direct list has set, and never begins or ends
- * rendering itself.
+ * wanted, with nothing recorded again. It draws into the attachments of the
+ * direct list's pass and never begins or ends rendering itself.
+ *
+ * Two rules hold on every backend, whatever the graphics API inherits:
+ *
+ * - A bundle draws with one viewport and one scissor rectangle, named when
+ *   it is recorded (spudgpu_bundle_inheritance_desc), and the direct list
+ *   has set the same two, at index 0, when it executes the bundle. A bundle
+ *   never calls spudgpu_cmd_set_viewports() or
+ *   spudgpu_cmd_set_scissor_rects(): D3D12 refuses both in a bundle and
+ *   takes them from the direct list; a Vulkan secondary command buffer
+ *   inherits neither and is given them when its recording begins.
+ * - After spudgpu_cmd_execute_bundle(), the direct list's pipeline, vertex
+ *   and index buffers, descriptor sets and push constants are undefined
+ *   until set again: D3D12 leaves the bundle's in place and Vulkan leaves
+ *   none.
  *
  * Maps to `ID3D12GraphicsCommandList::ExecuteBundle` (D3D12) and to
  * `vkCmdExecuteCommands` over a secondary command buffer (Vulkan).
@@ -5638,15 +5686,18 @@ SPUDRESULT spudgpu_get_timestamps(
 #if SPUDGPU_EXT_BUNDLES
 
 /**
- * @brief Describes the attachments a bundle will be replayed under.
+ * @brief Describes the attachments, viewport and scissor rectangle a bundle
+ * will be replayed under.
  *
  * Required up front on Vulkan, where a bundle is a secondary command buffer
  * and VK_KHR_dynamic_rendering requires attachment formats at recording
  * time via VkCommandBufferInheritanceRenderingInfo — there is no
- * attachment/framebuffer object to inherit them from implicitly. Mirrors
+ * attachment/framebuffer object to inherit them from implicitly — and where
+ * a secondary command buffer inherits no viewport or scissor. Mirrors
  * the attachment format fields on spudgpu_shader_pipeline_desc; must match
  * whatever the direct command list's spudgpu_cmd_begin_rendering call
- * actually binds when the bundle is executed.
+ * actually binds, and the viewport and scissor it has set, when the bundle
+ * is executed.
  */
 typedef struct spudgpu_bundle_inheritance_desc {
 	/**
@@ -5663,6 +5714,18 @@ typedef struct spudgpu_bundle_inheritance_desc {
 	 * @see SPUDGPU_FORMAT
 	 */
 	SPUDGPU_FORMAT depth_format;
+
+	/**
+	 * The viewport the bundle's draws use: the one the direct list has set
+	 * at index 0 when it executes the bundle. Vulkan records it into the
+	 * bundle; D3D12 takes it from the direct list.
+	 */
+	SPUDGPU_VIEWPORT viewport;
+	/**
+	 * The scissor rectangle the bundle's draws use, with the same rule as
+	 * #viewport.
+	 */
+	SPUDGPU_SCISSOR_RECT scissor_rect;
 } spudgpu_bundle_inheritance_desc;
 
 /**
@@ -5671,13 +5734,16 @@ typedef struct spudgpu_bundle_inheritance_desc {
  *
  * Use this instead of spudgpu_begin_command_list() for a bundle. It is the
  * same operation on D3D12 (`desc` is ignored there; a bundle needs no
- * attachment info up front), but Vulkan needs `desc` to fill in a secondary
- * command buffer's inheritance info. Close the bundle with the shared
- * spudgpu_end_command_list(); there is no separate "end bundle" call.
+ * attachment info up front and takes its viewport and scissor from the
+ * direct list), but Vulkan needs `desc` to fill in a secondary command
+ * buffer's inheritance info and to set its viewport and scissor. Close the
+ * bundle with the shared spudgpu_end_command_list(); there is no separate
+ * "end bundle" call.
  *
  * @param[in] bundle Command list created against an allocator of type
  *                   SPUDGPU_COMMAND_LIST_TYPE_BUNDLE.
- * @param[in] desc   Attachment formats the bundle will be executed under.
+ * @param[in] desc   Attachment formats, viewport and scissor rectangle the
+ *                   bundle will be executed under.
  */
 void spudgpu_begin_bundle_command_list(
     spudgpu_command_list bundle,
@@ -5690,7 +5756,10 @@ void spudgpu_begin_bundle_command_list(
  * Must be called between spudgpu_cmd_begin_rendering() (with
  * will_execute_bundles set true) and spudgpu_cmd_end_rendering() on `cmd`,
  * with attachment formats matching the bundle's
- * spudgpu_bundle_inheritance_desc. The bundle must already be closed
+ * spudgpu_bundle_inheritance_desc, and with its viewport and scissor
+ * rectangle set at index 0. Afterwards, the direct list's pipeline, vertex
+ * and index buffers, descriptor sets and push constants are undefined until
+ * set again. The bundle must already be closed
  * (spudgpu_end_command_list() called on it) and must not be re-recorded while
  * a submission that references it is in flight.
  *

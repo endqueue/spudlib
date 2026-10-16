@@ -2,6 +2,7 @@
 #if SPUDGPU_COMPILE_D3D12_API
 
 #include "spudgpud3d12.hpp"
+#include <cassert>
 #include <cstring>
 
 extern "C" {
@@ -140,6 +141,10 @@ SPUDRESULT
 spudgpu_reset_command_allocator(spudgpu_command_allocator allocator) {
 	if (!allocator)
 		return SPUDRESULT_GPU_INVALID_COMMAND_ALLOCATOR;
+#if _DEBUG
+	// spudgpu.h: no list of the allocator is open when it is reset.
+	assert(!allocator->_open_list && "spudgpu_reset_command_allocator: a list of this allocator is still open");
+#endif
 	if (FAILED(allocator->_d3d_cmd_allocator->Reset()))
 		return SPUDRESULT_API_SPECIFIC_FAILURE;
 	return SPUD_SUCCESS;
@@ -170,6 +175,9 @@ SPUDRESULT spudgpu_create_command_list(
 void spudgpu_destroy_command_list(spudgpu_command_list cmd) {
     if (!cmd) return;
 #if _DEBUG
+    // A list destroyed open is not open any more.
+    if (cmd->_allocator->_open_list == cmd)
+        cmd->_allocator->_open_list = nullptr;
     free((void *)cmd->_debug_name);
 #endif
     cmd->~spudgpu_command_list_d3d12();
@@ -178,6 +186,12 @@ void spudgpu_destroy_command_list(spudgpu_command_list cmd) {
 void spudgpu_begin_command_list(spudgpu_command_list cmd)
 {
 	if (!cmd) return;
+#if _DEBUG
+	// spudgpu.h: one list of an allocator open at a time. D3D12 would
+	// refuse the Reset below and leave the list closed.
+	assert(!cmd->_allocator->_open_list && "spudgpu_begin_command_list: a list of this allocator is already open; end it first");
+	cmd->_allocator->_open_list = cmd;
+#endif
 	cmd->_d3d_cmd_list->Reset(
 	    cmd->_allocator->_d3d_cmd_allocator.Get(), nullptr);
 }
@@ -185,6 +199,10 @@ void spudgpu_end_command_list(spudgpu_command_list cmd)
 {
 	if (!cmd) return;
 	cmd->_d3d_cmd_list->Close();
+#if _DEBUG
+	if (cmd->_allocator->_open_list == cmd)
+		cmd->_allocator->_open_list = nullptr;
+#endif
 }
 
 // PIX's encoding of an event's text: metadata 1 is a null-terminated ANSI
@@ -380,20 +398,29 @@ void spudgpu_cmd_set_depth_bounds(
 }
 #endif
 
-// Lazily creates (and caches on the device) the root-signature-less command
-// signature used by spudgpu_cmd_draw_indirect / _indexed_indirect. Mechanical
-// translation, not a policy choice: D3D12 structurally requires this object
-// for any ExecuteIndirect call at all, and since SpudGPU's indirect-draw
-// argument layout never varies per caller (see spudgpu_draw_indirect_args /
-// spudgpu_draw_indexed_indirect_args in spudgpu.h), one signature per device
-// per draw type covers every call site.
+// The root-signature-less command signature spudgpu_cmd_draw_indirect /
+// _indexed_indirect execute with, for one kind of draw and one stride, made
+// and kept on the device the first time it is asked for. Mechanical
+// translation, not a policy choice: D3D12 needs this object for any
+// ExecuteIndirect call, and its ByteStride is where the caller's stride
+// goes - ExecuteIndirect takes no stride of its own. Null if it can't be
+// made.
 static ID3D12CommandSignature *spudgpu_d3d12___get_draw_indirect_signature(
-    spudgpu_device_d3d12 *device, bool indexed) {
-	Microsoft::WRL::ComPtr<ID3D12CommandSignature> &cached =
-	    indexed ? device->_draw_indexed_indirect_command_signature
-	            : device->_draw_indirect_command_signature;
-	if (cached)
-		return cached.Get();
+    spudgpu_device_d3d12 *device, bool indexed, uint32_t stride) {
+	std::lock_guard<std::mutex> lock(device->_indirect_signature_mutex);
+	spudgpu_d3d12_indirect_signatures &kept = device->_indirect_signatures;
+	for (uint32_t i = 0; i < kept.count; ++i)
+		if (kept.entries[i].indexed == indexed && kept.entries[i].stride == stride)
+			return kept.entries[i].signature;
+
+	if (kept.count == kept.capacity) {
+		uint32_t capacity = kept.capacity ? kept.capacity * 2 : 4;
+		auto *grown       = (spudgpu_d3d12_indirect_signature *)realloc(kept.entries, capacity * sizeof(spudgpu_d3d12_indirect_signature));
+		if (!grown)
+			return nullptr;
+		kept.entries  = grown;
+		kept.capacity = capacity;
+	}
 
 	D3D12_INDIRECT_ARGUMENT_DESC argument_desc = {};
 	argument_desc.Type = indexed ? D3D12_INDIRECT_ARGUMENT_TYPE_DRAW_INDEXED
@@ -402,17 +429,17 @@ static ID3D12CommandSignature *spudgpu_d3d12___get_draw_indirect_signature(
 	D3D12_COMMAND_SIGNATURE_DESC signature_desc = {};
 	signature_desc.pArgumentDescs = &argument_desc;
 	signature_desc.NumArgumentDescs = 1;
-	signature_desc.ByteStride = indexed
-	                                ? sizeof(spudgpu_draw_indexed_indirect_args)
-	                                : sizeof(spudgpu_draw_indirect_args);
+	signature_desc.ByteStride       = stride;
 
 	// rootSignature is nullptr: only valid (and required) when every argument
 	// in the signature is DRAW/DRAW_INDEXED/DISPATCH — no root-parameter
 	// update arguments, which SpudGPU's indirect draw never uses.
+	ID3D12CommandSignature *signature = nullptr;
 	if (FAILED(device->_d3d_device->CreateCommandSignature(
-	        &signature_desc, nullptr, IID_PPV_ARGS(&cached))))
+	        &signature_desc, nullptr, IID_PPV_ARGS(&signature))))
 		return nullptr;
-	return cached.Get();
+	kept.entries[kept.count++] = {signature, stride, indexed};
+	return signature;
 }
 
 void spudgpu_cmd_draw_indirect(
@@ -423,8 +450,12 @@ void spudgpu_cmd_draw_indirect(
     uint32_t stride) {
 	if (!cmd || !buffer || draw_count == 0)
 		return;
+	if (draw_count > cmd->_allocator->_device->_properties.max_draw_indirect_count)
+		return;
+	if (stride % 4 != 0 || stride < sizeof(spudgpu_draw_indirect_args))
+		return;
 	ID3D12CommandSignature *signature =
-	    spudgpu_d3d12___get_draw_indirect_signature(cmd->_allocator->_device, false);
+	    spudgpu_d3d12___get_draw_indirect_signature(cmd->_allocator->_device, false, stride);
 	if (!signature)
 		return;
 	cmd->_d3d_cmd_list->ExecuteIndirect(
@@ -439,8 +470,12 @@ void spudgpu_cmd_draw_indexed_indirect(
     uint32_t stride) {
 	if (!cmd || !buffer || draw_count == 0)
 		return;
+	if (draw_count > cmd->_allocator->_device->_properties.max_draw_indirect_count)
+		return;
+	if (stride % 4 != 0 || stride < sizeof(spudgpu_draw_indexed_indirect_args))
+		return;
 	ID3D12CommandSignature *signature =
-	    spudgpu_d3d12___get_draw_indirect_signature(cmd->_allocator->_device, true);
+	    spudgpu_d3d12___get_draw_indirect_signature(cmd->_allocator->_device, true, stride);
 	if (!signature)
 		return;
 	cmd->_d3d_cmd_list->ExecuteIndirect(
@@ -611,7 +646,9 @@ void spudgpu_queue_wait_idle(spudgpu_command_queue queue) {
 void spudgpu_begin_bundle_command_list(
     spudgpu_command_list bundle, const spudgpu_bundle_inheritance_desc *desc) {
 	// D3D12 bundles need no attachment info up front - they inherit whatever
-	// render targets are bound on the direct list that executes them.
+	// render targets are bound on the direct list that executes them, and its
+	// viewport and scissor, which a bundle may not set. desc's viewport and
+	// scissor_rect are for Vulkan, whose secondary buffers inherit neither.
 	if (!bundle || !desc)
 		return;
 	spudgpu_begin_command_list(bundle);

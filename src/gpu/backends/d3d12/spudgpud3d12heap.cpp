@@ -321,9 +321,8 @@ SPUDRESULT spudgpu_create_placed_image(
 		free(image);
 		return SPUDRESULT_API_SPECIFIC_FAILURE;
 	}
-	image->_current_state    = initialState;
-	image->_d3d_gpu_address  = image->_d3d_resource->GetGPUVirtualAddress();
-	image->_heap             = heap;
+	image->_current_state = initialState;
+	image->_heap          = heap;
 
 #if _DEBUG
 	heap->_placed_count++;

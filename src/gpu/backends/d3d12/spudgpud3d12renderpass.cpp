@@ -597,6 +597,13 @@ void spudgpu_cmd_begin_rendering(
 		    spudgpu_d3d12_store_op_to_ending_access(desc->depth_attachment.depth_store_op);
 		dsDesc.StencilEndingAccess.Type                                     =
 		    spudgpu_d3d12_store_op_to_ending_access(desc->depth_attachment.stencil_store_op);
+		// A format with no stencil has no stencil to load or store, and
+		// D3D12 refuses any access to it but none. The stencil ops are
+		// ignored there, as Vulkan ignores them.
+		if (spudgpu_d3d12_format_plane_count(depthFmt) == 1) {
+			dsDesc.StencilBeginningAccess.Type = D3D12_RENDER_PASS_BEGINNING_ACCESS_TYPE_NO_ACCESS;
+			dsDesc.StencilEndingAccess.Type    = D3D12_RENDER_PASS_ENDING_ACCESS_TYPE_NO_ACCESS;
+		}
 	}
 
 	// The pass's start, written before it begins; its end after it ends.

@@ -218,12 +218,18 @@ bool ___internal_spudgpu_d3d12_make_device_properties(
 	hr = device->_d3d_device->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS, &options, sizeof(options));
 	device->_properties.layered_rendering =
 	    SUCCEEDED(hr) && options.VPAndRTArrayIndexFromAnyShaderFeedingRasterizerSupportedWithoutGSEmulation;
+	// Bindless binds SPUDGPU_BINDLESS_MAX_SLOTS_PER_CLASS storage images and
+	// as many storage buffers in one table, more UAVs than tier 2 allows a
+	// stage (64).
+	device->_bindless_supported = SUCCEEDED(hr) && options.ResourceBindingTier >= D3D12_RESOURCE_BINDING_TIER_3;
 	// An ID3D12Heap can have the heap properties of every kind.
 	device->_properties.mappable_heaps = true;
 	// D3D12_RASTERIZER_DESC::DepthBiasClamp and
 	// D3D12_BLEND_DESC::IndependentBlendEnable are on every device.
 	device->_properties.depth_bias_clamp  = true;
 	device->_properties.independent_blend = true;
+	// ExecuteIndirect takes any MaxCommandCount.
+	device->_properties.max_draw_indirect_count = UINT32_MAX;
 	// A direct queue's command lists can write timestamps anywhere.
 	device->_properties.pass_timestamps = true;
 	return true;
@@ -243,7 +249,13 @@ SPUDRESULT spudgpu_enumerate_devices(
 
 	SPUDRESULT sr = SPUD_SUCCESS;
 
-	const D3D_FEATURE_LEVEL minimumFeatureLevel = D3D_FEATURE_LEVEL_12_2;
+	// What the backend needs of every device: 12_0 guarantees resource
+	// binding tier 2, without which a descriptor table may hold only 128 SRVs
+	// per stage and SpudGPU's descriptor sets have no such limit. Everything
+	// past it is optional and reported per device - mesh shading
+	// (OPTIONS7), the depth bounds test (OPTIONS2), bindless (resource
+	// binding tier 3) - so a device without it is listed and says so.
+	const D3D_FEATURE_LEVEL minimumFeatureLevel = D3D_FEATURE_LEVEL_12_0;
 
 	std::vector<spudgpu_device_d3d12 *> gpuDevices =
 	    std::vector<spudgpu_device_d3d12 *>();

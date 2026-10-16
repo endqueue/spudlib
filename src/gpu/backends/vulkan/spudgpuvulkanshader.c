@@ -110,6 +110,27 @@ static int spudgpuvulkan___format_has_stencil(VkFormat fmt) {
 	}
 }
 
+VkShaderStageFlags spudgpuvulkan___shader_stages(SPUDGPU_SHADER_STAGE stages) {
+	VkShaderStageFlags sf = 0;
+	if (stages & SPUDGPU_SHADER_STAGE_VERTEX)
+		sf |= VK_SHADER_STAGE_VERTEX_BIT;
+	if (stages & SPUDGPU_SHADER_STAGE_FRAGMENT)
+		sf |= VK_SHADER_STAGE_FRAGMENT_BIT;
+	if (stages & SPUDGPU_SHADER_STAGE_COMPUTE)
+		sf |= VK_SHADER_STAGE_COMPUTE_BIT;
+	if (stages & SPUDGPU_SHADER_STAGE_GEOMETRY)
+		sf |= VK_SHADER_STAGE_GEOMETRY_BIT;
+	if (stages & SPUDGPU_SHADER_STAGE_TESSELLATION_CONTROL)
+		sf |= VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT;
+	if (stages & SPUDGPU_SHADER_STAGE_TESSELLATION_EVALUATION)
+		sf |= VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT;
+	if (stages & SPUDGPU_SHADER_STAGE_MESH)
+		sf |= VK_SHADER_STAGE_MESH_BIT_EXT;
+	if (stages & SPUDGPU_SHADER_STAGE_TASK)
+		sf |= VK_SHADER_STAGE_TASK_BIT_EXT;
+	return sf;
+}
+
 #if __cplusplus
 extern "C" {
 
@@ -450,25 +471,7 @@ SPUDRESULT spudgpu_create_shader_pipeline(
 	VkPushConstantRange push_constant_ranges[SPUDGPU_MAX_PUSH_CONSTANT_RANGES] =
 	    {0};
 	for (uint32_t i = 0; i < desc->push_constant_range_count; i++) {
-		uint32_t s            = desc->push_constant_ranges[i].stage_flags;
-		VkShaderStageFlags sf = 0;
-		if (s & SPUDGPU_SHADER_STAGE_VERTEX)
-			sf |= VK_SHADER_STAGE_VERTEX_BIT;
-		if (s & SPUDGPU_SHADER_STAGE_FRAGMENT)
-			sf |= VK_SHADER_STAGE_FRAGMENT_BIT;
-		if (s & SPUDGPU_SHADER_STAGE_COMPUTE)
-			sf |= VK_SHADER_STAGE_COMPUTE_BIT;
-		if (s & SPUDGPU_SHADER_STAGE_GEOMETRY)
-			sf |= VK_SHADER_STAGE_GEOMETRY_BIT;
-		if (s & SPUDGPU_SHADER_STAGE_TESSELLATION_CONTROL)
-			sf |= VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT;
-		if (s & SPUDGPU_SHADER_STAGE_TESSELLATION_EVALUATION)
-			sf |= VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT;
-		if (s & SPUDGPU_SHADER_STAGE_MESH)
-			sf |= VK_SHADER_STAGE_MESH_BIT_EXT;
-		if (s & SPUDGPU_SHADER_STAGE_TASK)
-			sf |= VK_SHADER_STAGE_TASK_BIT_EXT;
-		push_constant_ranges[i].stageFlags = sf;
+		push_constant_ranges[i].stageFlags = spudgpuvulkan___shader_stages(desc->push_constant_ranges[i].stage_flags);
 		push_constant_ranges[i].offset = desc->push_constant_ranges[i].offset;
 		push_constant_ranges[i].size   = desc->push_constant_ranges[i].size;
 	}

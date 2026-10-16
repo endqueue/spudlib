@@ -238,10 +238,13 @@ static VkDevice spudgpuvulkan___initialize_vk_logical_device_internal(
     deviceFeatures.depthBounds = availableFeatures.depthBounds;
     device->_depth_bounds_test_supported = availableFeatures.depthBounds == VK_TRUE;
     // The same for a clamped depth bias and colour attachments that blend
-    // differently (SPUDGPU_DEVICE_PROPERTIES::depth_bias_clamp,
-    // independent_blend): enabled where the device has them, and reported.
-    deviceFeatures.depthBiasClamp   = availableFeatures.depthBiasClamp;
-    deviceFeatures.independentBlend = availableFeatures.independentBlend;
+    // differently, and several draws in one indirect call
+    // (SPUDGPU_DEVICE_PROPERTIES::depth_bias_clamp, independent_blend,
+    // max_draw_indirect_count): enabled where the device has them, and
+    // reported.
+    deviceFeatures.depthBiasClamp    = availableFeatures.depthBiasClamp;
+    deviceFeatures.independentBlend  = availableFeatures.independentBlend;
+    deviceFeatures.multiDrawIndirect = availableFeatures.multiDrawIndirect;
 
     // spudgpu_create_buffer/spudgpu_create_image always call
     // vkGetBufferDeviceAddress/equivalent to populate desc.gpu_address_location
@@ -604,6 +607,10 @@ static void spudgpuvulkan___internal_make_device_properties(
     vkGetPhysicalDeviceFeatures(device->_physical_device_vk, &features);
     device->_properties.depth_bias_clamp  = features.depthBiasClamp == VK_TRUE;
     device->_properties.independent_blend = features.independentBlend == VK_TRUE;
+    // Without multiDrawIndirect, vkCmdDrawIndirect takes a drawCount of 0 or
+    // 1, whatever maxDrawIndirectCount says.
+    device->_properties.max_draw_indirect_count =
+        features.multiDrawIndirect == VK_TRUE ? props->limits.maxDrawIndirectCount : 1;
 
     // Timestamps are written by command lists on the graphics queue, whose
     // family says whether it counts time at all.

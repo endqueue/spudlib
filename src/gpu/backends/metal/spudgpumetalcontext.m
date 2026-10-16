@@ -114,6 +114,9 @@ static void spudgpumetal___internal_make_device_properties(
 	// every device.
 	device->_properties.depth_bias_clamp  = true;
 	device->_properties.independent_blend = true;
+	// spudgpu_cmd_draw_indirect loops one indirect draw per entry, so any
+	// count is recorded.
+	device->_properties.max_draw_indirect_count = UINT32_MAX;
 	// A pass's timestamps are samples of the timestamp counter set at its
 	// stage boundaries.
 	device->_properties.pass_timestamps =

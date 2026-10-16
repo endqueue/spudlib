@@ -4,6 +4,7 @@
 #include "spudgpuvulkan.h"
 #include "stdio.h"
 #include "stdlib.h"
+#include <assert.h>
 
 #if __cplusplus
 extern "C" {
@@ -138,6 +139,10 @@ SPUDRESULT spudgpu_create_command_allocator(
 
 SPUDRESULT spudgpu_reset_command_allocator(spudgpu_command_allocator allocator) {
     if (!allocator) return SPUDRESULT_GPU_INVALID_COMMAND_ALLOCATOR;
+#if _DEBUG
+    // spudgpu.h: no list of the allocator is open when it is reset.
+    assert(!allocator->_open_list && "spudgpu_reset_command_allocator: a list of this allocator is still open");
+#endif
     VkResult r = vkResetCommandPool(
         allocator->_device._logical_device_vk, allocator->_command_pool_vk, 0);
     return (r == VK_SUCCESS) ? SPUD_SUCCESS : SPUDRESULT_API_SPECIFIC_FAILURE;
@@ -166,7 +171,11 @@ SPUDRESULT spudgpu_create_command_list(
     alloc_info.commandBufferCount = 1;
 
     spudgpu_command_list_vulkan *cl = calloc(1, sizeof(spudgpu_command_list_vulkan));
+    if (!cl) return SPUDRESULT_OUT_OF_MEMORY;
     cl->_allocator = *allocator;
+#if _DEBUG
+    cl->_debug_allocator = allocator;
+#endif
 
     VkResult r = vkAllocateCommandBuffers(
         allocator->_device._logical_device_vk, &alloc_info, &cl->_command_buffer_vk);
@@ -187,13 +196,32 @@ void spudgpu_destroy_command_list(spudgpu_command_list cmd) {
         cmd->_allocator._command_pool_vk,
         1, &cmd->_command_buffer_vk);
 #if _DEBUG
+    // A list destroyed open is not open any more.
+    spudgpuvulkan___debug_list_closed(cmd);
     free((void *)cmd->_debug_name);
 #endif
     free(cmd);
 }
 
+#if _DEBUG
+void spudgpuvulkan___debug_list_opened(spudgpu_command_list cmd) {
+    // spudgpu.h: one list of an allocator open at a time. Vulkan would
+    // allow this; D3D12 would refuse it.
+    assert(!cmd->_debug_allocator->_open_list && "spudgpu_begin_command_list: a list of this allocator is already open; end it first");
+    cmd->_debug_allocator->_open_list = cmd;
+}
+
+void spudgpuvulkan___debug_list_closed(spudgpu_command_list cmd) {
+    if (cmd->_debug_allocator->_open_list == cmd)
+        cmd->_debug_allocator->_open_list = NULL;
+}
+#endif
+
 void spudgpu_begin_command_list(spudgpu_command_list cmd) {
     if (!cmd) return;
+#if _DEBUG
+    spudgpuvulkan___debug_list_opened(cmd);
+#endif
 
     // Reset so this buffer can be re-recorded this frame.
     vkResetCommandBuffer(cmd->_command_buffer_vk, 0);
@@ -209,6 +237,9 @@ void spudgpu_begin_command_list(spudgpu_command_list cmd) {
 void spudgpu_end_command_list(spudgpu_command_list cmd) {
     if (!cmd) return;
     vkEndCommandBuffer(cmd->_command_buffer_vk);
+#if _DEBUG
+    spudgpuvulkan___debug_list_closed(cmd);
+#endif
 }
 
 void spudgpu_cmd_begin_debug_label(spudgpu_command_list cmd, const char *label) {
@@ -509,12 +540,11 @@ void spudgpu_cmd_push_constants(
     uint32_t range_count = pipeline->_desc.push_constant_range_count;
     for (uint32_t i = 0; i < range_count; i++) {
         const spudgpu_push_constant_range_desc *r = &pipeline->_desc.push_constant_ranges[i];
-        if (r->offset < offset + size && r->offset + r->size > offset) {
-            SPUDGPU_SHADER_STAGE sf = (SPUDGPU_SHADER_STAGE)r->stage_flags;
-            if (sf & SPUDGPU_SHADER_STAGE_VERTEX)   stages |= VK_SHADER_STAGE_VERTEX_BIT;
-            if (sf & SPUDGPU_SHADER_STAGE_FRAGMENT) stages |= VK_SHADER_STAGE_FRAGMENT_BIT;
-            if (sf & SPUDGPU_SHADER_STAGE_COMPUTE)  stages |= VK_SHADER_STAGE_COMPUTE_BIT;
-        }
+        // Every stage, through the one translation the pipeline layout was
+        // made with: a mesh- or task-only range used to give no stages here,
+        // and the push was dropped.
+        if (r->offset < offset + size && r->offset + r->size > offset)
+            stages |= spudgpuvulkan___shader_stages(r->stage_flags);
     }
     if (!stages) return;
 
@@ -605,6 +635,8 @@ void spudgpu_cmd_draw_indirect(
     uint32_t draw_count,
     uint32_t stride) {
     if (!cmd || !buffer || draw_count == 0) return;
+    if (draw_count > cmd->_allocator._device._properties.max_draw_indirect_count) return;
+    if (stride % 4 != 0 || stride < sizeof(spudgpu_draw_indirect_args)) return;
     vkCmdDrawIndirect(
         cmd->_command_buffer_vk,
         buffer->_buffer_vk,
@@ -620,6 +652,8 @@ void spudgpu_cmd_draw_indexed_indirect(
     uint32_t draw_count,
     uint32_t stride) {
     if (!cmd || !buffer || draw_count == 0) return;
+    if (draw_count > cmd->_allocator._device._properties.max_draw_indirect_count) return;
+    if (stride % 4 != 0 || stride < sizeof(spudgpu_draw_indexed_indirect_args)) return;
     vkCmdDrawIndexedIndirect(
         cmd->_command_buffer_vk,
         buffer->_buffer_vk,

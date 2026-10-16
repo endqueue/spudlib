@@ -237,6 +237,15 @@ not in each backend.
   `spudgpu_submit_command_lists_synced` is. Written 2026-10-10, compiled
   for Metal only. `spudgpu_semaphore` is still binary on Vulkan and a hidden
   counter on D3D12 and Metal.
+- **One list of an allocator is open at a time, on every backend.** D3D12
+  refuses a second (`COMMAND_ALLOCATOR_CONTENTION`, and the list stays
+  closed); Vulkan and Metal would allow it, so `spudgpu.h` states D3D12's
+  rule for all three. A debug build keeps the open list in the allocator's
+  `_open_list` and asserts in begin (bundle begin too) and in
+  `spudgpu_reset_command_allocator`; end and destroy clear it. Vulkan's list
+  holds its allocator by value, so it keeps `_debug_allocator` for this.
+  Added 2026-10-16; run on D3D12 and on Vulkan on Windows, Metal not
+  compiled.
 - **A buffer's memory is one `SPUDGPU_MEMORY_KIND`, a contract and not a
   set of Vulkan property bits.** `DEVICE`, `UPLOAD`, `READBACK` and
   `DEVICE_MAPPABLE` each say what the CPU and the GPU may do with the buffer
@@ -549,8 +558,13 @@ not in each backend.
 All three backends have run a caller's full renderer on real hardware (as of
 2026-10-12): D3D12 on Windows, Vulkan on Linux, Metal on macOS, the same caller
 code on each. That covers the calls that caller makes. A call nothing above
-SpudLib uses is only as verified as its sample in `spudgpusamples`, and Vulkan
-on Windows has not been run this way.
+SpudLib uses is only as verified as its sample in `spudgpusamples`. Vulkan
+on Windows has run `apricottests`' `aprend_gpu_tests` (2026-10-16, Intel Iris
+Xe and NVIDIA RTX A2000, validation layer clean), which found that the
+Vulkan backend passed a descriptor write's image layout and a descriptor set
+layout binding's stage flags to Vulkan untranslated; both are SpudGPU enum
+values and now go through `spud_layout_to_vk` and
+`spudgpuvulkan___shader_stages`.
 
 - **Vulkan** — reference backend, plain C23, complete. Build against this first;
   D3D12 and Metal follow its shape.
@@ -626,6 +640,42 @@ one.
   work to make room for a fix.
 
 ## Known gaps (don't re-flag as surprises)
+
+- An indirect draw's `stride` is a multiple of 4 and at least the size of
+  its args struct, on every backend (Vulkan's rule); otherwise nothing is
+  recorded. A larger stride skips the caller's data between entries. Until
+  2026-10-16 D3D12 ignored `stride`: its one cached command signature fixed
+  `ByteStride` at the args size. It now keeps a signature per stride and
+  kind on the device (`_indirect_signatures`, mutex-guarded), released with
+  the device. `apricottests`' `test_draw_indirect_stride` draws with a
+  32-byte stride; it fails on the old D3D12 code and passes on all three
+  devices here. The same test found that D3D12's `spudgpu_create_buffer_view`
+  refused a buffer that was not a vertex, index or uniform buffer (Vulkan and
+  Metal make a view of any buffer); it now keeps the range for any usage.
+- The D3D12 backend lists devices of feature level 12_0 and up (it
+  required 12_2, from its first commit, for no reason any code had; changed
+  2026-10-16). 12_0 guarantees resource binding tier 2, which descriptor
+  sets of more than 128 SRVs need. Everything past it is probed per device:
+  mesh shading (OPTIONS7), the depth bounds test (OPTIONS2), and bindless,
+  which needs resource binding tier 3 (`_bindless_supported`; without it
+  every bindless call reports not supported). Run on an Iris Xe (12_1, tier
+  3) and an RTX A2000; the tier-2 path has not run on any device.
+- D3D12's shader-visible descriptors are in two heaps per device
+  (`spudgpu_device_d3d12::_csv_heap`, `_sampler_heap`), made by the first
+  descriptor pool or bindless call, and every pool and the bindless state
+  take a range of them (`spudgpud3d12descriptors.cpp`). Before 2026-10-16
+  each pool had heaps of its own, so binding sets of two pools, or bindless
+  and a pool, for one draw left a table in a heap no longer set. The heaps
+  are the largest D3D12 allows on every device: 1,000,000 CBV/SRV/UAV
+  descriptors and 2048 samplers, shared by every live pool, so a pool that
+  asks for more samplers than are left fails with
+  `SPUDRESULT_API_SPECIFIC_FAILURE`. The CBV/SRV/UAV heap is made in full
+  on first use whatever the pools ask for. Run on D3D12 (NVIDIA RTX A2000)
+  by the samples and `aprend_gpu_tests`, debug layer clean.
+- Since 2026-10-16 the Vulkan device enables `multiDrawIndirect` where it
+  is reported, and `SPUDGPU_DEVICE_PROPERTIES::max_draw_indirect_count`
+  reports what one indirect call takes (1 without it; UINT32_MAX on D3D12
+  and Metal). A larger count records nothing, on every backend.
 
 - The debug name rule (see "In a debug build, a debug name is copied") was
   applied to every module on 2026-10-09. Two kinds of Vulkan handle have no

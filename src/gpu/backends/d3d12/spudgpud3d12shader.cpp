@@ -480,6 +480,12 @@ SPUDRESULT spudgpu_create_shader_module(
 	// 6.0 baseline.
 	opts.shader_model =
 	    (desc->stage == SPUDGPU_SHADER_STAGE_MESH || desc->stage == SPUDGPU_SHADER_STAGE_TASK) ? 65 : 60;
+	// A SPUDGPU_DESCRIPTOR_TYPE_STORAGE_BUFFER is a UAV in this backend: its
+	// root signature range (spudgpu_d3d12_build_root_signature) and the
+	// descriptor written for it are both UAVs. SPIRV-Cross would otherwise
+	// declare a GLSL readonly buffer as an SRV (t<n>), which no root
+	// signature range covers, and pipeline creation fails.
+	opts.force_storage_buffer_as_uav = true;
 	hlsl_compiler.set_hlsl_options(opts);
 
 	// SpudGPU's clip space is Vulkan's (the reference backend, and SPIR-V's

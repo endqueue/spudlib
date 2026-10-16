@@ -122,7 +122,9 @@ SPUDRESULT spudgpu_create_descriptor_set_layout(
         vk_bindings[i].binding = b->binding;
         vk_bindings[i].descriptorType = vk_type;
         vk_bindings[i].descriptorCount = b->count;
-        vk_bindings[i].stageFlags = (VkShaderStageFlags) b->stage_flags;
+        // Translated: SpudGPU's stage bits are not Vulkan's (FRAGMENT is
+        // 1 << 1, which is VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT).
+        vk_bindings[i].stageFlags = spudgpuvulkan___shader_stages(b->stage_flags);
         // Immutable samplers aren't supported yet — see the "no static/immutable
         // sampler support" gap in ../../../CLAUDE.md. Every sampler goes through
         // the dynamic, descriptor-bound spudgpu_sampler path today.
@@ -384,7 +386,9 @@ void spudgpu_update_descriptor_sets(
             spudgpu_image_view_vulkan *vkView =
                     (spudgpu_image_view_vulkan *) w->image_info->image_view;
             vk_img_infos[i].imageView = vkView->_image_view_vk;
-            vk_img_infos[i].imageLayout = (VkImageLayout) w->image_info->image_layout;
+            // A SpudGPU layout, translated: the two enums' values differ
+            // (SHADER_READ_ONLY is 4, VkImageLayout 4 is a depth layout).
+            vk_img_infos[i].imageLayout = spud_layout_to_vk(w->image_info->image_layout);
             // Non-NULL only for COMBINED_IMAGE_SAMPLER writes.
             vk_img_infos[i].sampler = w->sampler
                                            ? ((spudgpu_sampler_vulkan *) w->sampler)->_sampler_vk

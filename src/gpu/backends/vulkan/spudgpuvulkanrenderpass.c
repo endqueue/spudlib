@@ -10,7 +10,7 @@
 // Internal helpers: map SpudGPU layout enum → VkImageLayout
 // ---------------------------------------------------------------------------
 
-static VkImageLayout spud_layout_to_vk(SPUDGPU_IMAGE_LAYOUT layout) {
+VkImageLayout spud_layout_to_vk(SPUDGPU_IMAGE_LAYOUT layout) {
 	switch (layout) {
 	case SPUDGPU_IMAGE_LAYOUT_UNDEFINED:
 		return VK_IMAGE_LAYOUT_UNDEFINED;
@@ -544,7 +544,8 @@ void spudgpu_cmd_end_rendering(spudgpu_command_list cmd) {
 // SPUDGPU_COMMAND_LIST_TYPE_BUNDLE allocator). VK_KHR_dynamic_rendering
 // requires its attachment formats up front via
 // VkCommandBufferInheritanceRenderingInfo, since there is no VkRenderPass/
-// VkFramebuffer object to inherit them from implicitly.
+// VkFramebuffer object to inherit them from implicitly, and a secondary
+// buffer inherits no viewport or scissor, so those are set at its start.
 // ---------------------------------------------------------------------------
 
 #if SPUDGPU_EXT_BUNDLES
@@ -552,6 +553,9 @@ void spudgpu_begin_bundle_command_list(
     spudgpu_command_list bundle, const spudgpu_bundle_inheritance_desc *desc) {
     if (!bundle || !desc)
         return;
+#if _DEBUG
+    spudgpuvulkan___debug_list_opened(bundle);
+#endif
 
     vkResetCommandBuffer(bundle->_command_buffer_vk, 0);
 
@@ -592,6 +596,13 @@ void spudgpu_begin_bundle_command_list(
     begin.flags = VK_COMMAND_BUFFER_USAGE_RENDER_PASS_CONTINUE_BIT | VK_COMMAND_BUFFER_USAGE_SIMULTANEOUS_USE_BIT;
     begin.pInheritanceInfo = &inheritance;
     vkBeginCommandBuffer(bundle->_command_buffer_vk, &begin);
+
+    // A secondary command buffer inherits no dynamic state, and every
+    // pipeline's viewport and scissor are dynamic: the bundle is given the
+    // ones the direct list will have set (spudgpu.h's bundle rules). D3D12
+    // takes them from the direct list instead.
+    spudgpu_cmd_set_viewports(bundle, 0, 1, &desc->viewport);
+    spudgpu_cmd_set_scissor_rects(bundle, 0, 1, &desc->scissor_rect);
 }
 
 void spudgpu_cmd_execute_bundle(spudgpu_command_list cmd, spudgpu_command_list bundle) {

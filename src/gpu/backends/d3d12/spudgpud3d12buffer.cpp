@@ -171,15 +171,12 @@ SPUDRESULT spudgpu_create_buffer_view(
 		pResult->_d3d_view._cb.BufferLocation =
 		    buffer->_d3d_gpu_address + desc->offset_from_parent_buffer;
 		pResult->_d3d_view._cb.SizeInBytes    = desc->size;
-	// } else if (buffer->_desc.usage & SPUDGPU_BUFFER_USAGE_STORAGE) {
-	//	pResult->_d3d_view._so.BufferLocation = desc->offset_from_parent_buffer;
-	//  TODO : D3D12_STREAM_OUTPUT_BUFFER_VIEW Buffer Filled Size Location
-	// pResult->_d3d_view._so.BufferFilledSizeLocation = desc->size;
-	//	pResult->_d3d_view._so.SizeInBytes = desc->size;
-	} else {
-		free(pResult);
-		return SPUDRESULT_GPU_INVALID_BUFFER_USAGE;
 	}
+	// Any other buffer (storage, indirect arguments, copies only) has no
+	// D3D12 view object: what reads it through the view - a storage
+	// descriptor written by spudgpu_bindless_register_storage_buffer - is
+	// made from _desc's range. Vulkan and Metal make a view of a buffer of
+	// any usage, and so does this backend.
 
 	*out_buffer_view = pResult;
 	return SPUD_SUCCESS;

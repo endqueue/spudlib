@@ -194,6 +194,14 @@ typedef struct spudgpu_command_allocator_t {
 	spudgpu_device_metal *_parent_device;
 	spudgpu_command_queue_metal *_parent_queue;
 	spudgpu_command_allocator_desc _desc;
+#if _DEBUG
+	// The list of this allocator that is open for recording, or NULL. One
+	// at a time on every backend (spudgpu_begin_command_list): Metal has no
+	// allocator to contend for, D3D12 does, and a debug build asserts so the
+	// rule is caught here too. Not atomic: an allocator is used from one
+	// thread at a time.
+	spudgpu_command_list _open_list;
+#endif
 } spudgpu_command_allocator_metal;
 
 typedef struct spudgpu_command_list_t {

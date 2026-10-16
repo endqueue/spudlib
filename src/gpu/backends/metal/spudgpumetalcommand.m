@@ -12,6 +12,7 @@
 #include "spudcore.h"
 #include "spudgpumetal.h"
 #include <Metal/Metal.h>
+#include <assert.h>
 #include <string.h>
 
 spudgpu_command_queue spudgpu_get_graphics_queue(spudgpu_device device) {
@@ -224,6 +225,11 @@ void spudgpu_destroy_command_allocator(spudgpu_command_allocator allocator) {
 SPUDRESULT spudgpu_reset_command_allocator(spudgpu_command_allocator allocator) {
 	if (!allocator)
 		return SPUDRESULT_GPU_INVALID_COMMAND_ALLOCATOR;
+#if _DEBUG
+	// spudgpu.h: no list of the allocator is open when it is reset.
+	assert(!((spudgpu_command_allocator_metal *)allocator)->_open_list &&
+	       "spudgpu_reset_command_allocator: a list of this allocator is still open");
+#endif
 
 	// Nothing to reset: this allocator holds no pooled Metal object of its
 	// own (see spudgpu_command_allocator_metal in spudgpumetal.h) - every
@@ -268,6 +274,9 @@ void spudgpu_destroy_command_list(spudgpu_command_list cmd) {
 			[cmd_list_metal->_command_buffer_mtl release];
 		}
 #if _DEBUG
+		// A list destroyed open is not open any more.
+		if (cmd_list_metal->_parent_allocator->_open_list == cmd)
+			cmd_list_metal->_parent_allocator->_open_list = NULL;
 		free((void *)cmd_list_metal->_debug_name);
 #endif
 		free(cmd_list_metal);
@@ -279,12 +288,26 @@ void spudgpu_begin_command_list(spudgpu_command_list cmd) {
 		return;
 
 	spudgpu_command_list_metal *cmd_list_metal = (spudgpu_command_list_metal *)cmd;
+#if _DEBUG
+	// spudgpu.h: one list of an allocator open at a time. Metal would
+	// allow this; D3D12 would refuse it.
+	assert(!cmd_list_metal->_parent_allocator->_open_list &&
+	       "spudgpu_begin_command_list: a list of this allocator is already open; end it first");
+	cmd_list_metal->_parent_allocator->_open_list = cmd;
+#endif
 	spudgpumetal___internal_acquire_command_buffer(cmd_list_metal);
 }
 
 void spudgpu_end_command_list(spudgpu_command_list cmd) {
 	if (!cmd)
 		return;
+#if _DEBUG
+	{
+		spudgpu_command_allocator_metal *allocator_metal = ((spudgpu_command_list_metal *)cmd)->_parent_allocator;
+		if (allocator_metal->_open_list == cmd)
+			allocator_metal->_open_list = NULL;
+	}
+#endif
 
 	// Metal command buffers have no vkEndCommandBuffer/Close() equivalent -
 	// encoding simply stops once the last active encoder is ended, and the
@@ -801,6 +824,10 @@ void spudgpu_cmd_draw_indirect(
 		return;
 
 	spudgpu_command_list_metal *cmd_list_metal = (spudgpu_command_list_metal *)cmd;
+	if (draw_count > cmd_list_metal->_parent_allocator->_parent_device->_properties.max_draw_indirect_count)
+		return;
+	if (stride % 4 != 0 || stride < sizeof(spudgpu_draw_indirect_args))
+		return;
 	if (!cmd_list_metal->_active_render_encoder)
 		return;
 	spudgpu_shader_pipeline_metal *pipeline_metal = (spudgpu_shader_pipeline_metal *)cmd_list_metal->_bound_pipeline;
@@ -835,10 +862,14 @@ void spudgpu_cmd_draw_indexed_indirect(
 		return;
 
 	spudgpu_command_list_metal *cmd_list_metal = (spudgpu_command_list_metal *)cmd;
+	if (draw_count > cmd_list_metal->_parent_allocator->_parent_device->_properties.max_draw_indirect_count)
+		return;
+	if (stride % 4 != 0 || stride < sizeof(spudgpu_draw_indexed_indirect_args))
+		return;
 	if (!cmd_list_metal->_active_render_encoder)
 		return;
 	spudgpu_shader_pipeline_metal *pipeline_metal = (spudgpu_shader_pipeline_metal *)cmd_list_metal->_bound_pipeline;
-	spudgpu_buffer_view_metal *index_view         = cmd_list_metal->_bound_index_buffer_view;
+	spudgpu_buffer_view_metal *index_view       = cmd_list_metal->_bound_index_buffer_view;
 	if (!pipeline_metal || !index_view)
 		return;
 	spudgpu_buffer_metal *index_buffer_metal = (spudgpu_buffer_metal *)index_view->_desc.parent_buffer;
