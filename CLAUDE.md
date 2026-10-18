@@ -761,7 +761,9 @@ one.
   - D3D12's `spudgpu_cmd_begin_rendering` returned early without a colour
     attachment until 2026-10-17, so a depth-only pass rendered on Vulkan
     and Metal only. It now begins a pass of a depth attachment alone;
-    written on macOS, not compiled or run on D3D12.
+    written on macOS, then run on D3D12 on 2026-10-17 by `apricottests`'
+    `test_lit_mesh_shadow` (Intel Iris Xe and NVIDIA RTX A2000, debug
+    layer clean).
   - Metal's `spudgpu_create_swap_chain` rejects `buffer_count != 1` and
     `SPUDGPU_PRESENT_MODE_MAILBOX`, and its pipeline rejects geometry and
     tessellation modules.
