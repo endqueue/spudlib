@@ -749,8 +749,19 @@ one.
     whose `type` is not an image type (from building the resource desc, so
     after every other check, and after `SPUDRESULT_GPU_HEAP_MISMATCH` for a
     placed image); Vulkan and Metal don't check it.
-  - D3D12's `spudgpu_cmd_begin_rendering` returns early without a colour
-    attachment, so a depth-only pass renders on Vulkan and Metal only.
+  - Metal: a set's argument buffer is laid out from every binding of its
+    layout, and a shader's argument buffer struct from the bindings it
+    declares (every declared one since 2026-10-17, used or not). A shader
+    that declares only some of a set layout's bindings, and reads one past
+    a binding it leaves out, reads the wrong argument. Every shader that
+    reads a set declares the set's whole layout (a shared include does it);
+    the fix is SPIRV-Cross's `pad_argument_buffer_resources`, which its C
+    API doesn't expose, with the layout's bindings given at pipeline
+    creation.
+  - D3D12's `spudgpu_cmd_begin_rendering` returned early without a colour
+    attachment until 2026-10-17, so a depth-only pass rendered on Vulkan
+    and Metal only. It now begins a pass of a depth attachment alone;
+    written on macOS, not compiled or run on D3D12.
   - Metal's `spudgpu_create_swap_chain` rejects `buffer_count != 1` and
     `SPUDGPU_PRESENT_MODE_MAILBOX`, and its pipeline rejects geometry and
     tessellation modules.

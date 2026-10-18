@@ -385,6 +385,17 @@ typedef struct spudgpu_shader_pipeline_t {
 	// Copied from mesh_module at pipeline-creation time when _is_mesh_pipeline
 	// - see spudgpu_shader_module_metal::_local_size_x/y/z above.
 	uint32_t _mesh_local_size_x, _mesh_local_size_y, _mesh_local_size_z;
+	// The descriptor sets each stage's function reads, bit n for set n, from
+	// Metal's reflection of this pipeline: the vertex (or mesh and object)
+	// stage's and the fragment stage's. spudgpu_cmd_bind_descriptor_sets
+	// binds a set only to the stages that read it - a set's layout may name
+	// a stage whose function in this pipeline takes no argument for it (a
+	// layout shared by pipelines that read it from different stages), and
+	// Metal's validation fails a binding no argument takes. All bits set
+	// when the reflection is missing, which leaves the layout's stages to
+	// decide alone.
+	uint32_t _non_fragment_set_mask;
+	uint32_t _fragment_set_mask;
 } spudgpu_shader_pipeline_metal;
 
 typedef struct spudgpu_compute_pipeline_t {

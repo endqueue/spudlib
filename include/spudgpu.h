@@ -3273,6 +3273,26 @@ enum {
 };
 
 /**
+ * @brief Comparison function, used by the depth test and by a comparison
+ * sampler (spudgpu_sampler_desc::compare_enable).
+ *
+ * Each compares the incoming value against the stored one and passes when
+ * the comparison holds.
+ */
+typedef uint32_t SPUDGPU_COMPARE_OP;
+
+enum {
+	SPUDGPU_COMPARE_OP_NEVER            = 0, /**< Never passes */
+	SPUDGPU_COMPARE_OP_LESS             = 1, /**< Passes when incoming < stored */
+	SPUDGPU_COMPARE_OP_EQUAL            = 2, /**< Passes when incoming == stored */
+	SPUDGPU_COMPARE_OP_LESS_OR_EQUAL    = 3, /**< Passes when incoming <= stored */
+	SPUDGPU_COMPARE_OP_GREATER          = 4, /**< Passes when incoming > stored */
+	SPUDGPU_COMPARE_OP_NOT_EQUAL        = 5, /**< Passes when incoming != stored */
+	SPUDGPU_COMPARE_OP_GREATER_OR_EQUAL = 6, /**< Passes when incoming >= stored */
+	SPUDGPU_COMPARE_OP_ALWAYS           = 7  /**< Always passes */
+};
+
+/**
  * @brief Configuration descriptor for a texture sampler.
  */
 typedef struct spudgpu_sampler_desc {
@@ -3299,6 +3319,18 @@ typedef struct spudgpu_sampler_desc {
 
 	/** 1.0 disables anisotropic filtering. */
 	float max_anisotropy;
+
+	/**
+	 * A comparison sampler: each texel read is compared with a reference
+	 * the shader gives (GLSL's `sampler2DShadow` family, `texture()` with a
+	 * depth to compare), and the read returns 1 where #compare_op holds and
+	 * 0 where it doesn't, filtered as the texels would be - so a linear
+	 * filter gives the share of four texels that pass. For depth textures.
+	 * false for an ordinary sampler, whose #compare_op is not read.
+	 */
+	bool compare_enable;
+	/** What the reference is compared with the texel by, the reference first: SPUDGPU_COMPARE_OP_LESS_OR_EQUAL passes where reference <= texel. */
+	SPUDGPU_COMPARE_OP compare_op;
 #if _DEBUG
 	/** @brief A string identifier used for diagnostic tracking. */
 	const char *debug_name;
@@ -3775,24 +3807,6 @@ enum {
 	SPUDGPU_CULL_MODE_BACK  = 2  /**< Back faces are discarded */
 };
 
-/**
- * @brief Comparison function, used by the depth test.
- *
- * Each compares the incoming value against the stored one and passes when
- * the comparison holds.
- */
-typedef uint32_t SPUDGPU_COMPARE_OP;
-
-enum {
-	SPUDGPU_COMPARE_OP_NEVER            = 0, /**< Never passes */
-	SPUDGPU_COMPARE_OP_LESS             = 1, /**< Passes when incoming < stored */
-	SPUDGPU_COMPARE_OP_EQUAL            = 2, /**< Passes when incoming == stored */
-	SPUDGPU_COMPARE_OP_LESS_OR_EQUAL    = 3, /**< Passes when incoming <= stored */
-	SPUDGPU_COMPARE_OP_GREATER          = 4, /**< Passes when incoming > stored */
-	SPUDGPU_COMPARE_OP_NOT_EQUAL        = 5, /**< Passes when incoming != stored */
-	SPUDGPU_COMPARE_OP_GREATER_OR_EQUAL = 6, /**< Passes when incoming >= stored */
-	SPUDGPU_COMPARE_OP_ALWAYS           = 7  /**< Always passes */
-};
 
 /**
  * @brief Capacity of spudgpu_shader_pipeline_desc::vertex_attributes.

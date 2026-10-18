@@ -79,6 +79,13 @@ SPUDRESULT spudgpu_create_sampler(
 	// Every descriptor set is an argument buffer, so any sampler may be
 	// encoded into one; Metal requires the sampler to say so at creation.
 	sampler_desc.supportArgumentBuffers = YES;
+	if (desc->compare_enable) {
+		static const MTLCompareFunction functions[8] = {
+		    MTLCompareFunctionNever,   MTLCompareFunctionLess,     MTLCompareFunctionEqual,        MTLCompareFunctionLessEqual,
+		    MTLCompareFunctionGreater, MTLCompareFunctionNotEqual, MTLCompareFunctionGreaterEqual, MTLCompareFunctionAlways,
+		};
+		sampler_desc.compareFunction = desc->compare_op < 8 ? functions[desc->compare_op] : MTLCompareFunctionAlways;
+	}
 
 	id<MTLSamplerState> state = [device_metal->_device_mtl newSamplerStateWithDescriptor:sampler_desc];
 	[sampler_desc release];
@@ -483,8 +490,11 @@ void spudgpu_cmd_bind_descriptor_sets(
 		for (uint32_t b = 0; b < layout_desc->binding_count; b++)
 			set_stages |= (uint32_t)layout_desc->bindings[b].stage_flags;
 		uint32_t non_fragment_flags = is_mesh_pipeline ? (SPUDGPU_SHADER_STAGE_MESH | SPUDGPU_SHADER_STAGE_TASK) : SPUDGPU_SHADER_STAGE_VERTEX;
-		bool to_non_fragment        = (set_stages & non_fragment_flags) != 0;
-		bool to_fragment            = (set_stages & SPUDGPU_SHADER_STAGE_FRAGMENT) != 0;
+		// And only to a stage whose function in this pipeline reads the set
+		// (spudgpu_shader_pipeline_metal::_non_fragment_set_mask).
+		uint32_t set_bit            = 1u << (first_set + i);
+		bool to_non_fragment        = (set_stages & non_fragment_flags) != 0 && (pipeline_metal->_non_fragment_set_mask & set_bit) != 0;
+		bool to_fragment            = (set_stages & SPUDGPU_SHADER_STAGE_FRAGMENT) != 0 && (pipeline_metal->_fragment_set_mask & set_bit) != 0;
 		if (!to_non_fragment && !to_fragment)
 			continue;
 

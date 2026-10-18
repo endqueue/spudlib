@@ -274,9 +274,15 @@ SPUDRESULT spudgpu_create_sampler(
 	pResult->_d3d_desc.AddressW       = spudgpu_d3d12_address_mode(desc->address_mode_w);
 	pResult->_d3d_desc.MipLODBias     = desc->mip_lod_bias;
 	pResult->_d3d_desc.MaxAnisotropy  = desc->max_anisotropy > 1.0f ? (UINT)desc->max_anisotropy : 1;
-	// spudgpu_sampler_desc has no comparison, and the filter is never a
-	// comparison filter.
-	pResult->_d3d_desc.ComparisonFunc = D3D12_COMPARISON_FUNC_NONE;
+	// A comparison sampler is the same filter with the comparison
+	// reduction (D3D12_FILTER_COMPARISON_* is the basic filter plus 0x80),
+	// and D3D12's comparison functions are SpudGPU's plus one.
+	if (desc->compare_enable) {
+		pResult->_d3d_desc.Filter         = (D3D12_FILTER)(pResult->_d3d_desc.Filter | 0x80);
+		pResult->_d3d_desc.ComparisonFunc = (D3D12_COMPARISON_FUNC)(desc->compare_op + 1);
+	} else {
+		pResult->_d3d_desc.ComparisonFunc = D3D12_COMPARISON_FUNC_NONE;
+	}
 	pResult->_d3d_desc.MinLOD         = desc->min_lod;
 	pResult->_d3d_desc.MaxLOD         = desc->max_lod;
 

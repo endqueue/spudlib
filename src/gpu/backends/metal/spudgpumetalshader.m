@@ -89,6 +89,17 @@ static SPUDRESULT spudgpumetal___internal_cross_compile_spirv_to_msl(
 	// the write-by-binding-index assumption every *_bind_descriptor_sets*
 	// function makes.
 	spvc_compiler_options_set_bool(options, SPVC_COMPILER_OPTION_MSL_ENABLE_DECORATION_BINDING, SPVC_TRUE);
+	// A set's argument buffer is encoded once, from its layout's every
+	// binding (spudgpumetaldescriptors.m), and its members sit where the
+	// layout's order puts them. SPIRV-Cross by default leaves out of a
+	// shader's argument buffer struct each resource the entry point doesn't
+	// use, which moves every member after it: a shader that read binding 5
+	// of a set it used nothing else of below 5 but 0 read the wrong argument
+	// (apricottests' test_lit_sky, 2026-10-17). With this every resource the
+	// shader declares is in its struct, used or not. A shader that doesn't
+	// even declare a binding of the layout below one it reads is still out
+	// of step: CLAUDE.md's known gaps say so.
+	spvc_compiler_options_set_bool(options, SPVC_COMPILER_OPTION_MSL_FORCE_ACTIVE_ARGUMENT_BUFFER_RESOURCES, SPVC_TRUE);
 	// SpudGPU's clip space is Vulkan's: +Y points down the screen. Metal's
 	// points up (like D3D12's), so flip gl_Position.y to render the same image
 	// - and front-face winding - as Vulkan. Same fix as the D3D12 backend.
@@ -166,6 +177,24 @@ static SPUDRESULT spudgpumetal___internal_cross_compile_spirv_to_msl(
 	*out_msl_source = [NSString stringWithUTF8String:msl_source];
 	spvc_context_destroy(context);
 	return SPUD_SUCCESS;
+}
+
+// The descriptor sets [bindings] - a function's bindings in a pipeline's
+// reflection - read: bit n for each buffer argument it uses at set n's
+// argument buffer index. All bits when [bindings] is nil.
+static uint32_t spudgpumetal___internal_set_mask(NSArray<id<MTLBinding>> *bindings) {
+	if (!bindings)
+		return 0xffffffffu;
+	uint32_t mask = 0;
+	for (id<MTLBinding> binding in bindings) {
+		if (binding.type != MTLBindingTypeBuffer || !binding.used)
+			continue;
+		NSUInteger index = binding.index;
+		if (index >= SPUDGPU_METAL_DESCRIPTOR_SET_BUFFER_INDEX_BASE &&
+		    index < SPUDGPU_METAL_DESCRIPTOR_SET_BUFFER_INDEX_BASE + SPUDGPU_MAX_DESCRIPTOR_SET_LAYOUTS)
+			mask |= 1u << (uint32_t)(index - SPUDGPU_METAL_DESCRIPTOR_SET_BUFFER_INDEX_BASE);
+	}
+	return mask;
 }
 
 // -----------------------------------------------------------------------
@@ -476,12 +505,18 @@ SPUDRESULT spudgpu_create_shader_pipeline(
 			}
 		}
 
-		NSError *pipeline_error = nil;
+		NSError *pipeline_error                 = nil;
+		MTLRenderPipelineReflection *reflection = nil;
 		pipeline_metal->_render_pipeline_state_mtl = [device_metal->_device_mtl
 		    newRenderPipelineStateWithMeshDescriptor:pipeline_desc
-		                                      options:MTLPipelineOptionNone
-		                                   reflection:NULL
+		                                      options:MTLPipelineOptionBindingInfo
+		                                   reflection:&reflection
 		                                        error:&pipeline_error];
+		// Autoreleased: read now, before anything can release it.
+		pipeline_metal->_non_fragment_set_mask =
+		    reflection ? (spudgpumetal___internal_set_mask(reflection.meshBindings) | spudgpumetal___internal_set_mask(reflection.objectBindings))
+		               : 0xffffffffu;
+		pipeline_metal->_fragment_set_mask = reflection ? spudgpumetal___internal_set_mask(reflection.fragmentBindings) : 0xffffffffu;
 		[pipeline_desc release];
 		if (!pipeline_metal->_render_pipeline_state_mtl) {
 			printf(
@@ -541,9 +576,14 @@ SPUDRESULT spudgpu_create_shader_pipeline(
 		}
 
 		NSError *pipeline_error                     = nil;
+		MTLRenderPipelineReflection *reflection     = nil;
 		pipeline_metal->_render_pipeline_state_mtl  = [device_metal->_device_mtl
 		    newRenderPipelineStateWithDescriptor:pipeline_desc
+		                                 options:MTLPipelineOptionBindingInfo
+		                              reflection:&reflection
 		                                    error:&pipeline_error];
+		pipeline_metal->_non_fragment_set_mask = reflection ? spudgpumetal___internal_set_mask(reflection.vertexBindings) : 0xffffffffu;
+		pipeline_metal->_fragment_set_mask     = reflection ? spudgpumetal___internal_set_mask(reflection.fragmentBindings) : 0xffffffffu;
 		[pipeline_desc release];
 		if (!pipeline_metal->_render_pipeline_state_mtl) {
 			printf(

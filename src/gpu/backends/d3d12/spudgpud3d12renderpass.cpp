@@ -503,18 +503,20 @@ void spudgpu_cmd_begin_rendering(
     const spudgpu_rendering_begin_desc *desc) {
 	if (!cmd || !desc)
 		return;
-	if(!desc->color_attachment_count || !desc->color_attachments)
-		return;
-	if (!desc->color_attachments[0].image_view)
-		return;
-
-	UINT colorCount = desc->color_attachment_count;
+	// Color attachments, a depth attachment, or both: a depth-only pass (a
+	// shadow map, a depth pre-pass) has no color attachment at all, as on
+	// Vulkan and Metal.
+	UINT colorCount = desc->color_attachments ? desc->color_attachment_count : 0;
 	if (colorCount > SPUDGPU_MAX_COLOR_ATTACHMENTS)
 		colorCount = SPUDGPU_MAX_COLOR_ATTACHMENTS;
+	if (colorCount > 0 && !desc->color_attachments[0].image_view)
+		return;
+	if (colorCount == 0 && !desc->depth_attachment.image_view)
+		return;
 
-	spudgpu_image_view_d3d12 *firstColorView =
-	    (spudgpu_image_view_d3d12 *)desc->color_attachments[0].image_view;
-	ID3D12Device *device = firstColorView->_image->_device->_d3d_device.Get();
+	spudgpu_image_view_d3d12 *firstView =
+	    (spudgpu_image_view_d3d12 *)(colorCount > 0 ? desc->color_attachments[0].image_view : desc->depth_attachment.image_view);
+	ID3D12Device *device = firstView->_image->_device->_d3d_device.Get();
 	ID3D12GraphicsCommandList4 *cmdList = cmd->_d3d_cmd_list.Get();
 
 	// Reuse this command list's persistent RTV heap, growing (recreating)
@@ -522,7 +524,7 @@ void spudgpu_cmd_begin_rendering(
 	// holds. CPU descriptor handles are cheap to overwrite in place every
 	// call; it's the heap object itself that's expensive to keep
 	// recreating every render pass.
-	if (colorCount > cmd->_rtv_heap_capacity) {
+	if (colorCount > 0 && colorCount > cmd->_rtv_heap_capacity) {
 		D3D12_DESCRIPTOR_HEAP_DESC heapDesc = {};
 		heapDesc.Type           = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
 		heapDesc.NumDescriptors = colorCount;
@@ -532,7 +534,9 @@ void spudgpu_cmd_begin_rendering(
 		cmd->_rtv_heap_capacity = colorCount;
 	}
 	UINT rtvInc = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
-	D3D12_CPU_DESCRIPTOR_HANDLE rtvStart = cmd->_rtv_heap->GetCPUDescriptorHandleForHeapStart();
+	D3D12_CPU_DESCRIPTOR_HANDLE rtvStart = {};
+	if (colorCount > 0)
+		rtvStart = cmd->_rtv_heap->GetCPUDescriptorHandleForHeapStart();
 
 	D3D12_RENDER_PASS_RENDER_TARGET_DESC rtDescs[SPUDGPU_MAX_COLOR_ATTACHMENTS] = {};
 	for (UINT i = 0; i < colorCount; ++i) {
@@ -624,7 +628,7 @@ void spudgpu_cmd_begin_rendering(
 	// SECONDARY_COMMAND_BUFFERS, see spudgpuvulkanrenderpass.c) -- this is
 	// D3D12's side of honoring the same caller-supplied fact.
 	if (desc->will_execute_bundles) {
-		cmdList->OMSetRenderTargets(colorCount, &rtvStart, TRUE, hasDepth ? &dsDesc.cpuDescriptor : nullptr);
+		cmdList->OMSetRenderTargets(colorCount, colorCount > 0 ? &rtvStart : nullptr, TRUE, hasDepth ? &dsDesc.cpuDescriptor : nullptr);
 		for (UINT i = 0; i < colorCount; ++i) {
 			if (rtDescs[i].BeginningAccess.Type != D3D12_RENDER_PASS_BEGINNING_ACCESS_TYPE_CLEAR)
 				continue;
@@ -651,7 +655,7 @@ void spudgpu_cmd_begin_rendering(
 	}
 
 	cmdList->BeginRenderPass(
-	    colorCount, rtDescs,
+	    colorCount, colorCount > 0 ? rtDescs : nullptr,
 	    hasDepth ? &dsDesc : nullptr,
 	    D3D12_RENDER_PASS_FLAG_NONE);
 	cmd->_using_render_pass = true;

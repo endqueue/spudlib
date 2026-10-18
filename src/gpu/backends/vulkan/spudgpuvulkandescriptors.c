@@ -64,8 +64,9 @@ SPUDRESULT spudgpu_create_sampler(
     info.maxLod = desc->max_lod;
     info.anisotropyEnable = desc->max_anisotropy > 1.0f ? VK_TRUE : VK_FALSE;
     info.maxAnisotropy = desc->max_anisotropy;
-    info.compareEnable = VK_FALSE;
-    info.compareOp = VK_COMPARE_OP_ALWAYS;
+    // SpudGPU's compare ops are Vulkan's, value for value.
+    info.compareEnable = desc->compare_enable ? VK_TRUE : VK_FALSE;
+    info.compareOp = desc->compare_enable ? (VkCompareOp)desc->compare_op : VK_COMPARE_OP_ALWAYS;
     info.borderColor = VK_BORDER_COLOR_FLOAT_TRANSPARENT_BLACK;
 
     spudgpu_sampler_vulkan *pResult = calloc(1, sizeof(spudgpu_sampler_vulkan));
