@@ -232,6 +232,10 @@ bool ___internal_spudgpu_d3d12_make_device_properties(
 	device->_properties.cube_array_views = true;
 	// ExecuteIndirect takes any MaxCommandCount.
 	device->_properties.max_draw_indirect_count = UINT32_MAX;
+	// A CBV's BufferLocation, and a raw buffer view's first byte, on every
+	// device.
+	device->_properties.uniform_buffer_offset_alignment = D3D12_CONSTANT_BUFFER_DATA_PLACEMENT_ALIGNMENT;
+	device->_properties.storage_buffer_offset_alignment = D3D12_RAW_UAV_SRV_BYTE_ALIGNMENT;
 	// A direct queue's command lists can write timestamps anywhere.
 	device->_properties.pass_timestamps = true;
 	return true;

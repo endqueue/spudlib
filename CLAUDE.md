@@ -575,7 +575,12 @@ validation refuses setting a state again); the timestamp counter set
 retained out of the autorelease pool that looked it up, which had freed
 it; and the array of devices made once and owned by the instance on every
 backend (Vulkan and Metal leaked a copy to the caller, and made new devices
-on each call).
+on each call). On 2026-10-18 a test that binds one compute pipeline for two
+dispatches in a row found that Metal set the pipeline state on the encoder
+at every `spudgpu_cmd_bind_compute_pipeline`, which validation refuses as
+redundant; it is set only when it differs from the encoder's now
+(`_encoder_compute_pipeline_state`), as the render encoder's state already
+was.
 
 - **Vulkan** — reference backend, plain C23, complete. Build against this first;
   D3D12 and Metal follow its shape.

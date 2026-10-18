@@ -263,6 +263,11 @@ typedef struct spudgpu_command_list_t {
 	// spudgpu_cmd_begin_rendering and spudgpu_end_command_list).
 	id<MTLComputeCommandEncoder> _active_compute_encoder;
 	struct spudgpu_compute_pipeline_t *_bound_compute_pipeline;
+	// The pipeline state _active_compute_encoder has set, nil for a new
+	// encoder: Metal's validation refuses setting the same state again, so
+	// spudgpu_cmd_bind_compute_pipeline sets it only when it differs.
+	// Cleared with the encoder.
+	id<MTLComputePipelineState> _encoder_compute_pipeline_state;
 
 	// Blit counterpart to _active_render_encoder/_active_compute_encoder
 	// above, backing spudgpu_cmd_copy_buffer/_copy_buffer_to_image/

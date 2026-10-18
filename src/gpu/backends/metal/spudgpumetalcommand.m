@@ -364,7 +364,8 @@ void spudgpumetal___internal_end_active_compute_encoder(spudgpu_command_list_met
 		return;
 	[cmd_list_metal->_active_compute_encoder endEncoding];
 	[cmd_list_metal->_active_compute_encoder release];
-	cmd_list_metal->_active_compute_encoder = nil;
+	cmd_list_metal->_active_compute_encoder         = nil;
+	cmd_list_metal->_encoder_compute_pipeline_state = nil;
 }
 
 // Returns the active compute encoder, lazily opening one (ending any active
@@ -734,7 +735,12 @@ void spudgpu_cmd_bind_compute_pipeline(
 	cmd_list_metal->_bound_compute_pipeline          = (struct spudgpu_compute_pipeline_t *)pipeline_metal;
 
 	id<MTLComputeCommandEncoder> encoder = spudgpumetal___internal_ensure_compute_encoder(cmd_list_metal);
+	// Binding the pipeline already bound is allowed, and leaves the encoder
+	// as it is: Metal's validation refuses setting the same state twice.
+	if (cmd_list_metal->_encoder_compute_pipeline_state == pipeline_metal->_compute_pipeline_state_mtl)
+		return;
 	[encoder setComputePipelineState:pipeline_metal->_compute_pipeline_state_mtl];
+	cmd_list_metal->_encoder_compute_pipeline_state = pipeline_metal->_compute_pipeline_state_mtl;
 }
 
 void spudgpu_cmd_dispatch(

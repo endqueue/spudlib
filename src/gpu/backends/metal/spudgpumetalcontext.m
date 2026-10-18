@@ -119,6 +119,11 @@ static void spudgpumetal___internal_make_device_properties(
 	// spudgpu_cmd_draw_indirect loops one indirect draw per entry, so any
 	// count is recorded.
 	device->_properties.max_draw_indirect_count = UINT32_MAX;
+	// Metal has no query for a buffer offset's alignment. Its feature set
+	// tables ask at most 256 bytes of a constant buffer's offset, so 256 is
+	// valid on every device; a storage buffer is held to the same.
+	device->_properties.uniform_buffer_offset_alignment = 256;
+	device->_properties.storage_buffer_offset_alignment = 256;
 	// A pass's timestamps are samples of the timestamp counter set at its
 	// stage boundaries.
 	id<MTLCounterSet> timestamp_counter_set = spudgpumetal___internal_timestamp_counter_set(device->_device_mtl);

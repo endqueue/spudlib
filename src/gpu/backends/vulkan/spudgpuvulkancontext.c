@@ -614,6 +614,9 @@ static void spudgpuvulkan___internal_make_device_properties(
     // 1, whatever maxDrawIndirectCount says.
     device->_properties.max_draw_indirect_count =
         features.multiDrawIndirect == VK_TRUE ? props->limits.maxDrawIndirectCount : 1;
+    // Powers of two by Vulkan's rules, and never above 256.
+    device->_properties.uniform_buffer_offset_alignment = (uint32_t) props->limits.minUniformBufferOffsetAlignment;
+    device->_properties.storage_buffer_offset_alignment = (uint32_t) props->limits.minStorageBufferOffsetAlignment;
 
     // Timestamps are written by command lists on the graphics queue, whose
     // family says whether it counts time at all.

@@ -506,6 +506,28 @@ typedef struct SPUDGPU_DEVICE_PROPERTIES {
 	 * enabled on the device. D3D12 and Metal: always true.
 	 */
 	bool cube_array_views;
+	/**
+	 * What the offset of a uniform buffer range in a descriptor write
+	 * (spudgpu_descriptor_buffer_info::offset, for
+	 * SPUDGPU_DESCRIPTOR_TYPE_UNIFORM_BUFFER) is a multiple of on this
+	 * device. Any other offset is outside the graphics API's rules. A power
+	 * of two.
+	 *
+	 * Vulkan: `VkPhysicalDeviceLimits::minUniformBufferOffsetAlignment`.
+	 * D3D12: 256 (`D3D12_CONSTANT_BUFFER_DATA_PLACEMENT_ALIGNMENT`). Metal
+	 * has no query: 256, the largest any Metal GPU family asks of a
+	 * constant buffer's offset.
+	 */
+	uint32_t uniform_buffer_offset_alignment;
+	/**
+	 * The same for a storage buffer range
+	 * (SPUDGPU_DESCRIPTOR_TYPE_STORAGE_BUFFER). A power of two.
+	 *
+	 * Vulkan: `VkPhysicalDeviceLimits::minStorageBufferOffsetAlignment`.
+	 * D3D12: 16 (`D3D12_RAW_UAV_SRV_BYTE_ALIGNMENT`: a storage buffer is a
+	 * raw view). Metal has no query: 256, as for a uniform buffer.
+	 */
+	uint32_t storage_buffer_offset_alignment;
 } SPUDGPU_DEVICE_PROPERTIES;
 
 /**
