@@ -763,7 +763,9 @@ one.
     and Metal only. It now begins a pass of a depth attachment alone;
     written on macOS, then run on D3D12 on 2026-10-17 by `apricottests`'
     `test_lit_mesh_shadow` (Intel Iris Xe and NVIDIA RTX A2000, debug
-    layer clean).
+    layer clean). Trellis_Avalonia built and ran over it on D3D12 and
+    Vulkan the same day (reported), but Trellis renders no depth-only
+    pass, so that run doesn't exercise it.
   - Metal's `spudgpu_create_swap_chain` rejects `buffer_count != 1` and
     `SPUDGPU_PRESENT_MODE_MAILBOX`, and its pipeline rejects geometry and
     tessellation modules.
