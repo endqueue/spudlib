@@ -43,6 +43,7 @@
 #include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
+#include "../../../spudstructbase.h"
 
 // NSURLSession has no "no limit" value; a year stands in for one.
 #define SPUDNET_APPLE_NO_LIMIT_SECONDS (365.0 * 24.0 * 60.0 * 60.0)
@@ -633,6 +634,9 @@ SPUDRESULT spudnet_http_client_create(
 		return SPUDRESULT_SPUDNET_INVALID_INSTANCE;
 	if (!desc)
 		return SPUDRESULT_NULL_DESC;
+	const SPUDRESULT base_sr = spud_struct_check(&desc->base, SPUD_STRUCT_TYPE_NET_HTTP_CLIENT_DESC);
+	if (base_sr != SPUD_SUCCESS)
+		return base_sr;
 
 	SpudNetTLS *tls    = nil;
 	SPUDRESULT  result = spudnet_apple_tls_create(&desc->tls, &tls);
@@ -1238,6 +1242,9 @@ SPUDRESULT spudnet_websocket_connect(
 		return SPUDRESULT_SPUDNET_INVALID_WEBSOCKET;
 	if (!desc)
 		return SPUDRESULT_NULL_DESC;
+	const SPUDRESULT base_sr = spud_struct_check(&desc->base, SPUD_STRUCT_TYPE_NET_WEBSOCKET_CONNECT_DESC);
+	if (base_sr != SPUD_SUCCESS)
+		return base_sr;
 	if (!desc->url || desc->max_message_size == 0 || (desc->header_count > 0 && !desc->headers))
 		return SPUDRESULT_DESC_INVALID_PARAMETERS;
 	if (!spudnet_url_has_scheme(desc->url, "ws") && !spudnet_url_has_scheme(desc->url, "wss"))

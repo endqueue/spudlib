@@ -305,6 +305,7 @@ typedef enum SPUDNET_ERROR_SOURCE {
  * Filled by an object's `_get_error`, or through the `out_error` of a call
  * that leaves no object to ask. See @ref spudnet_error_detail "Error detail".
  */
+/* Frozen: filled in per call, like every error struct. It never changes; a new need gets a new type. */
 typedef struct spudnet_error {
 	/** What the recorded call returned; SPUD_SUCCESS in an empty record. */
 	SPUDRESULT result;
@@ -686,6 +687,10 @@ typedef struct spudnet_resolver_t *spudnet_resolver;
 
 /** @brief What spudnet_resolver_create() looks up. */
 typedef struct spudnet_resolver_desc {
+	/** `type` is SPUD_STRUCT_TYPE_NET_RESOLVER_DESC; `next` is NULL (nothing is
+	 * chained onto this struct yet). Set by the caller. See
+	 * SPUD_STRUCT_BASE. */
+	SPUD_STRUCT_BASE base;
 	/** The name to look up, UTF-8 and null-terminated; NULL or an empty
 	 * string is refused. A numeric address comes back as itself without a
 	 * name server being asked. Copied; it doesn't have to outlast the
@@ -709,6 +714,9 @@ typedef struct spudnet_resolver_desc {
  * @retval SPUDRESULT_NULL_OUTPUT_PARAMETER `out_resolver` is NULL.
  * @retval SPUDRESULT_SPUDNET_INVALID_INSTANCE `instance` is NULL.
  * @retval SPUDRESULT_NULL_DESC `desc` is NULL.
+ * @retval SPUDRESULT_STRUCT_WRONG_TYPE `desc->base.type` is not
+ *         SPUD_STRUCT_TYPE_NET_RESOLVER_DESC.
+ * @retval SPUDRESULT_STRUCT_UNKNOWN_IN_CHAIN `desc->base.next` is not NULL.
  * @retval SPUDRESULT_DESC_INVALID_PARAMETERS `desc->host` is NULL or empty.
  * @retval SPUDRESULT_OUT_OF_MEMORY The resolver could not be allocated.
  * @retval SPUDRESULT_SPUDNET_STARTUP_FAILED The platform wouldn't give the
@@ -850,6 +858,10 @@ typedef struct spudnet_tcp_socket_t *spudnet_tcp_socket;
 
 /** @brief Where spudnet_tcp_listener_create() listens. */
 typedef struct spudnet_tcp_listener_desc {
+	/** `type` is SPUD_STRUCT_TYPE_NET_TCP_LISTENER_DESC; `next` is NULL (nothing is
+	 * chained onto this struct yet). Set by the caller. See
+	 * SPUD_STRUCT_BASE. */
+	SPUD_STRUCT_BASE base;
 	/** The local address to listen on, numeric and null-terminated:
 	 * "0.0.0.0" for every IPv4 interface, `"::"` for every IPv6 one,
 	 * "127.0.0.1" for this machine only, or one interface's own address. An
@@ -914,6 +926,9 @@ typedef struct spudnet_tcp_listener_desc {
  * @retval SPUDRESULT_NULL_OUTPUT_PARAMETER `out_listener` is NULL.
  * @retval SPUDRESULT_SPUDNET_INVALID_INSTANCE `instance` is NULL.
  * @retval SPUDRESULT_NULL_DESC `desc` is NULL.
+ * @retval SPUDRESULT_STRUCT_WRONG_TYPE `desc->base.type` is not
+ *         SPUD_STRUCT_TYPE_NET_TCP_LISTENER_DESC.
+ * @retval SPUDRESULT_STRUCT_UNKNOWN_IN_CHAIN `desc->base.next` is not NULL.
  * @retval SPUDRESULT_DESC_INVALID_PARAMETERS `desc->address` is NULL or
  *         `desc->backlog` is 0.
  * @retval SPUDRESULT_SPUDNET_INVALID_ADDRESS `desc->address` isn't a numeric
@@ -1022,6 +1037,10 @@ void spudnet_tcp_listener_destroy(spudnet_tcp_listener listener);
 
 /** @brief Where spudnet_tcp_socket_connect() connects to, and how long it may take. */
 typedef struct spudnet_tcp_socket_connect_desc {
+	/** `type` is SPUD_STRUCT_TYPE_NET_TCP_SOCKET_CONNECT_DESC; `next` is NULL (nothing is
+	 * chained onto this struct yet). Set by the caller. See
+	 * SPUD_STRUCT_BASE. */
+	SPUD_STRUCT_BASE base;
 	const char *address; /**< Numeric and null-terminated; see spudnet_resolver for names. NULL is refused. */
 	uint16_t port;       /**< The port the other end is listening on. */
 	/** The longest connecting may take. See
@@ -1058,6 +1077,9 @@ SPUDRESULT spudnet_tcp_socket_create(
  * @retval SPUDRESULT_SPUDNET_INVALID_TCP_SOCKET `socket` is NULL, or connect
  *         has already been called on it.
  * @retval SPUDRESULT_NULL_DESC `desc` is NULL.
+ * @retval SPUDRESULT_STRUCT_WRONG_TYPE `desc->base.type` is not
+ *         SPUD_STRUCT_TYPE_NET_TCP_SOCKET_CONNECT_DESC.
+ * @retval SPUDRESULT_STRUCT_UNKNOWN_IN_CHAIN `desc->base.next` is not NULL.
  * @retval SPUDRESULT_DESC_INVALID_PARAMETERS `desc->address` is NULL.
  * @retval SPUDRESULT_SPUDNET_INVALID_ADDRESS `desc->address` isn't a numeric
  *         address.
@@ -1412,6 +1434,7 @@ SPUDRESULT spudnet_get_local_ipv4_addresses(
  * or as one with the values joined by ", " - so a caller that needs one
  * particular form joins the values itself.
  */
+/* Frozen: an array element of the HTTP and WebSocket descs. It never changes; a new need gets a new type. */
 typedef struct spudnet_header {
 	const char *name;  /**< The header's name, without the colon. */
 	const char *value; /**< The header's value. */
@@ -1500,6 +1523,7 @@ typedef enum SPUDNET_TLS_TRUST {
  * A PEM file is the same bytes in base64 between its BEGIN and END lines;
  * decoding that is the caller's (`openssl x509 -outform der`).
  */
+/* Frozen: an array element of spudnet_tls_desc. It never changes; a new need gets a new type. */
 typedef struct spudnet_tls_certificate {
 	const void *data; /**< The certificate's DER bytes. */
 	uint64_t size;    /**< How many bytes `data` holds. */
@@ -1520,6 +1544,7 @@ typedef struct spudnet_tls_certificate {
  * openssl x509 -in server.pem -pubkey -noout | openssl pkey -pubin -outform der | openssl dgst -sha256
  * @endcode
  */
+/* Frozen: an array element of spudnet_tls_desc. It never changes; a new need gets a new type. */
 typedef struct spudnet_tls_pin {
 	uint8_t sha256[SPUDNET_TLS_PIN_SIZE]; /**< The hash, as raw bytes. */
 } spudnet_tls_pin;
@@ -1533,6 +1558,7 @@ typedef struct spudnet_tls_pin {
  *
  * A zeroed desc is the stack's own behaviour. See @ref spudnet_tls "TLS".
  */
+/* Frozen: held by value in the HTTP client and WebSocket connect descs; an addition to TLS is a struct chained onto those. It never changes; a new need gets a new type. */
 typedef struct spudnet_tls_desc {
 	/** Which roots a certificate chain has to end at. */
 	SPUDNET_TLS_TRUST trust;
@@ -1628,6 +1654,7 @@ typedef enum SPUDNET_PROXY {
  * A zeroed desc is the platform's own setting. See
  * @ref spudnet_proxies "Proxy".
  */
+/* Frozen: held by value in the HTTP client and WebSocket connect descs; an addition is a struct chained onto those. It never changes; a new need gets a new type. */
 typedef struct spudnet_proxy_desc {
 	/** Where the proxy, if any, comes from. */
 	SPUDNET_PROXY mode;
@@ -1713,6 +1740,10 @@ typedef struct spudnet_http_client_t *spudnet_http_client;
 
 /** @brief What every connection of an HTTP client is made with. */
 typedef struct spudnet_http_client_desc {
+	/** `type` is SPUD_STRUCT_TYPE_NET_HTTP_CLIENT_DESC; `next` is NULL (nothing is
+	 * chained onto this struct yet). Set by the caller. See
+	 * SPUD_STRUCT_BASE. */
+	SPUD_STRUCT_BASE base;
 	/** For every https:// connection the client makes, a redirect's
 	 * included. See @ref spudnet_tls "TLS". */
 	spudnet_tls_desc tls;
@@ -1737,6 +1768,9 @@ typedef struct spudnet_http_client_desc {
  * @retval SPUDRESULT_NULL_OUTPUT_PARAMETER `out_client` is NULL.
  * @retval SPUDRESULT_SPUDNET_INVALID_INSTANCE `instance` is NULL.
  * @retval SPUDRESULT_NULL_DESC `desc` is NULL.
+ * @retval SPUDRESULT_STRUCT_WRONG_TYPE `desc->base.type` is not
+ *         SPUD_STRUCT_TYPE_NET_HTTP_CLIENT_DESC.
+ * @retval SPUDRESULT_STRUCT_UNKNOWN_IN_CHAIN `desc->base.next` is not NULL.
  * @retval SPUDRESULT_DESC_INVALID_PARAMETERS `desc->tls` or `desc->proxy`
  *         contradicts itself, or a root isn't a certificate.
  * @retval SPUDRESULT_OUT_OF_MEMORY The client could not be allocated.
@@ -1777,7 +1811,7 @@ typedef struct spudnet_http_transfer_t *spudnet_http_transfer;
 typedef enum SPUDNET_HTTP_BODY {
 	/** No body. SpudNet announces none and spudnet_http_transfer_send() is
 	 * not called. What a GET, a HEAD or a DELETE usually is - and what a
-	 * zeroed desc asks for. A stack may still announce an empty body of its
+	 * desc that leaves `body` at 0 asks for. A stack may still announce an empty body of its
 	 * own accord for a method it expects one from; that is among the headers
 	 * the stack adds (@ref spudnet_stack "HTTP and WebSocket"), and not
 	 * everywhere something that can be stopped. Known problem: NSURLSession
@@ -1800,6 +1834,10 @@ typedef enum SPUDNET_HTTP_BODY {
 
 /** @brief One request, as spudnet_http_transfer_start() sends it. */
 typedef struct spudnet_http_transfer_desc {
+	/** `type` is SPUD_STRUCT_TYPE_NET_HTTP_TRANSFER_DESC; `next` is NULL (nothing is
+	 * chained onto this struct yet). Set by the caller. See
+	 * SPUD_STRUCT_BASE. */
+	SPUD_STRUCT_BASE base;
 	/** The method, sent byte for byte as given. HTTP's method names are
 	 * case-sensitive, so "get" is not GET and a server may refuse it;
 	 * SpudNet neither corrects the case nor compares without it.
@@ -1883,6 +1921,9 @@ SPUDRESULT spudnet_http_transfer_create(
  *         has already been started, or (libcurl, NSURLSession) its client
  *         has another transfer in progress.
  * @retval SPUDRESULT_NULL_DESC `desc` is NULL.
+ * @retval SPUDRESULT_STRUCT_WRONG_TYPE `desc->base.type` is not
+ *         SPUD_STRUCT_TYPE_NET_HTTP_TRANSFER_DESC.
+ * @retval SPUDRESULT_STRUCT_UNKNOWN_IN_CHAIN `desc->base.next` is not NULL.
  * @retval SPUDRESULT_SPUDNET_ABORTED spudnet_http_transfer_abort() was
  *         called.
  * @retval SPUDRESULT_DESC_INVALID_PARAMETERS A field is missing, a header is
@@ -2222,6 +2263,10 @@ typedef enum SPUDNET_WEBSOCKET_MESSAGE {
 
 /** @brief Where spudnet_websocket_connect() connects to, and how. */
 typedef struct spudnet_websocket_connect_desc {
+	/** `type` is SPUD_STRUCT_TYPE_NET_WEBSOCKET_CONNECT_DESC; `next` is NULL (nothing is
+	 * chained onto this struct yet). Set by the caller. See
+	 * SPUD_STRUCT_BASE. */
+	SPUD_STRUCT_BASE base;
 	const char *url; /**< Absolute, already percent-encoded. */
 	/** Sent with the opening request - Authorization, Sec-WebSocket-Protocol
 	 * and the like. */
@@ -2311,6 +2356,9 @@ SPUDRESULT spudnet_websocket_create(
  * @retval SPUDRESULT_SPUDNET_INVALID_WEBSOCKET `socket` is NULL, or connect
  *         has already been called on it.
  * @retval SPUDRESULT_NULL_DESC `desc` is NULL.
+ * @retval SPUDRESULT_STRUCT_WRONG_TYPE `desc->base.type` is not
+ *         SPUD_STRUCT_TYPE_NET_WEBSOCKET_CONNECT_DESC.
+ * @retval SPUDRESULT_STRUCT_UNKNOWN_IN_CHAIN `desc->base.next` is not NULL.
  * @retval SPUDRESULT_DESC_INVALID_PARAMETERS `desc->url` is NULL,
  *         `desc->max_message_size` is 0, `desc->headers` is NULL with a
  *         `header_count` above 0, a header is one the caller may not set,
@@ -2604,6 +2652,7 @@ typedef enum SPUDNET_WAIT_FOR {
 } SPUDNET_WAIT_FOR;
 
 /** @brief One object spudnet_wait_set_wait() found worth calling. */
+/* Frozen: an array element spudnet_wait_set_wait fills. It never changes; a new need gets a new type. */
 typedef struct spudnet_wait_event {
 	void *user;     /**< What the object was added with. */
 	uint32_t ready; /**< SPUDNET_WAIT_FOR bits, from among those asked for. */

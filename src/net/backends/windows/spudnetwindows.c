@@ -25,6 +25,7 @@
 
 #include "../../spudnetshared.h"
 #include "spudnet.h"
+#include "../../../spudstructbase.h"
 
 /* winsock2.h must come before any transitive <windows.h> pull-in (PCH or
  * otherwise) — <windows.h> alone drags in the legacy winsock.h and the two
@@ -322,6 +323,9 @@ SPUDRESULT spudnet_tcp_listener_create(
 		return SPUDRESULT_SPUDNET_INVALID_INSTANCE;
 	if (!desc)
 		return SPUDRESULT_NULL_DESC;
+	const SPUDRESULT base_sr = spud_struct_check(&desc->base, SPUD_STRUCT_TYPE_NET_TCP_LISTENER_DESC);
+	if (base_sr != SPUD_SUCCESS)
+		return base_sr;
 	if (!desc->address || desc->backlog == 0)
 		return SPUDRESULT_DESC_INVALID_PARAMETERS;
 
@@ -519,6 +523,9 @@ SPUDRESULT spudnet_tcp_socket_connect(
 		return SPUDRESULT_SPUDNET_INVALID_TCP_SOCKET;
 	if (!desc)
 		return SPUDRESULT_NULL_DESC;
+	const SPUDRESULT base_sr = spud_struct_check(&desc->base, SPUD_STRUCT_TYPE_NET_TCP_SOCKET_CONNECT_DESC);
+	if (base_sr != SPUD_SUCCESS)
+		return base_sr;
 	if (!desc->address)
 		return SPUDRESULT_DESC_INVALID_PARAMETERS;
 
@@ -760,6 +767,9 @@ SPUDRESULT spudnet_resolver_create(
 		return SPUDRESULT_SPUDNET_INVALID_INSTANCE;
 	if (!desc)
 		return SPUDRESULT_NULL_DESC;
+	const SPUDRESULT base_sr = spud_struct_check(&desc->base, SPUD_STRUCT_TYPE_NET_RESOLVER_DESC);
+	if (base_sr != SPUD_SUCCESS)
+		return base_sr;
 	if (!desc->host || desc->host[0] == '\0')
 		return SPUDRESULT_DESC_INVALID_PARAMETERS;
 

@@ -15,7 +15,7 @@
 
 set -u
 if [ $# -lt 1 ]; then
-	echo "usage: $0 <path to spudnet_test> [instance|tcp|wait|resolver|http|tls|proxy|websocket]" >&2
+	echo "usage: $0 <path to spudnet_test> [instance|bases|tcp|wait|resolver|http|tls|proxy|websocket]" >&2
 	exit 2
 fi
 here=$(cd "$(dirname "$0")" && pwd)

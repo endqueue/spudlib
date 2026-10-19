@@ -46,6 +46,7 @@
 #include <sys/eventfd.h>
 #include <time.h>
 #include <unistd.h>
+#include "../../../spudstructbase.h"
 
 #if __cplusplus
 extern "C" {
@@ -521,6 +522,9 @@ SPUDRESULT spudnet_http_client_create(
 		return SPUDRESULT_SPUDNET_INVALID_INSTANCE;
 	if (!desc)
 		return SPUDRESULT_NULL_DESC;
+	const SPUDRESULT base_sr = spud_struct_check(&desc->base, SPUD_STRUCT_TYPE_NET_HTTP_CLIENT_DESC);
+	if (base_sr != SPUD_SUCCESS)
+		return base_sr;
 
 	struct spudnet_http_client_t *client = (struct spudnet_http_client_t *)calloc(1, sizeof(struct spudnet_http_client_t));
 	if (!client)
@@ -1249,6 +1253,9 @@ SPUDRESULT spudnet_websocket_connect(
 		return SPUDRESULT_SPUDNET_INVALID_WEBSOCKET;
 	if (!desc)
 		return SPUDRESULT_NULL_DESC;
+	const SPUDRESULT base_sr = spud_struct_check(&desc->base, SPUD_STRUCT_TYPE_NET_WEBSOCKET_CONNECT_DESC);
+	if (base_sr != SPUD_SUCCESS)
+		return base_sr;
 	if (!desc->url || desc->max_message_size == 0 || (desc->header_count > 0 && !desc->headers))
 		return SPUDRESULT_DESC_INVALID_PARAMETERS;
 	if (!spudnet_url_has_scheme(desc->url, "ws") && !spudnet_url_has_scheme(desc->url, "wss"))

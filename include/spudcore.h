@@ -358,6 +358,30 @@ typedef enum SPUD_STRUCT_TYPE {
 	/** spudgpu_bundle_inheritance_desc (SPUD_STRUCT_BASE). */
 	SPUD_STRUCT_TYPE_GPU_BUNDLE_INHERITANCE_DESC    = 1024,
 
+	/* SpudAudio */
+	/** SPUDAUDIO_DEVICE_PROPERTIES (SPUD_STRUCT_BASE_OUT). */
+	SPUD_STRUCT_TYPE_AUDIO_DEVICE_PROPERTIES        = 2000,
+	/** SPUDAUDIO_TIMING_CAPS (SPUD_STRUCT_BASE_OUT). */
+	SPUD_STRUCT_TYPE_AUDIO_TIMING_CAPS              = 2001,
+	/** SPUDAUDIO_STREAM_DESC (SPUD_STRUCT_BASE). */
+	SPUD_STRUCT_TYPE_AUDIO_STREAM_DESC              = 2002,
+	/** SPUDAUDIO_STREAM_CONFIG (SPUD_STRUCT_BASE_OUT). */
+	SPUD_STRUCT_TYPE_AUDIO_STREAM_CONFIG            = 2003,
+
+	/* SpudNet */
+	/** spudnet_resolver_desc (SPUD_STRUCT_BASE). */
+	SPUD_STRUCT_TYPE_NET_RESOLVER_DESC              = 3000,
+	/** spudnet_tcp_listener_desc (SPUD_STRUCT_BASE). */
+	SPUD_STRUCT_TYPE_NET_TCP_LISTENER_DESC          = 3001,
+	/** spudnet_tcp_socket_connect_desc (SPUD_STRUCT_BASE). */
+	SPUD_STRUCT_TYPE_NET_TCP_SOCKET_CONNECT_DESC    = 3002,
+	/** spudnet_http_client_desc (SPUD_STRUCT_BASE). */
+	SPUD_STRUCT_TYPE_NET_HTTP_CLIENT_DESC           = 3003,
+	/** spudnet_http_transfer_desc (SPUD_STRUCT_BASE). */
+	SPUD_STRUCT_TYPE_NET_HTTP_TRANSFER_DESC         = 3004,
+	/** spudnet_websocket_connect_desc (SPUD_STRUCT_BASE). */
+	SPUD_STRUCT_TYPE_NET_WEBSOCKET_CONNECT_DESC     = 3005,
+
 	/** Keeps the enum 32 bits wide on every compiler. Never a valid type. */
 	SPUD_STRUCT_TYPE_MAX_ENUM = 0x7FFFFFFF
 } SPUD_STRUCT_TYPE;

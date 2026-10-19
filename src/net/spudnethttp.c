@@ -24,6 +24,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include "../spudstructbase.h"
 
 #if __cplusplus
 extern "C" {
@@ -283,6 +284,9 @@ SPUDRESULT spudnet_http_transfer_start(
 		return SPUDRESULT_SPUDNET_INVALID_HTTP_TRANSFER;
 	if (!desc)
 		return SPUDRESULT_NULL_DESC;
+	const SPUDRESULT base_sr = spud_struct_check(&desc->base, SPUD_STRUCT_TYPE_NET_HTTP_TRANSFER_DESC);
+	if (base_sr != SPUD_SUCCESS)
+		return base_sr;
 	if (spudnet_http_backend_aborted(transfer))
 		return SPUDRESULT_SPUDNET_ABORTED;
 	if (transfer->phase != SPUDNET_HTTP_PHASE_CREATED)

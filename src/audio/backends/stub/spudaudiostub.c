@@ -3,6 +3,7 @@
 
 #include "../../spudaudiointernal.h"
 #include <stddef.h>
+#include "../../../spudstructbase.h"
 
 /* Placeholder backend for platforms with no native API compiled in yet
  * (currently iOS / iPadOS / watchOS). Argument checks match
@@ -58,6 +59,9 @@ SPUDRESULT spudaudio_get_device_properties(
     SPUDAUDIO_DEVICE_PROPERTIES *out_properties) {
 	if (!out_properties)
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
+	const SPUDRESULT base_sr = spud_struct_out_check(&out_properties->base, SPUD_STRUCT_TYPE_AUDIO_DEVICE_PROPERTIES);
+	if (base_sr != SPUD_SUCCESS)
+		return base_sr;
 	if (!device)
 		return SPUDRESULT_SAUD_INVALID_DEVICE;
 	return SPUDRESULT_NOT_IMPLEMENTED_YET;
@@ -71,7 +75,11 @@ SPUDRESULT spudaudio_get_timing_caps(
 	(void)flags;
 	if (!out_caps)
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
+	const SPUDRESULT base_sr = spud_struct_out_check(&out_caps->base, SPUD_STRUCT_TYPE_AUDIO_TIMING_CAPS);
+	if (base_sr != SPUD_SUCCESS)
+		return base_sr;
 	*out_caps = (SPUDAUDIO_TIMING_CAPS){0};
+	out_caps->base = spud_struct_base_out(SPUD_STRUCT_TYPE_AUDIO_TIMING_CAPS);
 	if (!format)
 		return SPUDRESULT_NULL_DESC;
 	if (!device)
@@ -84,7 +92,11 @@ SPUDRESULT spudaudio_probe_stream(
     SPUDAUDIO_STREAM_CONFIG *out_config) {
 	if (!out_config)
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
+	const SPUDRESULT base_sr = spud_struct_out_check(&out_config->base, SPUD_STRUCT_TYPE_AUDIO_STREAM_CONFIG);
+	if (base_sr != SPUD_SUCCESS)
+		return base_sr;
 	*out_config  = (SPUDAUDIO_STREAM_CONFIG){0};
+	out_config->base = spud_struct_base_out(SPUD_STRUCT_TYPE_AUDIO_STREAM_CONFIG);
 	SPUDRESULT r = spudaudio_validate_stream_desc(desc);
 	if (SPUDFAIL(r))
 		return r;
@@ -124,6 +136,9 @@ SPUDRESULT spudaudio_stream_get_config(
     SPUDAUDIO_STREAM_CONFIG *out_config) {
 	if (!out_config)
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
+	const SPUDRESULT base_sr = spud_struct_out_check(&out_config->base, SPUD_STRUCT_TYPE_AUDIO_STREAM_CONFIG);
+	if (base_sr != SPUD_SUCCESS)
+		return base_sr;
 	if (!stream)
 		return SPUDRESULT_SAUD_INVALID_STREAM;
 	return SPUDRESULT_NOT_IMPLEMENTED_YET;

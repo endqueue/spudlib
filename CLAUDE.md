@@ -337,8 +337,8 @@ not in each backend.
   A released layout never changes: a new field is a new struct chained on.
   A call checks a based argument with `spud_struct_check` /
   `spud_struct_out_check` (`src/spudstructbase.h`) right after its null
-  check, in every backend. SpudGPU is converted; the rest of the plan, and
-  the rules, are in `STRUCT_BASE_TODO.md`.
+  check, in every backend. SpudGPU, SpudAudio and SpudNet are converted; the rest
+  of the plan, and the rules, are in `STRUCT_BASE_TODO.md`.
 
 - **Argument checks are one `if` per distinct return.** They sit at the top of
   the function, in parameter order, before any allocation or platform call, and
@@ -811,7 +811,7 @@ one.
   descs, error detail, a resolver, a wait set. The Apple side compiles clean
   with the `macos-metal` preset and passes `tests/spudnet_test` (run it with
   `tests/run_spudnet_test.sh build-macos-metal/Debug/spudnet_test`; it needs Python 3
-  and `openssl`). Linux (libcurl + BSD sockets) built with the
+  and `openssl`; 279 checks since 2026-10-19, with the struct-base part). Linux (libcurl + BSD sockets) built with the
   `linux-vulkan` preset and passed it on 2026-10-14. Windows (WinHTTP +
   Winsock2) built with MSVC under the `windows-d3d12` preset and passed all
   261 checks on 2026-10-14, Windows 11 (`tests/run_spudnet_test.sh

@@ -421,7 +421,7 @@ int main(
 
 	printf("\n%u output device(s):\n", device_count);
 	int general_default = -1;
-	SPUDAUDIO_DEVICE_PROPERTIES props;
+	SPUDAUDIO_DEVICE_PROPERTIES props = {.base = {SPUD_STRUCT_TYPE_AUDIO_DEVICE_PROPERTIES, NULL}};
 	for (uint32_t i = 0; i < device_count; i++) {
 		if (spudaudio_get_device_properties(devices[i], &props) != SPUD_SUCCESS) {
 			printf("  %u: (properties failed)\n", i);
@@ -461,7 +461,8 @@ int main(
 	// so ask for float stereo and let the probe suggest otherwise.
 	SPUDAUDIO_STREAM_DESC desc;
 	memset(&desc, 0, sizeof(desc));
-	desc.device = device;
+	desc.base.type = SPUD_STRUCT_TYPE_AUDIO_STREAM_DESC;
+	desc.device    = device;
 	if (props.native_format.sample_format != SPUDAUDIO_SAMPLE_FORMAT_UNKNOWN) {
 		desc.format = props.native_format;
 	} else {
@@ -482,7 +483,7 @@ int main(
 
 	// Period and buffer from the timing caps where the backend has them,
 	// else 10 ms and whatever the probe suggests.
-	SPUDAUDIO_TIMING_CAPS caps;
+	SPUDAUDIO_TIMING_CAPS caps = {.base = {SPUD_STRUCT_TYPE_AUDIO_TIMING_CAPS, NULL}};
 	SPUDRESULT r = spudaudio_get_timing_caps(device, &desc.format, desc.flags, &caps);
 	if (r == SPUD_SUCCESS) {
 		printf(
@@ -508,7 +509,7 @@ int main(
 	// Probe, taking the suggestion for whichever field was rejected, until
 	// it's accepted. A few rounds is plenty; more means the backend's
 	// suggestions don't converge, which is itself a bug worth seeing.
-	SPUDAUDIO_STREAM_CONFIG config;
+	SPUDAUDIO_STREAM_CONFIG config = {.base = {SPUD_STRUCT_TYPE_AUDIO_STREAM_CONFIG, NULL}};
 	bool accepted = false;
 	for (int round = 1; round <= 8 && !accepted; round++) {
 		printf("probe %d: ", round);
@@ -543,6 +544,7 @@ int main(
 		spudaudio_destroy_instance(instance);
 		return 1;
 	}
+	t.config.base = (SPUD_STRUCT_BASE_OUT){SPUD_STRUCT_TYPE_AUDIO_STREAM_CONFIG, NULL};
 	call_ok(spudaudio_stream_get_config(stream, &t.config), "spudaudio_stream_get_config");
 	t.sample_bytes = spudaudio_sample_format_byte_size(t.config.format.sample_format);
 	t.phase_step   = TWO_PI * freq / (double)t.config.format.sample_rate;

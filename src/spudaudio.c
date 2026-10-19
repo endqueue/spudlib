@@ -1,6 +1,7 @@
 
 #include "audio/spudaudiointernal.h"
 #include <stddef.h>
+#include "spudstructbase.h"
 
 /* Platform-independent SpudAudio helpers. Everything that touches a native
  * audio API lives in src/audio/backends/. */
@@ -55,6 +56,9 @@ bool spudaudio_validate_positions(const SPUDAUDIO_FORMAT *format) {
 SPUDRESULT spudaudio_validate_stream_desc(const SPUDAUDIO_STREAM_DESC *desc) {
 	if (!desc)
 		return SPUDRESULT_NULL_DESC;
+	const SPUDRESULT base_sr = spud_struct_check(&desc->base, SPUD_STRUCT_TYPE_AUDIO_STREAM_DESC);
+	if (base_sr != SPUD_SUCCESS)
+		return base_sr;
 	if (!desc->device)
 		return SPUDRESULT_SAUD_INVALID_DEVICE;
 	if (desc->format.channel_count == 0 || desc->format.channel_count > SPUDAUDIO_MAX_CHANNELS ||

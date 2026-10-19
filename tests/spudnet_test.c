@@ -238,6 +238,7 @@ static void test_instance(void) {
 	spudnet_http_client      client = NULL;
 	spudnet_http_client_desc client_desc;
 	memset(&client_desc, 0, sizeof(client_desc));
+	client_desc.base.type = SPUD_STRUCT_TYPE_NET_HTTP_CLIENT_DESC;
 	expect(spudnet_http_client_create(second, &client_desc, &client), SPUD_SUCCESS, "an object made with the second while a third is made elsewhere");
 	spudnet_http_client_destroy(client);
 	thread_join(thread);
@@ -256,6 +257,7 @@ static void test_instance(void) {
 	spudnet_resolver      resolver = NULL;
 	spudnet_resolver_desc resolver_desc;
 	memset(&resolver_desc, 0, sizeof(resolver_desc));
+	resolver_desc.base.type = SPUD_STRUCT_TYPE_NET_RESOLVER_DESC;
 	resolver_desc.host   = "localhost";
 	resolver_desc.family = SPUDNET_ADDRESS_FAMILY_IPV4;
 	expect(spudnet_resolver_create(NULL, &resolver_desc, &resolver), SPUDRESULT_SPUDNET_INVALID_INSTANCE, "a resolver with no instance");
@@ -264,6 +266,7 @@ static void test_instance(void) {
 	spudnet_tcp_listener      listener = NULL;
 	spudnet_tcp_listener_desc listen_desc;
 	memset(&listen_desc, 0, sizeof(listen_desc));
+	listen_desc.base.type = SPUD_STRUCT_TYPE_NET_TCP_LISTENER_DESC;
 	listen_desc.address = "127.0.0.1";
 	listen_desc.port    = 0;
 	listen_desc.backlog = 4;
@@ -317,6 +320,7 @@ static void test_tcp(void) {
 
 	spudnet_tcp_listener_desc listen_desc;
 	memset(&listen_desc, 0, sizeof(listen_desc));
+	listen_desc.base.type = SPUD_STRUCT_TYPE_NET_TCP_LISTENER_DESC;
 	listen_desc.address = "127.0.0.1";
 	listen_desc.port    = 0;
 	listen_desc.backlog = 8;
@@ -352,6 +356,7 @@ static void test_tcp(void) {
 
 	spudnet_tcp_socket_connect_desc connect_desc;
 	memset(&connect_desc, 0, sizeof(connect_desc));
+	connect_desc.base.type = SPUD_STRUCT_TYPE_NET_TCP_SOCKET_CONNECT_DESC;
 	connect_desc.address    = "127.0.0.1";
 	connect_desc.port       = port;
 	connect_desc.timeout_ms = PATIENCE_MS;
@@ -501,6 +506,7 @@ static void test_wait_set(void) {
 
 	spudnet_tcp_listener_desc listen_desc;
 	memset(&listen_desc, 0, sizeof(listen_desc));
+	listen_desc.base.type = SPUD_STRUCT_TYPE_NET_TCP_LISTENER_DESC;
 	listen_desc.address = "127.0.0.1";
 	listen_desc.backlog = 8;
 	spudnet_tcp_listener listener = NULL;
@@ -532,6 +538,7 @@ static void test_wait_set(void) {
 	// Two connections in. The listener is named for each.
 	spudnet_tcp_socket_connect_desc connect_desc;
 	memset(&connect_desc, 0, sizeof(connect_desc));
+	connect_desc.base.type = SPUD_STRUCT_TYPE_NET_TCP_SOCKET_CONNECT_DESC;
 	connect_desc.address    = "127.0.0.1";
 	connect_desc.port       = port;
 	connect_desc.timeout_ms = PATIENCE_MS;
@@ -641,6 +648,7 @@ static void test_resolver(void) {
 	uint32_t              count = 0;
 	spudnet_resolver_desc desc;
 	memset(&desc, 0, sizeof(desc));
+	desc.base.type = SPUD_STRUCT_TYPE_NET_RESOLVER_DESC;
 	spudnet_resolver resolver = NULL;
 
 	// Run and wait on one thread: an ordinary blocking lookup.
@@ -754,6 +762,7 @@ static SPUDRESULT exchange_run(spudnet_http_client client, struct exchange *exch
 
 	spudnet_http_transfer_desc desc;
 	memset(&desc, 0, sizeof(desc));
+	desc.base.type = SPUD_STRUCT_TYPE_NET_HTTP_TRANSFER_DESC;
 	desc.method           = exchange->method;
 	desc.url              = url;
 	desc.headers          = exchange->headers;
@@ -829,6 +838,7 @@ static bool exchange_ok(spudnet_http_client client, struct exchange *exchange, c
 static spudnet_http_client plain_client(void) {
 	spudnet_http_client_desc desc;
 	memset(&desc, 0, sizeof(desc));
+	desc.base.type = SPUD_STRUCT_TYPE_NET_HTTP_CLIENT_DESC;
 	desc.proxy.mode = SPUDNET_PROXY_NONE; // the test's server is on this machine
 	spudnet_http_client client = NULL;
 	spudnet_http_client_create(g_instance, &desc, &client);
@@ -854,6 +864,7 @@ static long server_stat(const char *name) {
 		return -1;
 	spudnet_tcp_socket_connect_desc connect_desc;
 	memset(&connect_desc, 0, sizeof(connect_desc));
+	connect_desc.base.type = SPUD_STRUCT_TYPE_NET_TCP_SOCKET_CONNECT_DESC;
 	connect_desc.address    = "127.0.0.1";
 	connect_desc.port       = (uint16_t)g_server.http_port;
 	connect_desc.timeout_ms = PATIENCE_MS;
@@ -1139,6 +1150,7 @@ static void test_http(void) {
 		check(spudnet_http_transfer_get_status(transfer) == 0 && spudnet_http_transfer_get_header_count(transfer) == 0, "no status and no headers before a response");
 
 		memset(&desc, 0, sizeof(desc));
+		desc.base.type = SPUD_STRUCT_TYPE_NET_HTTP_TRANSFER_DESC;
 		desc.method     = "GET";
 		desc.url        = url;
 		desc.timeout_ms = PATIENCE_MS;
@@ -1174,6 +1186,7 @@ static void test_http(void) {
 		spudnet_http_transfer_create(client, &transfer);
 		snprintf(url, sizeof(url), "http://127.0.0.1:%d/echo", g_server.http_port);
 		memset(&desc, 0, sizeof(desc));
+		desc.base.type = SPUD_STRUCT_TYPE_NET_HTTP_TRANSFER_DESC;
 		desc.method     = "POST";
 		desc.url        = url;
 		desc.body       = SPUDNET_HTTP_BODY_SIZED;
@@ -1200,6 +1213,7 @@ static void test_http(void) {
 		char                       url[128];
 		snprintf(url, sizeof(url), "http://127.0.0.1:%d/slow?ms=1500", g_server.http_port);
 		memset(&desc, 0, sizeof(desc));
+		desc.base.type = SPUD_STRUCT_TYPE_NET_HTTP_TRANSFER_DESC;
 		desc.method     = "GET";
 		desc.url        = url;
 		desc.timeout_ms = PATIENCE_MS;
@@ -1241,6 +1255,7 @@ static void test_http(void) {
 	{
 		spudnet_tcp_listener_desc listen_desc;
 		memset(&listen_desc, 0, sizeof(listen_desc));
+		listen_desc.base.type = SPUD_STRUCT_TYPE_NET_TCP_LISTENER_DESC;
 		listen_desc.address = "127.0.0.1";
 		listen_desc.backlog = 1;
 		spudnet_tcp_listener holder = NULL;
@@ -1255,6 +1270,7 @@ static void test_http(void) {
 		snprintf(url, sizeof(url), "http://127.0.0.1:%u/hello", (unsigned)dead_port);
 		spudnet_http_transfer_desc desc;
 		memset(&desc, 0, sizeof(desc));
+		desc.base.type = SPUD_STRUCT_TYPE_NET_HTTP_TRANSFER_DESC;
 		desc.method     = "GET";
 		desc.url        = url;
 		desc.timeout_ms = PATIENCE_MS;
@@ -1324,6 +1340,7 @@ static void test_http(void) {
 		snprintf(url, sizeof(url), "http://127.0.0.1:%d/big?n=%lld", g_server.http_port, total);
 		spudnet_http_transfer_desc desc;
 		memset(&desc, 0, sizeof(desc));
+		desc.base.type = SPUD_STRUCT_TYPE_NET_HTTP_TRANSFER_DESC;
 		desc.method     = "GET";
 		desc.url        = url;
 		desc.timeout_ms = PATIENCE_MS;
@@ -1390,6 +1407,7 @@ static void test_http(void) {
 static SPUDRESULT tls_get(const spudnet_tls_desc *tls, const char *host, spudnet_error *error) {
 	spudnet_http_client_desc desc;
 	memset(&desc, 0, sizeof(desc));
+	desc.base.type = SPUD_STRUCT_TYPE_NET_HTTP_CLIENT_DESC;
 	desc.tls        = *tls;
 	desc.proxy.mode = SPUDNET_PROXY_NONE;
 	spudnet_http_client client = NULL;
@@ -1523,6 +1541,7 @@ static void test_proxy(void) {
 
 	// Through the proxy, plain.
 	memset(&desc, 0, sizeof(desc));
+	desc.base.type = SPUD_STRUCT_TYPE_NET_HTTP_CLIENT_DESC;
 	desc.proxy.mode = SPUDNET_PROXY_EXPLICIT;
 	desc.proxy.url  = proxy_url;
 	if (expect(spudnet_http_client_create(g_instance, &desc, &client), SPUD_SUCCESS, "a client with an explicit proxy")) {
@@ -1539,6 +1558,7 @@ static void test_proxy(void) {
 
 	// Through the proxy, TLS: a CONNECT tunnel, with TLS still to the server.
 	memset(&desc, 0, sizeof(desc));
+	desc.base.type = SPUD_STRUCT_TYPE_NET_HTTP_CLIENT_DESC;
 	desc.proxy.mode               = SPUDNET_PROXY_EXPLICIT;
 	desc.proxy.url                = proxy_url;
 	desc.tls.trust                = SPUDNET_TLS_TRUST_ANY;
@@ -1563,6 +1583,7 @@ static void test_proxy(void) {
 
 	// With no proxy the same host is nowhere.
 	memset(&desc, 0, sizeof(desc));
+	desc.base.type = SPUD_STRUCT_TYPE_NET_HTTP_CLIENT_DESC;
 	desc.proxy.mode = SPUDNET_PROXY_NONE;
 	client          = NULL;
 	if (!SPUDFAIL(spudnet_http_client_create(g_instance, &desc, &client))) {
@@ -1578,6 +1599,7 @@ static void test_proxy(void) {
 
 	// A proxy that isn't there.
 	memset(&desc, 0, sizeof(desc));
+	desc.base.type = SPUD_STRUCT_TYPE_NET_HTTP_CLIENT_DESC;
 	desc.proxy.mode = SPUDNET_PROXY_EXPLICIT;
 	desc.proxy.url  = "http://127.0.0.1:9";
 	client          = NULL;
@@ -1609,6 +1631,7 @@ static void test_proxy(void) {
 	};
 	for (size_t i = 0; i < sizeof(bad) / sizeof(bad[0]); ++i) {
 		memset(&desc, 0, sizeof(desc));
+		desc.base.type = SPUD_STRUCT_TYPE_NET_HTTP_CLIENT_DESC;
 		desc.proxy.mode = bad[i].mode;
 		desc.proxy.url  = bad[i].url;
 		client          = NULL;
@@ -1616,6 +1639,7 @@ static void test_proxy(void) {
 		spudnet_http_client_destroy(client);
 	}
 	memset(&desc, 0, sizeof(desc));
+	desc.base.type = SPUD_STRUCT_TYPE_NET_HTTP_CLIENT_DESC;
 	desc.proxy.mode = SPUDNET_PROXY_EXPLICIT;
 	desc.proxy.url  = "http://[::1]:8080";
 	client          = NULL;
@@ -1634,6 +1658,7 @@ static SPUDRESULT websocket_open(spudnet_websocket *out_socket, const char *path
 	snprintf(url, sizeof(url), "%s://%s:%d%s", secure ? "wss" : "ws", secure ? "localhost" : "127.0.0.1", secure ? g_server.wss_port : g_server.ws_port, path);
 	spudnet_websocket_connect_desc desc;
 	memset(&desc, 0, sizeof(desc));
+	desc.base.type = SPUD_STRUCT_TYPE_NET_WEBSOCKET_CONNECT_DESC;
 	desc.url              = url;
 	desc.timeout_ms       = PATIENCE_MS;
 	desc.max_message_size = max_message_size;
@@ -1862,6 +1887,7 @@ static void test_websocket(void) {
 		snprintf(url, sizeof(url), "wss://localhost:%d/echo", g_server.wss_port);
 		spudnet_websocket_connect_desc desc;
 		memset(&desc, 0, sizeof(desc));
+		desc.base.type = SPUD_STRUCT_TYPE_NET_WEBSOCKET_CONNECT_DESC;
 		desc.url              = url;
 		desc.timeout_ms       = PATIENCE_MS;
 		desc.max_message_size = 1024;
@@ -1890,9 +1916,91 @@ static void test_websocket(void) {
 
 // --------------------------------------------------------------------------
 
+// Every based desc (SPUD_STRUCT_BASE, spudcore.h) is refused, before
+// anything else of it is read, when its type isn't the call's or something
+// is chained on: nothing can be chained onto a SpudNet desc yet.
+static void test_struct_bases(void) {
+	part("Struct bases");
+
+	const SPUD_STRUCT_BASE other = {SPUD_STRUCT_TYPE_NET_RESOLVER_DESC, NULL};
+#if SPUDNET_EXT_TCP
+	{
+		spudnet_resolver_desc desc;
+		memset(&desc, 0, sizeof(desc));
+		desc.host               = "localhost";
+		spudnet_resolver resolver = NULL;
+		expect(spudnet_resolver_create(g_instance, &desc, &resolver), SPUDRESULT_STRUCT_WRONG_TYPE, "resolver: a zeroed base");
+		desc.base.type = SPUD_STRUCT_TYPE_NET_TCP_LISTENER_DESC;
+		expect(spudnet_resolver_create(g_instance, &desc, &resolver), SPUDRESULT_STRUCT_WRONG_TYPE, "resolver: another desc's type");
+		desc.base.type = SPUD_STRUCT_TYPE_NET_RESOLVER_DESC;
+		desc.base.next = &other;
+		expect(spudnet_resolver_create(g_instance, &desc, &resolver), SPUDRESULT_STRUCT_UNKNOWN_IN_CHAIN, "resolver: something chained on");
+		check(resolver == NULL, "resolver: none made");
+	}
+	{
+		spudnet_tcp_listener_desc desc;
+		memset(&desc, 0, sizeof(desc));
+		desc.address                  = "127.0.0.1";
+		spudnet_tcp_listener listener = NULL;
+		expect(spudnet_tcp_listener_create(g_instance, &desc, &listener, NULL), SPUDRESULT_STRUCT_WRONG_TYPE, "listener: a zeroed base");
+		desc.base.type = SPUD_STRUCT_TYPE_NET_TCP_LISTENER_DESC;
+		desc.base.next = &other;
+		expect(spudnet_tcp_listener_create(g_instance, &desc, &listener, NULL), SPUDRESULT_STRUCT_UNKNOWN_IN_CHAIN, "listener: something chained on");
+	}
+	{
+		spudnet_tcp_socket socket = NULL;
+		expect(spudnet_tcp_socket_create(g_instance, &socket), SPUD_SUCCESS, "a socket to connect");
+		spudnet_tcp_socket_connect_desc desc;
+		memset(&desc, 0, sizeof(desc));
+		desc.address = "127.0.0.1";
+		expect(spudnet_tcp_socket_connect(socket, &desc), SPUDRESULT_STRUCT_WRONG_TYPE, "connect: a zeroed base");
+		desc.base.type = SPUD_STRUCT_TYPE_NET_TCP_SOCKET_CONNECT_DESC;
+		desc.base.next = &other;
+		expect(spudnet_tcp_socket_connect(socket, &desc), SPUDRESULT_STRUCT_UNKNOWN_IN_CHAIN, "connect: something chained on");
+		spudnet_tcp_socket_destroy(socket);
+	}
+#endif
+	spudnet_http_client_desc client_desc;
+	memset(&client_desc, 0, sizeof(client_desc));
+	spudnet_http_client client = NULL;
+	expect(spudnet_http_client_create(g_instance, &client_desc, &client), SPUDRESULT_STRUCT_WRONG_TYPE, "HTTP client: a zeroed base");
+	client_desc.base.type = SPUD_STRUCT_TYPE_NET_HTTP_CLIENT_DESC;
+	client_desc.base.next = &other;
+	expect(spudnet_http_client_create(g_instance, &client_desc, &client), SPUDRESULT_STRUCT_UNKNOWN_IN_CHAIN, "HTTP client: something chained on");
+	client_desc.base.next = NULL;
+	expect(spudnet_http_client_create(g_instance, &client_desc, &client), SPUD_SUCCESS, "HTTP client: its own base");
+	spudnet_http_transfer transfer = NULL;
+	expect(spudnet_http_transfer_create(client, &transfer), SPUD_SUCCESS, "a transfer to start");
+	spudnet_http_transfer_desc desc;
+	memset(&desc, 0, sizeof(desc));
+	desc.method = "GET";
+	desc.url    = "http://127.0.0.1:9/";
+	expect(spudnet_http_transfer_start(transfer, &desc), SPUDRESULT_STRUCT_WRONG_TYPE, "transfer: a zeroed base");
+	desc.base.type = SPUD_STRUCT_TYPE_NET_HTTP_TRANSFER_DESC;
+	desc.base.next = &other;
+	expect(spudnet_http_transfer_start(transfer, &desc), SPUDRESULT_STRUCT_UNKNOWN_IN_CHAIN, "transfer: something chained on");
+	spudnet_http_transfer_destroy(transfer);
+	spudnet_http_client_destroy(client);
+#if SPUDNET_EXT_WEBSOCKET
+	{
+		spudnet_websocket socket = NULL;
+		expect(spudnet_websocket_create(g_instance, &socket), SPUD_SUCCESS, "a WebSocket to connect");
+		spudnet_websocket_connect_desc ws_desc;
+		memset(&ws_desc, 0, sizeof(ws_desc));
+		ws_desc.url              = "ws://127.0.0.1:9/";
+		ws_desc.max_message_size = 1024;
+		expect(spudnet_websocket_connect(socket, &ws_desc, NULL), SPUDRESULT_STRUCT_WRONG_TYPE, "WebSocket: a zeroed base");
+		ws_desc.base.type = SPUD_STRUCT_TYPE_NET_WEBSOCKET_CONNECT_DESC;
+		ws_desc.base.next = &other;
+		expect(spudnet_websocket_connect(socket, &ws_desc, NULL), SPUDRESULT_STRUCT_UNKNOWN_IN_CHAIN, "WebSocket: something chained on");
+		spudnet_websocket_destroy(socket);
+	}
+#endif
+}
+
 int main(int argc, char **argv) {
 	if (argc < 2) {
-		fprintf(stderr, "usage: spudnet_test <info file> [instance|tcp|wait|resolver|http|tls|proxy|websocket]\n");
+		fprintf(stderr, "usage: spudnet_test <info file> [instance|bases|tcp|wait|resolver|http|tls|proxy|websocket]\n");
 		return 2;
 	}
 	if (!read_info(argv[1])) {
@@ -1911,6 +2019,7 @@ int main(int argc, char **argv) {
 	if (!only || strcmp(only, name) == 0) \
 		function()
 	RUN("instance", test_instance);
+	RUN("bases", test_struct_bases);
 #if SPUDNET_EXT_TCP
 	RUN("tcp", test_tcp);
 	RUN("wait", test_wait_set);

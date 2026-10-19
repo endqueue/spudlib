@@ -1,6 +1,7 @@
 #if SPUDAUDIO_COMPILE_WASAPI
 
 #include "../../spudaudiointernal.h"
+#include "../../../spudstructbase.h"
 
 #define COBJMACROS
 #define WIN32_LEAN_AND_MEAN
@@ -1050,7 +1051,11 @@ SPUDRESULT spudaudio_get_device_properties(
     SPUDAUDIO_DEVICE_PROPERTIES *out_properties) {
 	if (!out_properties)
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
+	const SPUDRESULT base_sr = spud_struct_out_check(&out_properties->base, SPUD_STRUCT_TYPE_AUDIO_DEVICE_PROPERTIES);
+	if (base_sr != SPUD_SUCCESS)
+		return base_sr;
 	memset(out_properties, 0, sizeof(*out_properties));
+	out_properties->base = spud_struct_base_out(SPUD_STRUCT_TYPE_AUDIO_DEVICE_PROPERTIES);
 	if (!device)
 		return SPUDRESULT_SAUD_INVALID_DEVICE;
 
@@ -1114,7 +1119,11 @@ SPUDRESULT spudaudio_get_timing_caps(
 	(void)flags;
 	if (!out_caps)
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
+	const SPUDRESULT base_sr = spud_struct_out_check(&out_caps->base, SPUD_STRUCT_TYPE_AUDIO_TIMING_CAPS);
+	if (base_sr != SPUD_SUCCESS)
+		return base_sr;
 	memset(out_caps, 0, sizeof(*out_caps));
+	out_caps->base = spud_struct_base_out(SPUD_STRUCT_TYPE_AUDIO_TIMING_CAPS);
 	if (!format)
 		return SPUDRESULT_NULL_DESC;
 	if (!device)
@@ -1197,7 +1206,11 @@ SPUDRESULT spudaudio_probe_stream(
     SPUDAUDIO_STREAM_CONFIG *out_config) {
 	if (!out_config)
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
+	const SPUDRESULT base_sr = spud_struct_out_check(&out_config->base, SPUD_STRUCT_TYPE_AUDIO_STREAM_CONFIG);
+	if (base_sr != SPUD_SUCCESS)
+		return base_sr;
 	memset(out_config, 0, sizeof(*out_config));
+	out_config->base = spud_struct_base_out(SPUD_STRUCT_TYPE_AUDIO_STREAM_CONFIG);
 	SPUDRESULT r = spudaudio_validate_stream_desc(desc);
 	if (SPUDFAIL(r))
 		return r;
@@ -1567,9 +1580,13 @@ SPUDRESULT spudaudio_stream_get_config(
     SPUDAUDIO_STREAM_CONFIG *out_config) {
 	if (!out_config)
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
+	const SPUDRESULT base_sr = spud_struct_out_check(&out_config->base, SPUD_STRUCT_TYPE_AUDIO_STREAM_CONFIG);
+	if (base_sr != SPUD_SUCCESS)
+		return base_sr;
 	if (!stream)
 		return SPUDRESULT_SAUD_INVALID_STREAM;
 	*out_config = stream->config; // fixed at creation
+	out_config->base = spud_struct_base_out(SPUD_STRUCT_TYPE_AUDIO_STREAM_CONFIG);
 	return SPUD_SUCCESS;
 }
 

@@ -345,6 +345,7 @@ enum {
  * device's real speaker layout: FL FR for stereo panning, FL FR FC LFE RL
  * RR SL SR for 7.1, and no layout for a fallback the caller chooses.
  */
+/* Frozen: a value, held by value in other structs. It never changes; a new need gets a new type. */
 typedef struct SPUDAUDIO_FORMAT {
 	SPUDAUDIO_SAMPLE_FORMAT sample_format; /**< How one sample is stored. */
 	uint32_t sample_rate;   /**< Frames per second, in Hz. */
@@ -483,6 +484,9 @@ enum {
  * format and sharing mode - see spudaudio_get_timing_caps().
  */
 typedef struct SPUDAUDIO_DEVICE_PROPERTIES {
+	/** `type` is SPUD_STRUCT_TYPE_AUDIO_DEVICE_PROPERTIES; `next` is NULL (nothing is chained onto
+	 * this struct yet). The caller builds the chain and sets each type; SpudAudio fills in the rest. See SPUD_STRUCT_BASE. */
+	SPUD_STRUCT_BASE_OUT base;
 	/** Human-readable, UTF-8, null-terminated, truncated to fit. WASAPI:
 	 * PKEY_Device_FriendlyName. ALSA: the PCM's DESC hint (lines joined),
 	 * else its name. */
@@ -515,6 +519,9 @@ typedef struct SPUDAUDIO_DEVICE_PROPERTIES {
  *
  * @retval SPUD_SUCCESS The properties were written.
  * @retval SPUDRESULT_NULL_OUTPUT_PARAMETER `out_properties` is NULL.
+ * @retval SPUDRESULT_STRUCT_WRONG_TYPE `out_properties->base.type` is not
+ *         SPUD_STRUCT_TYPE_AUDIO_DEVICE_PROPERTIES.
+ * @retval SPUDRESULT_STRUCT_UNKNOWN_IN_CHAIN `out_properties->base.next` is not NULL.
  * @retval SPUDRESULT_SAUD_INVALID_DEVICE `device` is NULL.
  * @retval SPUDRESULT_SAUD_DEVICE_LOST The device disappeared since
  *         enumeration.
@@ -663,6 +670,9 @@ enum {
  *   clock.quantum.
  */
 typedef struct SPUDAUDIO_TIMING_CAPS {
+	/** `type` is SPUD_STRUCT_TYPE_AUDIO_TIMING_CAPS; `next` is NULL (nothing is chained onto
+	 * this struct yet). The caller builds the chain and sets each type; SpudAudio fills in the rest. See SPUD_STRUCT_BASE. */
+	SPUD_STRUCT_BASE_OUT base;
 	SPUDAUDIO_PERIOD_MODE period_mode; /**< How binding a requested period is. */
 	uint32_t min_period_frames;        /**< The shortest period, in frames. */
 	uint32_t max_period_frames;        /**< The longest period, in frames. */
@@ -695,6 +705,9 @@ typedef struct SPUDAUDIO_TIMING_CAPS {
  *
  * @retval SPUD_SUCCESS The limits were written.
  * @retval SPUDRESULT_NULL_OUTPUT_PARAMETER `out_caps` is NULL.
+ * @retval SPUDRESULT_STRUCT_WRONG_TYPE `out_caps->base.type` is not
+ *         SPUD_STRUCT_TYPE_AUDIO_TIMING_CAPS.
+ * @retval SPUDRESULT_STRUCT_UNKNOWN_IN_CHAIN `out_caps->base.next` is not NULL.
  * @retval SPUDRESULT_NULL_DESC `format` is NULL.
  * @retval SPUDRESULT_SAUD_INVALID_DEVICE `device` is NULL.
  * @retval SPUDRESULT_SAUD_DEVICE_LOST The device disappeared since
@@ -736,6 +749,7 @@ enum {
 };
 
 /** @brief What a stream callback is told about the buffer it is given. */
+/* Frozen: handed to the data callback every period, on the audio thread. It never changes; a new need gets a new type. */
 typedef struct SPUDAUDIO_CALLBACK_INFO {
 	/** Glitch and timestamp flags for this buffer. */
 	SPUDAUDIO_CALLBACK_FLAGS flags;
@@ -828,6 +842,7 @@ enum {
 #define SPUDAUDIO_MAX_MMCSS_TASK_NAME 64
 
 /** @brief Which scheduling mechanism the callback thread uses, and its parameters. */
+/* Frozen: held by value in SPUDAUDIO_STREAM_DESC. It never changes; a new need gets a new type. */
 typedef struct SPUDAUDIO_THREAD_DESC {
 	/** The mechanism. Required; see SPUDAUDIO_THREAD_PRIORITY. */
 	SPUDAUDIO_THREAD_PRIORITY priority;
@@ -848,6 +863,9 @@ typedef struct SPUDAUDIO_THREAD_DESC {
  * Nothing in it has a default: a field left out is refused, not filled in.
  */
 typedef struct SPUDAUDIO_STREAM_DESC {
+	/** `type` is SPUD_STRUCT_TYPE_AUDIO_STREAM_DESC; `next` is NULL (nothing is chained onto
+	 * this struct yet). Set by the caller. See SPUD_STRUCT_BASE. */
+	SPUD_STRUCT_BASE base;
 	spudaudio_device device; /**< The endpoint the stream is on. */
 	SPUDAUDIO_FORMAT format; /**< The format of the frames the callback is given. */
 	uint32_t period_frames;  /**< How often the callback runs, in frames. Required - no "pick something sensible" value. */
@@ -882,6 +900,9 @@ typedef struct SPUDAUDIO_STREAM_DESC {
  * spudaudio_stream_get_config().
  */
 typedef struct SPUDAUDIO_STREAM_CONFIG {
+	/** `type` is SPUD_STRUCT_TYPE_AUDIO_STREAM_CONFIG; `next` is NULL (nothing is chained onto
+	 * this struct yet). The caller builds the chain and sets each type; SpudAudio fills in the rest. See SPUD_STRUCT_BASE. */
+	SPUD_STRUCT_BASE_OUT base;
 	SPUDAUDIO_FORMAT format;           /**< The granted format; its `positions` are the stream's real channel layout. */
 	SPUDAUDIO_PERIOD_MODE period_mode; /**< How binding the period is. */
 	uint32_t period_frames; /**< The granted period. NEGOTIATED: the value at creation time. */
@@ -949,7 +970,13 @@ typedef struct SPUDAUDIO_STREAM_CONFIG {
  *
  * @retval SPUD_SUCCESS Accepted; `out_config` is what creation would grant.
  * @retval SPUDRESULT_NULL_OUTPUT_PARAMETER `out_config` is NULL.
+ * @retval SPUDRESULT_STRUCT_WRONG_TYPE `out_config->base.type` is not
+ *         SPUD_STRUCT_TYPE_AUDIO_STREAM_CONFIG.
+ * @retval SPUDRESULT_STRUCT_UNKNOWN_IN_CHAIN `out_config->base.next` is not NULL.
  * @retval SPUDRESULT_NULL_DESC `desc` is NULL.
+ * @retval SPUDRESULT_STRUCT_WRONG_TYPE `desc->base.type` is not
+ *         SPUD_STRUCT_TYPE_AUDIO_STREAM_DESC.
+ * @retval SPUDRESULT_STRUCT_UNKNOWN_IN_CHAIN `desc->base.next` is not NULL.
  * @retval SPUDRESULT_SAUD_INVALID_DEVICE `desc->device` is NULL.
  * @retval SPUDRESULT_DESC_INVALID_PARAMETERS The format's channel count,
  *         rate or sample format is out of range, its positions break the
@@ -1087,6 +1114,9 @@ SPUDRESULT spudaudio_stream_stop(spudaudio_stream stream);
  *
  * @retval SPUD_SUCCESS The configuration was written.
  * @retval SPUDRESULT_NULL_OUTPUT_PARAMETER `out_config` is NULL.
+ * @retval SPUDRESULT_STRUCT_WRONG_TYPE `out_config->base.type` is not
+ *         SPUD_STRUCT_TYPE_AUDIO_STREAM_CONFIG.
+ * @retval SPUDRESULT_STRUCT_UNKNOWN_IN_CHAIN `out_config->base.next` is not NULL.
  * @retval SPUDRESULT_SAUD_INVALID_STREAM `stream` is NULL.
  */
 SPUDRESULT spudaudio_stream_get_config(
@@ -1148,6 +1178,7 @@ enum {
 };
 
 /** @brief A stream's state and glitch counts at the moment of the poll. */
+/* Frozen: polled; a new need gets a new query. It never changes; a new need gets a new type. */
 typedef struct SPUDAUDIO_STREAM_STATUS {
 	SPUDAUDIO_STREAM_STATE state; /**< What the stream is doing. */
 	SPUDRESULT error;             /**< Cause of DEVICE_LOST / ERROR, else SPUD_SUCCESS. */

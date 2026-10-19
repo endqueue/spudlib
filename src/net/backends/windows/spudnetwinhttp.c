@@ -33,6 +33,7 @@
 
 #include "../../spudnetshared.h"
 #include "spudnet.h"
+#include "../../../spudstructbase.h"
 
 /* windows.h without the legacy winsock.h, which conflicts with the
  * winsock2.h spudnetwindows.c uses if both land in one translation unit. */
@@ -613,6 +614,9 @@ SPUDRESULT spudnet_http_client_create(
 		return SPUDRESULT_SPUDNET_INVALID_INSTANCE;
 	if (!desc)
 		return SPUDRESULT_NULL_DESC;
+	const SPUDRESULT base_sr = spud_struct_check(&desc->base, SPUD_STRUCT_TYPE_NET_HTTP_CLIENT_DESC);
+	if (base_sr != SPUD_SUCCESS)
+		return base_sr;
 
 	struct spudnet_proxy proxy;
 	SPUDRESULT           result = spudnet_proxy_parse(&desc->proxy, &proxy);
@@ -1361,6 +1365,9 @@ SPUDRESULT spudnet_websocket_connect(
 		return SPUDRESULT_SPUDNET_INVALID_WEBSOCKET;
 	if (!desc)
 		return SPUDRESULT_NULL_DESC;
+	const SPUDRESULT base_sr = spud_struct_check(&desc->base, SPUD_STRUCT_TYPE_NET_WEBSOCKET_CONNECT_DESC);
+	if (base_sr != SPUD_SUCCESS)
+		return base_sr;
 	if (!desc->url || desc->max_message_size == 0 || (desc->header_count > 0 && !desc->headers))
 		return SPUDRESULT_DESC_INVALID_PARAMETERS;
 	if (!spudnet_url_has_scheme(desc->url, "ws") && !spudnet_url_has_scheme(desc->url, "wss"))

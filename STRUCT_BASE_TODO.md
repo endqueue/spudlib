@@ -2,8 +2,8 @@
 
 Planned on 2026-10-18. Steps 1 and 2 of "Order of work" are done (the
 `spudcore.h` pieces, and the three ABI bugs), and step 3 is done for
-SpudGPU (2026-10-19, "SpudGPU, converted"); SpudAudio, SpudNet, SpudInput
-and SpudFiles are next. Every extensible struct in
+SpudGPU, SpudAudio and SpudNet (2026-10-19, "SpudGPU, converted" and the
+sections after it); SpudInput and SpudFiles are next. Every extensible struct in
 spudlib's public headers starts with a `SPUD_STRUCT_BASE`: a type tag and a
 pointer to a chain of further structs. A struct's layout is frozen once it is
 released. A new field never goes into a released struct; it comes as a new
@@ -213,7 +213,7 @@ or held by value elsewhere. Line numbers are as of 2026-10-18.
 All frozen: `SPUDGPU_D3D12_BUFFER_VIEW`, `SPUDGPU_D3D12_IMAGE_VIEW` and
 `SPUDGPU_MTL_BUFFER_VIEW` are facts of the native API they expose.
 
-### spudaudio.h
+### spudaudio.h (converted 2026-10-19, as listed here)
 
 - **`SPUD_STRUCT_BASE`:** `SPUDAUDIO_STREAM_DESC`.
 - **`SPUD_STRUCT_BASE_OUT`:** `SPUDAUDIO_DEVICE_PROPERTIES`,
@@ -223,7 +223,7 @@ All frozen: `SPUDGPU_D3D12_BUFFER_VIEW`, `SPUDGPU_D3D12_IMAGE_VIEW` and
   `SPUDAUDIO_CALLBACK_INFO` (handed to the callback every period on the audio
   thread); `SPUDAUDIO_STREAM_STATUS` (polled).
 
-### spudnet.h
+### spudnet.h (converted 2026-10-19, as listed here)
 
 - **`SPUD_STRUCT_BASE`:** `spudnet_resolver_desc`,
   `spudnet_tcp_listener_desc`, `spudnet_tcp_socket_connect_desc`,
@@ -231,7 +231,7 @@ All frozen: `SPUDGPU_D3D12_BUFFER_VIEW`, `SPUDGPU_D3D12_IMAGE_VIEW` and
   `spudnet_websocket_connect_desc`.
 - **Frozen, held by value:** `spudnet_tls_desc` and `spudnet_proxy_desc`,
   in `spudnet_http_client_desc` and `spudnet_websocket_connect_desc`. See
-  "Recommendations", 2.
+  "Decisions", 2.
 - **Frozen:** `spudnet_error` (filled per call, like every error struct);
   `spudnet_header`, `spudnet_tls_certificate`, `spudnet_tls_pin` (array
   elements); `spudnet_wait_event` (an array spudlib fills on each wait).
@@ -358,13 +358,60 @@ Run on macOS (Metal), 2026-10-19: spudlib Debug and Release with its tests,
 SpudNet's 261 checks, and the ASan+UBSan preset; every caller in the
 workspace built against it with its tests passing, the GPU tests under
 Metal validation, and every Metal sample for 120 frames under Metal API
-and shader validation, exiting cleanly. Not compiled: the Vulkan and D3D12
-backends (no headers on this Mac) and the samples and callers that build
-only for them. A Windows (D3D12, Vulkan) and a Linux (Vulkan) build and run
-are due before this is relied on there. The Rust bindings and the Swift
+and shader validation, exiting cleanly. The same day, on Windows, the
+Vulkan and D3D12 backends built and a caller's GPU tests passed on both
+(reported). Not yet run: Linux (Vulkan), and the samples, and the callers
+that build only for Windows and Linux, on either. The Rust bindings and the Swift
 package were already out of step with the C API and are not brought to it
 (the Swift package did not build before either); their device-properties
 and buffer-desc uses set the base.
+
+## SpudAudio, converted (2026-10-19)
+
+- `spudcore.h`: `SPUD_STRUCT_TYPE_AUDIO_*` 2000-2003.
+- `spudaudio.h`: `SPUDAUDIO_STREAM_DESC` has a `SPUD_STRUCT_BASE base`;
+  `SPUDAUDIO_DEVICE_PROPERTIES`, `_TIMING_CAPS` and `_STREAM_CONFIG` a
+  `SPUD_STRUCT_BASE_OUT base`; `SPUDAUDIO_FORMAT`, `_THREAD_DESC`,
+  `_CALLBACK_INFO` and `_STREAM_STATUS` are marked frozen. The functions
+  that take them document the two results.
+- The stream desc is checked once, in `spudaudio_validate_stream_desc`
+  (`src/spudaudio.c`), which every backend's probe and create call. Each
+  output struct is checked in every backend (CoreAudio, WASAPI, ALSA, the
+  stub) right after its null check, before SpudAudio zeroes it as it
+  always has; its base is put back after anything that zeroes or copies the
+  whole struct, so a refused probe leaves the caller's base too.
+
+Run on macOS, 2026-10-19: spudlib Debug, Release and ASan+UBSan with its
+tests; a throwaway CoreAudio program (properties, timing caps, probe,
+create without starting, get config; a zeroed, a mistyped and a chained
+base each refused with the right result) passed; every caller in the
+workspace builds and passes its tests. WASAPI and ALSA are written, not
+compiled.
+
+## SpudNet, converted (2026-10-19)
+
+- `spudcore.h`: `SPUD_STRUCT_TYPE_NET_*` 3000-3005.
+- `spudnet.h`: the six descs above start with a `SPUD_STRUCT_BASE base`;
+  `spudnet_error`, `_header`, `_tls_certificate`, `_tls_pin`, `_tls_desc`,
+  `_proxy_desc` and `_wait_event` are marked frozen. Each of the six
+  functions that take a desc documents the two results. SpudNet has no
+  struct it fills that may grow, so no `SPUD_STRUCT_BASE_OUT`.
+- Every backend checks the desc right after its null check: the BSD
+  sockets and Winsock files (resolver, listener, connect), NSURLSession,
+  libcurl and WinHTTP (HTTP client, WebSocket connect), and the shared
+  HTTP front end, `src/net/spudnethttp.c` (transfer start). libcurl's
+  WebSocket stub for curl before 8.11 refuses every call before it reads
+  the desc, as before.
+- `tests/spudnet_test.c` sets every desc's base after its `memset`, and has
+  a new part, "Struct bases" (`bases`): each of the six calls refused for a
+  zeroed base, another desc's type and a chained struct, before any
+  connection is made.
+
+Run on macOS, 2026-10-19: spudlib Debug and Release with its ctest suites;
+`tests/run_spudnet_test.sh` passes all 279 checks (261 before, 18 new)
+plain, under ASan+UBSan and under TSan; every caller in the workspace
+builds and passes its tests. Winsock, libcurl and WinHTTP are written,
+not compiled.
 
 ## Order of work
 
@@ -373,7 +420,7 @@ and buffer-desc uses set the base.
    each is added with its struct.
 2. **Done.** Fix the three ABI bugs first, in their own change. Each is a fix on its
    own and makes the conversion smaller.
-3. **SpudGPU done.** Convert one module at a time, header and every backend together:
+3. **SpudGPU, SpudAudio and SpudNet done.** Convert one module at a time, header and every backend together:
    SpudGPU, then SpudAudio, SpudNet, SpudInput, SpudFiles. Bring
    `spudgpusamples`, the tests and every caller along in the same change.
    This is a source break for every caller.
