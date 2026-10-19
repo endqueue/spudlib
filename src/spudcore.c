@@ -8,7 +8,6 @@
 extern "C" {
 #endif
 
-#ifdef _DEBUG
 SPUDRESULT spud_debug_name_set(void *object, const char *name) {
 	if (!object)
 		return SPUDRESULT_NULL_OBJECT;
@@ -38,7 +37,6 @@ const char *spud_debug_name_get(void *object) {
 	} else
 		return NULL;
 }
-#endif // _DEBUG
 
 const char *spudresult_str(SPUDRESULT r) {
 	switch (r) {
@@ -66,6 +64,12 @@ const char *spudresult_str(SPUDRESULT r) {
 		return "SPUDRESULT_NOT_IMPLEMENTED_YET";
 	case SPUDRESULT_NULL_OBJECT:
 		return "SPUDRESULT_NULL_OBJECT";
+	case SPUDRESULT_STRUCT_WRONG_TYPE:
+		return "SPUDRESULT_STRUCT_WRONG_TYPE";
+	case SPUDRESULT_STRUCT_UNKNOWN_IN_CHAIN:
+		return "SPUDRESULT_STRUCT_UNKNOWN_IN_CHAIN";
+	case SPUDRESULT_STRUCT_DUPLICATE_IN_CHAIN:
+		return "SPUDRESULT_STRUCT_DUPLICATE_IN_CHAIN";
 	case SPUDRESULT_GPU_DEVICE_ENUMERATION_FAILURE:
 		return "SPUDRESULT_GPU_DEVICE_ENUMERATION_FAILURE";
 	case SPUDRESULT_GPU_INVALID_INSTANCE:

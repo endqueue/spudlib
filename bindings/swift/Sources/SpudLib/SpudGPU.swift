@@ -100,6 +100,7 @@ public final class SpudGPUDevice {
 
     public func properties() throws -> SPUDGPU_DEVICE_PROPERTIES {
         var props = SPUDGPU_DEVICE_PROPERTIES()
+        props.base.type = SPUD_STRUCT_TYPE_GPU_DEVICE_PROPERTIES
         try spudCheck(spudgpu_get_device_properties(handle, &props))
         return props
     }

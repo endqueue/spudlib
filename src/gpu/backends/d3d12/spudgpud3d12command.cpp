@@ -4,6 +4,7 @@
 #include "spudgpud3d12.hpp"
 #include <cassert>
 #include <cstring>
+#include "../../../spudstructbase.h"
 
 extern "C" {
 
@@ -92,6 +93,7 @@ SPUDRESULT spudgpu_submit_command_lists_synced(
 
 	// spudgpu_queue_submit with only the command lists and the swap chain set.
 	spudgpu_submit_desc desc = {};
+	desc.base.type = SPUD_STRUCT_TYPE_GPU_SUBMIT_DESC;
 	desc.cmd_lists           = cmd_lists;
 	desc.cmd_list_count      = cmd_list_count;
 	desc.swap_chain          = swap_chain;
@@ -106,6 +108,9 @@ SPUDRESULT spudgpu_create_command_allocator(
 		return SPUDRESULT_GPU_INVALID_DEVICE;
 	if (!desc)
 		return SPUDRESULT_NULL_DESC;
+	const SPUDRESULT base_sr = spud_struct_check(&desc->base, SPUD_STRUCT_TYPE_GPU_COMMAND_ALLOCATOR_DESC);
+	if (base_sr != SPUD_SUCCESS)
+		return base_sr;
 	if (!out_allocator)
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
 	spudgpu_command_allocator_d3d12 *pResult =
@@ -130,9 +135,7 @@ SPUDRESULT spudgpu_create_command_allocator(
 void spudgpu_destroy_command_allocator(spudgpu_command_allocator allocator) {
 	if (!allocator)
 		return;
-#if _DEBUG
 	free((void *)allocator->_debug_name);
-#endif
 	allocator->~spudgpu_command_allocator_d3d12();
 	free(allocator);
 }
@@ -178,8 +181,8 @@ void spudgpu_destroy_command_list(spudgpu_command_list cmd) {
     // A list destroyed open is not open any more.
     if (cmd->_allocator->_open_list == cmd)
         cmd->_allocator->_open_list = nullptr;
-    free((void *)cmd->_debug_name);
 #endif
+    free((void *)cmd->_debug_name);
     cmd->~spudgpu_command_list_d3d12();
     free(cmd);
 }
@@ -528,8 +531,14 @@ void spudgpu_cmd_pipeline_barrier(
 		return;
 	if (buffer_barrier_count > 0 && !buffer_barriers)
 		return;
+	for (uint32_t buffer_barriers_i = 0; buffer_barriers_i < buffer_barrier_count; ++buffer_barriers_i)
+		if (spud_struct_check(&buffer_barriers[buffer_barriers_i].base, SPUD_STRUCT_TYPE_GPU_BUFFER_BARRIER) != SPUD_SUCCESS)
+			return;
 	if (image_barrier_count > 0 && !image_barriers)
 		return;
+	for (uint32_t image_barriers_i = 0; image_barriers_i < image_barrier_count; ++image_barriers_i)
+		if (spud_struct_check(&image_barriers[image_barriers_i].base, SPUD_STRUCT_TYPE_GPU_IMAGE_BARRIER) != SPUD_SUCCESS)
+			return;
 	uint32_t total = buffer_barrier_count + image_barrier_count;
 	if (total == 0)
 		return;
@@ -581,6 +590,9 @@ SPUDRESULT spudgpu_queue_submit(
 		return SPUDRESULT_GPU_INVALID_COMMAND_QUEUE;
 	if (!desc)
 		return SPUDRESULT_NULL_DESC;
+	const SPUDRESULT base_sr = spud_struct_check(&desc->base, SPUD_STRUCT_TYPE_GPU_SUBMIT_DESC);
+	if (base_sr != SPUD_SUCCESS)
+		return base_sr;
 	if (!desc->cmd_lists)
 		return SPUDRESULT_GPU_INVALID_COMMAND_LIST;
 	if (desc->cmd_list_count == 0)
@@ -650,6 +662,8 @@ void spudgpu_begin_bundle_command_list(
 	// viewport and scissor, which a bundle may not set. desc's viewport and
 	// scissor_rect are for Vulkan, whose secondary buffers inherit neither.
 	if (!bundle || !desc)
+		return;
+	if (spud_struct_check(&desc->base, SPUD_STRUCT_TYPE_GPU_BUNDLE_INHERITANCE_DESC) != SPUD_SUCCESS)
 		return;
 	spudgpu_begin_command_list(bundle);
 }

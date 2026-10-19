@@ -52,9 +52,7 @@ SPUDRESULT spudgpu_create_fence(
 void spudgpu_destroy_fence(spudgpu_fence fence) {
     if (!fence) return;
     vkDestroySemaphore(fence->_device_vk, fence->_semaphore_vk, NULL);
-#if _DEBUG
     free((void *)fence->_debug_name);
-#endif
     free(fence);
 }
 
@@ -142,9 +140,7 @@ SPUDRESULT spudgpu_create_semaphore(
 void spudgpu_destroy_semaphore(spudgpu_semaphore semaphore) {
     if (!semaphore) return;
     vkDestroySemaphore(semaphore->_device_vk, semaphore->_semaphore_vk, NULL);
-#if _DEBUG
     free((void *)semaphore->_debug_name);
-#endif
     free(semaphore);
 }
 

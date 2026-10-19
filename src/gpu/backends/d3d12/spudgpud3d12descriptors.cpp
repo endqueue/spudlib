@@ -3,6 +3,7 @@
 
 #include "spudgpud3d12.hpp"
 #include <cstring>
+#include "../../../spudstructbase.h"
 
 // Maps SPUDGPU_DESCRIPTOR_TYPE to D3D12_DESCRIPTOR_RANGE_TYPE.
 // Returns -1 for sampler (handled separately) and -2 for unknown.
@@ -64,9 +65,7 @@ static void spudgpu_d3d12___free_descriptor_sets(
 	while (pool->_sets != until) {
 		spudgpu_descriptor_set_d3d12 *set = pool->_sets;
 		pool->_sets                       = set->_next;
-#if _DEBUG
 		free((void *)set->_debug_name);
-#endif
 		free(set);
 	}
 }
@@ -260,6 +259,9 @@ SPUDRESULT spudgpu_create_sampler(
 		return SPUDRESULT_GPU_INVALID_DEVICE;
 	if (!desc)
 		return SPUDRESULT_NULL_DESC;
+	const SPUDRESULT base_sr = spud_struct_check(&desc->base, SPUD_STRUCT_TYPE_GPU_SAMPLER_DESC);
+	if (base_sr != SPUD_SUCCESS)
+		return base_sr;
 	if (!out_sampler)
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
 
@@ -286,12 +288,10 @@ SPUDRESULT spudgpu_create_sampler(
 	pResult->_d3d_desc.MinLOD         = desc->min_lod;
 	pResult->_d3d_desc.MaxLOD         = desc->max_lod;
 
-#if _DEBUG
 	if (spud_debug_name_set(pResult, desc->debug_name) != SPUD_SUCCESS) {
 		spudgpu_destroy_sampler(pResult);
 		return SPUDRESULT_OUT_OF_MEMORY;
 	}
-#endif
 
 	*out_sampler = pResult;
 	return SPUD_SUCCESS;
@@ -300,9 +300,7 @@ SPUDRESULT spudgpu_create_sampler(
 void spudgpu_destroy_sampler(spudgpu_sampler sampler) {
 	if (!sampler)
 		return;
-#if _DEBUG
 	free((void *)sampler->_debug_name);
-#endif
 	free(sampler);
 }
 
@@ -314,6 +312,9 @@ SPUDRESULT spudgpu_create_descriptor_set_layout(
 		return SPUDRESULT_GPU_INVALID_DEVICE;
 	if (!desc)
 		return SPUDRESULT_NULL_DESC;
+	const SPUDRESULT base_sr = spud_struct_check(&desc->base, SPUD_STRUCT_TYPE_GPU_DESCRIPTOR_SET_LAYOUT_DESC);
+	if (base_sr != SPUD_SUCCESS)
+		return base_sr;
 	if (!out_layout)
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
 	if (desc->binding_count > SPUDGPU_MAX_DESCRIPTOR_BINDINGS_PER_SET)
@@ -350,13 +351,11 @@ SPUDRESULT spudgpu_create_descriptor_set_layout(
 	pResult->_cbv_srv_uav_count = csv_cursor;
 	pResult->_sampler_count     = sampler_cursor;
 
-#if _DEBUG
 	if (spud_debug_name_set(pResult, desc->debug_name) != SPUD_SUCCESS) {
 		spudgpu_destroy_descriptor_set_layout(pResult);
 		return SPUDRESULT_OUT_OF_MEMORY;
 	}
 	pResult->_desc.debug_name = pResult->_debug_name;
-#endif
 
 	*out_layout = pResult;
 	return SPUD_SUCCESS;
@@ -365,9 +364,7 @@ SPUDRESULT spudgpu_create_descriptor_set_layout(
 void spudgpu_destroy_descriptor_set_layout(spudgpu_descriptor_set_layout layout) {
 	if (!layout)
 		return;
-#if _DEBUG
 	free((void *)layout->_debug_name);
-#endif
 	free(layout);
 }
 
@@ -379,6 +376,9 @@ SPUDRESULT spudgpu_create_descriptor_pool(
 		return SPUDRESULT_GPU_INVALID_DEVICE;
 	if (!desc)
 		return SPUDRESULT_NULL_DESC;
+	const SPUDRESULT base_sr = spud_struct_check(&desc->base, SPUD_STRUCT_TYPE_GPU_DESCRIPTOR_POOL_DESC);
+	if (base_sr != SPUD_SUCCESS)
+		return base_sr;
 	if (!out_pool)
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
 	if (desc->pool_size_count > SPUDGPU_MAX_DESCRIPTOR_POOL_SIZES)
@@ -422,13 +422,11 @@ SPUDRESULT spudgpu_create_descriptor_pool(
 		return sr;
 	}
 
-#if _DEBUG
 	if (spud_debug_name_set(pResult, desc->debug_name) != SPUD_SUCCESS) {
 		spudgpu_destroy_descriptor_pool(pResult);
 		return SPUDRESULT_OUT_OF_MEMORY;
 	}
 	pResult->_desc.debug_name = pResult->_debug_name;
-#endif
 
 	*out_pool = pResult;
 	return SPUD_SUCCESS;
@@ -451,9 +449,7 @@ void spudgpu_destroy_descriptor_pool(spudgpu_descriptor_pool pool) {
 	spudgpu_d3d12___free_descriptor_sets(p, nullptr);
 	spudgpu_d3d12___give_back_shader_heap_ranges(
 	    p->_device, p->_cbv_srv_uav_offset, p->_cbv_srv_uav_capacity, p->_sampler_offset, p->_sampler_capacity);
-#if _DEBUG
 	free((void *)p->_debug_name);
-#endif
 	p->~spudgpu_descriptor_pool_d3d12();
 	free(p);
 }
@@ -466,6 +462,9 @@ SPUDRESULT spudgpu_create_descriptor_sets(
 		return SPUDRESULT_GPU_INVALID_DEVICE;
 	if (!desc)
 		return SPUDRESULT_NULL_DESC;
+	const SPUDRESULT base_sr = spud_struct_check(&desc->base, SPUD_STRUCT_TYPE_GPU_DESCRIPTOR_SET_DESC);
+	if (base_sr != SPUD_SUCCESS)
+		return base_sr;
 	if (!out_sets)
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
 	if (!desc->pool)
@@ -545,6 +544,9 @@ void spudgpu_update_descriptor_sets(
     uint32_t write_count) {
 	if (!device || !writes || !write_count)
 		return;
+	for (uint32_t writes_i = 0; writes_i < write_count; ++writes_i)
+		if (spud_struct_check(&writes[writes_i].base, SPUD_STRUCT_TYPE_GPU_WRITE_DESCRIPTOR_SET) != SPUD_SUCCESS)
+			return;
 
 	ID3D12Device *d3dDevice = device->_d3d_device.Get();
 
@@ -822,8 +824,13 @@ SPUDRESULT spudgpu_get_bindless_capabilities(
 		return SPUDRESULT_GPU_INVALID_DEVICE;
 	if (!out_caps)
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
+	const SPUDRESULT base_sr = spud_struct_out_check(&out_caps->base, SPUD_STRUCT_TYPE_GPU_BINDLESS_CAPABILITIES);
+	if (base_sr != SPUD_SUCCESS)
+		return base_sr;
 
 	*out_caps = {};
+	// Whatever was copied over it, the base stays the caller's.
+	out_caps->base = spud_struct_base_out(SPUD_STRUCT_TYPE_GPU_BINDLESS_CAPABILITIES);
 	// Lazily attempted on first call, unlike Vulkan's device-creation-time
 	// attempt — safe here since D3D12's lazy init carries no staleness risk
 	// (see spudgpud3d12___ensure_bindless_state).

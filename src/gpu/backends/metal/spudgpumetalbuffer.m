@@ -9,6 +9,7 @@
 #include "spudcore.h"
 #include "spudgpumetal.h"
 #include <Metal/Metal.h>
+#include "../../../spudstructbase.h"
 
 // The storage a buffer of [kind] gets: what each SPUDGPU_MEMORY_KIND
 // documents in spudgpu.h. Only two storage modes are used - Private for the
@@ -59,6 +60,9 @@ SPUDRESULT spudgpu_create_buffer(
 		return SPUDRESULT_GPU_INVALID_DEVICE;
 	if (!desc)
 		return SPUDRESULT_NULL_DESC;
+	const SPUDRESULT base_sr = spud_struct_check(&desc->base, SPUD_STRUCT_TYPE_GPU_BUFFER_DESC);
+	if (base_sr != SPUD_SUCCESS)
+		return base_sr;
 	if (!out_buffer)
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
 
@@ -83,19 +87,11 @@ SPUDRESULT spudgpu_create_buffer(
 		goto failedattempt;
 	}
 
-	// Every spudgpu_buffer gets a real GPU virtual address after creation
-	// regardless of backend (see spudgpu_buffer_desc::gpu_address_location),
-	// mirroring D3D12's always-available GetGPUVirtualAddress - Metal's
-	// equivalent is -[MTLBuffer gpuAddress], valid for any storage mode.
-	buffer_metal->_desc.gpu_address_location = buffer_metal->_buffer_mtl.gpuAddress;
-
-#if _DEBUG
 	if (spud_debug_name_set(buffer_metal, desc->debug_name) != SPUD_SUCCESS) {
 		spudgpu_destroy_buffer((spudgpu_buffer)buffer_metal);
 		return SPUDRESULT_OUT_OF_MEMORY;
 	}
 	buffer_metal->_desc.debug_name = buffer_metal->_debug_name;
-#endif
 
 	*out_buffer = (spudgpu_buffer)buffer_metal;
 
@@ -114,8 +110,8 @@ void spudgpu_destroy_buffer(spudgpu_buffer buffer) {
 #if _DEBUG
 		if (buffer_metal->_heap)
 			buffer_metal->_heap->_placed_count--;
-		free((void *)buffer_metal->_debug_name);
 #endif
+		free((void *)buffer_metal->_debug_name);
 		free(buffer_metal);
 	}
 }
@@ -128,6 +124,22 @@ SPUDRESULT spudgpu_get_buffer_desc(
 	if (!out_desc)
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
 	*out_desc = buffer_metal->_desc;
+	out_desc->base = spud_struct_base(SPUD_STRUCT_TYPE_GPU_BUFFER_DESC);
+	return SPUD_SUCCESS;
+}
+
+SPUDRESULT spudgpu_get_buffer_gpu_address(
+    spudgpu_buffer buffer,
+    uint64_t *out_address) {
+	spudgpu_buffer_metal *buffer_metal = (spudgpu_buffer_metal *)buffer;
+	if (!buffer_metal)
+		return SPUDRESULT_GPU_INVALID_BUFFER;
+	if (!out_address)
+		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
+	// Every buffer has one, mirroring D3D12's always-available
+	// GetGPUVirtualAddress: -[MTLBuffer gpuAddress], valid for any storage
+	// mode.
+	*out_address = buffer_metal->_buffer_mtl.gpuAddress;
 	return SPUD_SUCCESS;
 }
 
@@ -139,6 +151,9 @@ SPUDRESULT spudgpu_create_buffer_view(
 		return SPUDRESULT_GPU_INVALID_BUFFER;
 	if (!desc)
 		return SPUDRESULT_NULL_DESC;
+	const SPUDRESULT base_sr = spud_struct_check(&desc->base, SPUD_STRUCT_TYPE_GPU_BUFFER_VIEW_DESC);
+	if (base_sr != SPUD_SUCCESS)
+		return base_sr;
 	if (!out_buffer_view)
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
 	if (desc->size == 0)
@@ -169,9 +184,7 @@ failedattempt:
 void spudgpu_destroy_buffer_view(spudgpu_buffer_view buffer_view) {
 	if (!buffer_view)
 		return;
-#if _DEBUG
 	free((void *)buffer_view->_debug_name);
-#endif
 	free(buffer_view);
 }
 SPUDRESULT spudgpu_get_buffer_view_desc(
@@ -182,6 +195,7 @@ SPUDRESULT spudgpu_get_buffer_view_desc(
 	if (!out_desc)
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
 	*out_desc = ((spudgpu_buffer_view_metal *)buffer_view)->_desc;
+	out_desc->base = spud_struct_base(SPUD_STRUCT_TYPE_GPU_BUFFER_VIEW_DESC);
 	return SPUD_SUCCESS;
 }
 

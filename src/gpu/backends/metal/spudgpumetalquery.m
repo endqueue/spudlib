@@ -77,9 +77,7 @@ void spudgpu_destroy_timestamp_set(spudgpu_timestamp_set set) {
 	spudgpu_timestamp_set_metal *set_metal = (spudgpu_timestamp_set_metal *)set;
 	[set_metal->_sample_buffer_mtl release];
 	[set_metal->_device_mtl release];
-#if _DEBUG
 	free((void *)set_metal->_debug_name);
-#endif
 	free(set_metal);
 }
 

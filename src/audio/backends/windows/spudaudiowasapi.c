@@ -52,9 +52,7 @@ static const GUID spudaudio_subtype_ieee_float        = {0x00000003, 0x0000, 0x0
 static const PROPERTYKEY spudaudio_pkey_device_friendly_name = {{0xa45c254e, 0xdf1c, 0x4efd, {0x80, 0x20, 0x67, 0xd1, 0x46, 0xa8, 0x50, 0xe0}}, 14};
 
 struct spudaudio_device_t {
-#if _DEBUG
 	const char *debug_name;
-#endif
 	struct spudaudio_instance_t *instance; // for its enumerator
 	IMMDevice *mm_device;
 	SPUDAUDIO_DIRECTION direction;
@@ -70,9 +68,7 @@ struct spudaudio_device_t {
  * spudaudio_stream_get_status's contract.
  */
 struct spudaudio_stream_t {
-#if _DEBUG
 	const char *debug_name;
-#endif
 	IAudioClient *client;
 	IAudioRenderClient *render;   // OUTPUT streams
 	IAudioCaptureClient *capture; // INPUT streams
@@ -153,9 +149,7 @@ struct wasapi_watch {
 };
 
 struct spudaudio_instance_t {
-#if _DEBUG
 	const char *debug_name;
-#endif
 	CO_MTA_USAGE_COOKIE mta_cookie;
 	IMMDeviceEnumerator *enumerator;
 	struct spudaudio_device_t *devices; // every endpoint ever enumerated
@@ -950,9 +944,7 @@ SPUDRESULT spudaudio_destroy_instance(spudaudio_instance instance) {
 	while (dev) {
 		struct spudaudio_device_t *next = dev->next;
 		IMMDevice_Release(dev->mm_device);
-#if _DEBUG
 		free((void *)dev->debug_name);
-#endif
 		free(dev);
 		dev = next;
 	}
@@ -960,9 +952,7 @@ SPUDRESULT spudaudio_destroy_instance(spudaudio_instance instance) {
 	free(instance->enumerated[1]);
 	IMMDeviceEnumerator_Release(instance->enumerator);
 	CoDecrementMTAUsage(instance->mta_cookie);
-#if _DEBUG
 	free((void *)instance->debug_name);
-#endif
 	free(instance);
 	return SPUD_SUCCESS;
 }
@@ -1247,9 +1237,7 @@ static void wasapi_free_stream(struct spudaudio_stream_t *s) {
 	if (s->startup_event)
 		CloseHandle(s->startup_event);
 	free(s->silence);
-#if _DEBUG
 	free((void *)s->debug_name);
-#endif
 	free(s);
 }
 

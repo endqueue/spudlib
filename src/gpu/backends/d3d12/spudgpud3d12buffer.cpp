@@ -2,6 +2,7 @@
 #if SPUDGPU_COMPILE_D3D12_API
 
 #include "spudgpud3d12.hpp"
+#include "../../../spudstructbase.h"
 
 CD3DX12_RESOURCE_DESC spudgpu_d3d12_create_resource_desc_from_buffer(
     const spudgpu_buffer_desc *desc) {
@@ -54,6 +55,9 @@ SPUDRESULT spudgpu_create_buffer(
 		return SPUDRESULT_GPU_INVALID_DEVICE;
 	if (!desc)
 		return SPUDRESULT_NULL_DESC;
+	const SPUDRESULT base_sr = spud_struct_check(&desc->base, SPUD_STRUCT_TYPE_GPU_BUFFER_DESC);
+	if (base_sr != SPUD_SUCCESS)
+		return base_sr;
 	if (!out_buffer)
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
 	const SPUDRESULT descResult = spudgpu_d3d12_check_buffer_desc(&device->_properties, desc);
@@ -84,17 +88,14 @@ SPUDRESULT spudgpu_create_buffer(
 		free(pResult);
 		return SPUDRESULT_API_SPECIFIC_FAILURE;
 	}
+	// spudgpu_get_buffer_gpu_address hands this back (see spudgpu.h).
 	pResult->_d3d_gpu_address = pResult->_d3d_resource->GetGPUVirtualAddress();
-	// spudgpu_get_buffer_desc hands this back (see spudgpu.h).
-	pResult->_desc.gpu_address_location = pResult->_d3d_gpu_address;
 
-#if _DEBUG
 	if (spud_debug_name_set(pResult, desc->debug_name) != SPUD_SUCCESS) {
 		spudgpu_destroy_buffer(pResult);
 		return SPUDRESULT_OUT_OF_MEMORY;
 	}
 	pResult->_desc.debug_name = pResult->_debug_name;
-#endif
 
 	*out_buffer = pResult;
 	return SPUD_SUCCESS;
@@ -105,8 +106,8 @@ void spudgpu_destroy_buffer(spudgpu_buffer buffer) {
 #if _DEBUG
 	if (buffer->_heap)
 		buffer->_heap->_placed_count--;
-	free((void *)buffer->_debug_name);
 #endif
+	free((void *)buffer->_debug_name);
 	buffer->~spudgpu_buffer_d3d12();
 	free(buffer);
 }
@@ -117,6 +118,17 @@ spudgpu_get_buffer_desc(spudgpu_buffer buffer, spudgpu_buffer_desc *out_desc) {
 	if (!out_desc)
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
 	*out_desc = buffer->_desc;
+	out_desc->base = spud_struct_base(SPUD_STRUCT_TYPE_GPU_BUFFER_DESC);
+	return SPUD_SUCCESS;
+}
+
+SPUDRESULT
+spudgpu_get_buffer_gpu_address(spudgpu_buffer buffer, uint64_t *out_address) {
+	if (!buffer)
+		return SPUDRESULT_GPU_INVALID_BUFFER;
+	if (!out_address)
+		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
+	*out_address = buffer->_d3d_gpu_address;
 	return SPUD_SUCCESS;
 }
 
@@ -128,6 +140,9 @@ SPUDRESULT spudgpu_create_buffer_view(
 		return SPUDRESULT_GPU_INVALID_BUFFER;
 	if (!desc)
 		return SPUDRESULT_NULL_DESC;
+	const SPUDRESULT base_sr = spud_struct_check(&desc->base, SPUD_STRUCT_TYPE_GPU_BUFFER_VIEW_DESC);
+	if (base_sr != SPUD_SUCCESS)
+		return base_sr;
 	if (!out_buffer_view)
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
 	if (desc->size == 0)
@@ -184,9 +199,7 @@ SPUDRESULT spudgpu_create_buffer_view(
 void spudgpu_destroy_buffer_view(spudgpu_buffer_view buffer) {
 	if (!buffer)
 		return;
-#if _DEBUG
 	free((void *)buffer->_debug_name);
-#endif
 	free(buffer);
 }
 SPUDRESULT spudgpu_get_buffer_view_desc(
@@ -196,6 +209,7 @@ SPUDRESULT spudgpu_get_buffer_view_desc(
 	if (!out_desc)
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
 	*out_desc = view->_desc;
+	out_desc->base = spud_struct_base(SPUD_STRUCT_TYPE_GPU_BUFFER_VIEW_DESC);
 	return SPUD_SUCCESS;
 }
 

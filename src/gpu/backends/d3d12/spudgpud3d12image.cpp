@@ -2,6 +2,7 @@
 #if SPUDGPU_COMPILE_D3D12_API
 
 #include "spudgpud3d12.hpp"
+#include "../../../spudstructbase.h"
 
 // The aspects [format] has (SPUDGPU_IMAGE_ASPECT). The same table in every
 // backend: it decides which views spudgpu_create_image_view refuses.
@@ -281,6 +282,9 @@ SPUDRESULT spudgpu_create_image(
 		return SPUDRESULT_GPU_INVALID_DEVICE;
 	if (!desc)
 		return SPUDRESULT_NULL_DESC;
+	const SPUDRESULT base_sr = spud_struct_check(&desc->base, SPUD_STRUCT_TYPE_GPU_IMAGE_DESC);
+	if (base_sr != SPUD_SUCCESS)
+		return base_sr;
 	if (!out_image)
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
 	const SPUDRESULT descResult = spudgpu_d3d12_check_image_desc(desc);
@@ -329,13 +333,11 @@ SPUDRESULT spudgpu_create_image(
 	}
 	pResult->_current_state = d3dInitialState;
 
-#if _DEBUG
 	if (spud_debug_name_set(pResult, desc->debug_name) != SPUD_SUCCESS) {
 		spudgpu_destroy_image(pResult);
 		return SPUDRESULT_OUT_OF_MEMORY;
 	}
 	pResult->_desc.debug_name = pResult->_debug_name;
-#endif
 
 	*out_image = pResult;
 
@@ -346,8 +348,8 @@ void spudgpu_destroy_image(spudgpu_image image) {
 #if _DEBUG
     if (image->_heap)
         image->_heap->_placed_count--;
-    free((void *)image->_debug_name);
 #endif
+    free((void *)image->_debug_name);
     image->~spudgpu_image_d3d12();
     free(image);
 }
@@ -357,6 +359,7 @@ SPUDRESULT spudgpu_get_image_desc(
     if (!image) return SPUDRESULT_GPU_INVALID_IMAGE;
     if (!out_desc) return SPUDRESULT_NULL_OUTPUT_PARAMETER;
     *out_desc = image->_desc;
+    out_desc->base = spud_struct_base(SPUD_STRUCT_TYPE_GPU_IMAGE_DESC);
     return SPUD_SUCCESS;
 }
 
@@ -369,6 +372,9 @@ SPUDRESULT spudgpu_create_image_view(
 		return SPUDRESULT_GPU_INVALID_IMAGE;
 	if (!desc)
 		return SPUDRESULT_NULL_DESC;
+	const SPUDRESULT base_sr = spud_struct_check(&desc->base, SPUD_STRUCT_TYPE_GPU_IMAGE_VIEW_DESC);
+	if (base_sr != SPUD_SUCCESS)
+		return base_sr;
 	if (!out_image_view)
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
 	// The cube view rules of spudgpu.h, the same on every backend. The
@@ -476,9 +482,7 @@ SPUDRESULT spudgpu_create_image_view(
 void spudgpu_destroy_image_view(spudgpu_image_view image_view) {
 	if (!image_view)
 		return;
-#if _DEBUG
 	free((void *)image_view->_debug_name);
-#endif
 	free(image_view);
 }
 SPUDRESULT spudgpu_get_image_view_desc(
@@ -488,6 +492,7 @@ SPUDRESULT spudgpu_get_image_view_desc(
 	if (!out_desc)
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
 	*out_desc = image_view->_desc;
+	out_desc->base = spud_struct_base(SPUD_STRUCT_TYPE_GPU_IMAGE_VIEW_DESC);
 	return SPUD_SUCCESS;
 }
 }

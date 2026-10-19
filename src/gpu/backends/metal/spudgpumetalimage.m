@@ -9,6 +9,7 @@
 #include "spudgpu.h"
 #include "spudgpumetal.h"
 #include <Metal/Metal.h>
+#include "../../../spudstructbase.h"
 
 // A practical, non-exhaustive subset covering the common uncompressed
 // formats - not the full ~100-entry DXGI-shaped SPUDGPU_FORMAT enum (block-
@@ -248,6 +249,9 @@ SPUDRESULT spudgpu_create_image(
 		return SPUDRESULT_GPU_INVALID_DEVICE;
 	if (!desc)
 		return SPUDRESULT_NULL_DESC;
+	const SPUDRESULT base_sr = spud_struct_check(&desc->base, SPUD_STRUCT_TYPE_GPU_IMAGE_DESC);
+	if (base_sr != SPUD_SUCCESS)
+		return base_sr;
 	if (!out_image)
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
 	const SPUDRESULT desc_result = spudgpumetal___check_image_desc(desc);
@@ -275,19 +279,11 @@ SPUDRESULT spudgpu_create_image(
 		goto failedattempt;
 	}
 
-	// gpu_address_location stays 0 for images on every backend, not just
-	// Metal: unlike a buffer, a texture has no simple flat GPU address
-	// (D3D12's own GetGPUVirtualAddress() is documented to return 0 for
-	// texture resources, and the Vulkan backend never populates this field
-	// for images either) - there's nothing dishonest to fill in here.
-
-#if _DEBUG
 	if (spud_debug_name_set(image_metal, desc->debug_name) != SPUD_SUCCESS) {
 		spudgpu_destroy_image((spudgpu_image)image_metal);
 		return SPUDRESULT_OUT_OF_MEMORY;
 	}
 	image_metal->_desc.debug_name = image_metal->_debug_name;
-#endif
 
 	*out_image = (spudgpu_image)image_metal;
 
@@ -307,8 +303,8 @@ void spudgpu_destroy_image(spudgpu_image image) {
 #if _DEBUG
 		if (image_metal->_heap)
 			image_metal->_heap->_placed_count--;
-		free((void *)image_metal->_debug_name);
 #endif
+		free((void *)image_metal->_debug_name);
 		free(image_metal);
 	}
 }
@@ -322,6 +318,7 @@ SPUDRESULT spudgpu_get_image_desc(
 	if (!out_desc)
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
 	*out_desc = image_metal->_desc;
+	out_desc->base = spud_struct_base(SPUD_STRUCT_TYPE_GPU_IMAGE_DESC);
 	return SPUD_SUCCESS;
 }
 
@@ -375,6 +372,9 @@ SPUDRESULT spudgpu_create_image_view(
 		return SPUDRESULT_GPU_INVALID_IMAGE;
 	if (!desc)
 		return SPUDRESULT_NULL_DESC;
+	const SPUDRESULT base_sr = spud_struct_check(&desc->base, SPUD_STRUCT_TYPE_GPU_IMAGE_VIEW_DESC);
+	if (base_sr != SPUD_SUCCESS)
+		return base_sr;
 	if (!out_image_view)
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
 
@@ -449,9 +449,7 @@ void spudgpu_destroy_image_view(spudgpu_image_view image_view) {
 		if (view_metal->_texture_view_mtl) {
 			[view_metal->_texture_view_mtl release];
 		}
-#if _DEBUG
 		free((void *)view_metal->_debug_name);
-#endif
 		free(view_metal);
 	}
 }
@@ -465,6 +463,7 @@ SPUDRESULT spudgpu_get_image_view_desc(
 	if (!out_desc)
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
 	*out_desc = view_metal->_desc;
+	out_desc->base = spud_struct_base(SPUD_STRUCT_TYPE_GPU_IMAGE_VIEW_DESC);
 	return SPUD_SUCCESS;
 }
 

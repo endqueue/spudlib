@@ -7,6 +7,7 @@
 #include <assert.h>
 #include <stdlib.h>
 #include <string.h>
+#include "../../../spudstructbase.h"
 
 // SpudGPU heaps on Vulkan.
 //
@@ -233,6 +234,8 @@ SPUDRESULT spudgpu_create_heap(
     spudgpu_heap *out_heap) {
     if (!device) return SPUDRESULT_GPU_INVALID_DEVICE;
     if (!desc) return SPUDRESULT_NULL_DESC;
+    const SPUDRESULT base_sr = spud_struct_check(&desc->base, SPUD_STRUCT_TYPE_GPU_HEAP_DESC);
+    if (base_sr != SPUD_SUCCESS) return base_sr;
     if (!out_heap) return SPUDRESULT_NULL_OUTPUT_PARAMETER;
     if (desc->size == 0) return SPUDRESULT_ZERO_SIZE;
     if (desc->size % SPUDGPU_HEAP_SIZE_GRANULARITY) return SPUDRESULT_GPU_INVALID_HEAP_SIZE;
@@ -295,13 +298,11 @@ SPUDRESULT spudgpu_create_heap(
     heap->_desc = *desc;
     heap->_device = *device;
 
-#if _DEBUG
     if (spud_debug_name_set(heap, desc->debug_name) != SPUD_SUCCESS) {
         spudgpu_destroy_heap(heap);
         return SPUDRESULT_OUT_OF_MEMORY;
     }
     heap->_desc.debug_name = heap->_debug_name;
-#endif
 
     *out_heap = heap;
     return SPUD_SUCCESS;
@@ -317,9 +318,7 @@ void spudgpu_destroy_heap(spudgpu_heap heap) {
     if (heap->_mapped)
         vkUnmapMemory(heap->_device._logical_device_vk, heap->_memory_vk);
     vkFreeMemory(heap->_device._logical_device_vk, heap->_memory_vk, NULL);
-#if _DEBUG
     free((void *) heap->_debug_name);
-#endif
     free(heap);
 }
 
@@ -329,6 +328,7 @@ SPUDRESULT spudgpu_get_heap_desc(
     if (!heap) return SPUDRESULT_GPU_INVALID_HEAP;
     if (!out_desc) return SPUDRESULT_NULL_OUTPUT_PARAMETER;
     *out_desc = heap->_desc;
+    out_desc->base = spud_struct_base(SPUD_STRUCT_TYPE_GPU_HEAP_DESC);
     return SPUD_SUCCESS;
 }
 
@@ -338,7 +338,11 @@ SPUDRESULT spudgpu_get_buffer_placement_requirements(
     spudgpu_placement_requirements *out_requirements) {
     if (!heap) return SPUDRESULT_GPU_INVALID_HEAP;
     if (!desc) return SPUDRESULT_NULL_DESC;
+    const SPUDRESULT desc_base_sr = spud_struct_check(&desc->base, SPUD_STRUCT_TYPE_GPU_BUFFER_DESC);
+    if (desc_base_sr != SPUD_SUCCESS) return desc_base_sr;
     if (!out_requirements) return SPUDRESULT_NULL_OUTPUT_PARAMETER;
+    const SPUDRESULT out_requirements_base_sr = spud_struct_out_check(&out_requirements->base, SPUD_STRUCT_TYPE_GPU_PLACEMENT_REQUIREMENTS);
+    if (out_requirements_base_sr != SPUD_SUCCESS) return out_requirements_base_sr;
     const SPUDRESULT sr = spudgpuvulkan___internal_check_buffer_placement(heap, desc);
     if (sr != SPUD_SUCCESS) return sr;
 
@@ -366,7 +370,11 @@ SPUDRESULT spudgpu_get_image_placement_requirements(
     spudgpu_placement_requirements *out_requirements) {
     if (!heap) return SPUDRESULT_GPU_INVALID_HEAP;
     if (!desc) return SPUDRESULT_NULL_DESC;
+    const SPUDRESULT desc_base_sr = spud_struct_check(&desc->base, SPUD_STRUCT_TYPE_GPU_IMAGE_DESC);
+    if (desc_base_sr != SPUD_SUCCESS) return desc_base_sr;
     if (!out_requirements) return SPUDRESULT_NULL_OUTPUT_PARAMETER;
+    const SPUDRESULT out_requirements_base_sr = spud_struct_out_check(&out_requirements->base, SPUD_STRUCT_TYPE_GPU_PLACEMENT_REQUIREMENTS);
+    if (out_requirements_base_sr != SPUD_SUCCESS) return out_requirements_base_sr;
     const SPUDRESULT sr = spudgpuvulkan___internal_check_image_placement(heap, desc);
     if (sr != SPUD_SUCCESS) return sr;
 
@@ -393,6 +401,8 @@ SPUDRESULT spudgpu_create_placed_buffer(
     spudgpu_buffer *out_buffer) {
     if (!heap) return SPUDRESULT_GPU_INVALID_HEAP;
     if (!desc) return SPUDRESULT_NULL_DESC;
+    const SPUDRESULT base_sr = spud_struct_check(&desc->base, SPUD_STRUCT_TYPE_GPU_BUFFER_DESC);
+    if (base_sr != SPUD_SUCCESS) return base_sr;
     if (!out_buffer) return SPUDRESULT_NULL_OUTPUT_PARAMETER;
     SPUDRESULT sr = spudgpuvulkan___internal_check_buffer_placement(heap, desc);
     if (sr != SPUD_SUCCESS) return sr;
@@ -435,18 +445,18 @@ SPUDRESULT spudgpu_create_placed_buffer(
     VkBufferDeviceAddressInfo addressInfo = {0};
     addressInfo.sType = VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO;
     addressInfo.buffer = vk_buffer;
-    buffer->_desc.gpu_address_location = vkGetBufferDeviceAddress(vk_device, &addressInfo);
+    buffer->_gpu_address_vk = vkGetBufferDeviceAddress(vk_device, &addressInfo);
 
 #if _DEBUG
     // Counted before the name is copied: a failed copy destroys the buffer,
     // which takes it off the count again.
     heap->_placed_count++;
+#endif
     if (spud_debug_name_set(buffer, desc->debug_name) != SPUD_SUCCESS) {
         spudgpu_destroy_buffer(buffer);
         return SPUDRESULT_OUT_OF_MEMORY;
     }
     buffer->_desc.debug_name = buffer->_debug_name;
-#endif
 
     *out_buffer = buffer;
     return SPUD_SUCCESS;
@@ -459,6 +469,8 @@ SPUDRESULT spudgpu_create_placed_image(
     spudgpu_image *out_image) {
     if (!heap) return SPUDRESULT_GPU_INVALID_HEAP;
     if (!desc) return SPUDRESULT_NULL_DESC;
+    const SPUDRESULT base_sr = spud_struct_check(&desc->base, SPUD_STRUCT_TYPE_GPU_IMAGE_DESC);
+    if (base_sr != SPUD_SUCCESS) return base_sr;
     if (!out_image) return SPUDRESULT_NULL_OUTPUT_PARAMETER;
     SPUDRESULT sr = spudgpuvulkan___internal_check_image_placement(heap, desc);
     if (sr != SPUD_SUCCESS) return sr;
@@ -498,12 +510,12 @@ SPUDRESULT spudgpu_create_placed_image(
 
 #if _DEBUG
     heap->_placed_count++;
+#endif
     if (spud_debug_name_set(image, desc->debug_name) != SPUD_SUCCESS) {
         spudgpu_destroy_image(image);
         return SPUDRESULT_OUT_OF_MEMORY;
     }
     image->_desc.debug_name = image->_debug_name;
-#endif
 
     *out_image = image;
     return SPUD_SUCCESS;

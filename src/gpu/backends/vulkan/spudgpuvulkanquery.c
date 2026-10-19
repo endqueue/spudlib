@@ -47,9 +47,7 @@ SPUDRESULT spudgpu_create_timestamp_set(
 void spudgpu_destroy_timestamp_set(spudgpu_timestamp_set set) {
     if (!set) return;
     vkDestroyQueryPool(set->_logical_device_vk, set->_query_pool_vk, NULL);
-#if _DEBUG
     free((void *)set->_debug_name);
-#endif
     free(set);
 }
 

@@ -14,6 +14,7 @@
 #include "../../spudgpushared.h"
 #include <Metal/Metal.h>
 #include <stdio.h>
+#include "../../../spudstructbase.h"
 
 // SPUDGPU_IMAGE_LAYOUT is a Vulkan/D3D12-shaped state machine (UNDEFINED,
 // COLOR_ATTACHMENT_OPTIMAL, SHADER_READ_ONLY, ...) that Metal has no
@@ -306,6 +307,8 @@ void spudgpu_cmd_begin_rendering(
     const spudgpu_rendering_begin_desc *desc) {
 	if (!cmd || !desc)
 		return;
+	if (spud_struct_check(&desc->base, SPUD_STRUCT_TYPE_GPU_RENDERING_BEGIN_DESC) != SPUD_SUCCESS)
+		return;
 
 	spudgpu_command_list_metal *cmd_metal = (spudgpu_command_list_metal *)cmd;
 
@@ -427,6 +430,7 @@ void spudgpu_cmd_clear_color_attachment(
 	color.clear_color[3] = a;
 
 	spudgpu_rendering_begin_desc desc = {0};
+	desc.base.type = SPUD_STRUCT_TYPE_GPU_RENDERING_BEGIN_DESC;
 	desc.color_attachments[0]   = color;
 	desc.color_attachment_count = 1;
 	desc.width                  = width;
@@ -451,6 +455,7 @@ void spudgpu_cmd_clear_depth_attachment(
 		return;
 
 	spudgpu_rendering_begin_desc desc = {0};
+	desc.base.type = SPUD_STRUCT_TYPE_GPU_RENDERING_BEGIN_DESC;
 	desc.depth_attachment.image_view       = attachment;
 	desc.depth_attachment.depth_load_op    = clear_depth ? SPUDGPU_LOAD_OP_CLEAR : SPUDGPU_LOAD_OP_LOAD;
 	desc.depth_attachment.depth_store_op   = SPUDGPU_STORE_OP_STORE;
@@ -475,8 +480,14 @@ void spudgpu_cmd_pipeline_barrier(
 		return;
 	if (buffer_barrier_count > 0 && !buffer_barriers)
 		return;
+	for (uint32_t buffer_barriers_i = 0; buffer_barriers_i < buffer_barrier_count; ++buffer_barriers_i)
+		if (spud_struct_check(&buffer_barriers[buffer_barriers_i].base, SPUD_STRUCT_TYPE_GPU_BUFFER_BARRIER) != SPUD_SUCCESS)
+			return;
 	if (image_barrier_count > 0 && !image_barriers)
 		return;
+	for (uint32_t image_barriers_i = 0; image_barriers_i < image_barrier_count; ++image_barriers_i)
+		if (spud_struct_check(&image_barriers[image_barriers_i].base, SPUD_STRUCT_TYPE_GPU_IMAGE_BARRIER) != SPUD_SUCCESS)
+			return;
 
 	// No-op, deliberately - same underlying reason as the image_barrier
 	// functions above (spudgpumetal___internal_layout_recognized): resources

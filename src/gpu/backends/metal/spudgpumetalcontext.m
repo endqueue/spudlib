@@ -6,6 +6,7 @@
 #include <stdlib.h>
 
 #include "spudgpumetal.h"
+#include "../../../spudstructbase.h"
 
 SPUDRESULT spudgpu_create_instance(
     const char *application_name,
@@ -38,9 +39,7 @@ static void spudgpumetal___internal_destroy_command_queue_family(
 		if (queue->_command_queue_mtl) {
 			[queue->_command_queue_mtl release];
 		}
-#if _DEBUG
 		free((void *)queue->_debug_name);
-#endif
 		free(queue);
 	}
 }
@@ -57,15 +56,11 @@ SPUDRESULT spudgpu_destroy_instance(spudgpu_instance instance) {
 		spudgpumetal___internal_destroy_command_queue_family(device->_cmd_queues_copy);
 		spudgpumetal___internal_destroy_command_queue_family(device->_cmd_queues_compute);
 		[device->_device_mtl release];
-#if _DEBUG
 		free((void *)device->_debug_name);
-#endif
 		free(device);
 	}
 	free(instance->_devices);
-#if _DEBUG
 	free((void *)instance->_debug_name);
-#endif
 	free(instance);
 	return SPUD_SUCCESS;
 }
@@ -225,9 +220,14 @@ SPUDRESULT spudgpu_get_device_properties(
 		return SPUDRESULT_GPU_INVALID_DEVICE;
 	if (!out_properties)
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
+	const SPUDRESULT base_sr = spud_struct_out_check(&out_properties->base, SPUD_STRUCT_TYPE_GPU_DEVICE_PROPERTIES);
+	if (base_sr != SPUD_SUCCESS)
+		return base_sr;
 	memcpy(
 	    out_properties, &device->_properties,
 	    sizeof(SPUDGPU_DEVICE_PROPERTIES));
+	// Whatever was copied over it, the base stays the caller's.
+	out_properties->base = spud_struct_base_out(SPUD_STRUCT_TYPE_GPU_DEVICE_PROPERTIES);
 	return SPUD_SUCCESS;
 }
 

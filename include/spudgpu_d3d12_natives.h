@@ -27,6 +27,7 @@ ID3D12GraphicsCommandList10 *
 spudgpu_get_d3d12_graphics_command_list(spudgpu_command_list cmd);
 
 ID3D12Resource2 *spudgpu_get_d3d12_buffer(spudgpu_buffer buffer);
+/* Frozen: a fact of the D3D12 API. It never changes; a new need gets a new type. */
 typedef union SPUDGPU_D3D12_BUFFER_VIEW {
 	D3D12_VERTEX_BUFFER_VIEW _vb;
 	D3D12_INDEX_BUFFER_VIEW _ib;
@@ -38,6 +39,7 @@ bool spudgpu_get_d3d12_buffer_view(
     SPUDGPU_D3D12_BUFFER_VIEW *out);
 
 ID3D12Resource2 *spudgpu_get_d3d12_image(spudgpu_image image);
+/* Frozen: a fact of the D3D12 API. It never changes; a new need gets a new type. */
 typedef union SPUDGPU_D3D12_IMAGE_VIEW {
 	D3D12_SHADER_RESOURCE_VIEW_DESC _srv;
 	D3D12_RENDER_TARGET_VIEW_DESC _rtv;

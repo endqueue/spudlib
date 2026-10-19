@@ -3,6 +3,7 @@
 
 #include "spudgpud3d12.hpp"
 #include <cassert>
+#include "../../../spudstructbase.h"
 
 // SpudGPU heaps on D3D12.
 //
@@ -106,6 +107,9 @@ SPUDRESULT spudgpu_create_heap(
 		return SPUDRESULT_GPU_INVALID_DEVICE;
 	if (!desc)
 		return SPUDRESULT_NULL_DESC;
+	const SPUDRESULT base_sr = spud_struct_check(&desc->base, SPUD_STRUCT_TYPE_GPU_HEAP_DESC);
+	if (base_sr != SPUD_SUCCESS)
+		return base_sr;
 	if (!out_heap)
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
 	if (desc->size == 0)
@@ -142,13 +146,11 @@ SPUDRESULT spudgpu_create_heap(
 		return SPUDRESULT_API_SPECIFIC_FAILURE;
 	}
 
-#if _DEBUG
 	if (spud_debug_name_set(heap, desc->debug_name) != SPUD_SUCCESS) {
 		spudgpu_destroy_heap(heap);
 		return SPUDRESULT_OUT_OF_MEMORY;
 	}
 	heap->_desc.debug_name = heap->_debug_name;
-#endif
 
 	*out_heap = heap;
 	return SPUD_SUCCESS;
@@ -161,8 +163,8 @@ void spudgpu_destroy_heap(spudgpu_heap heap) {
 	// Every buffer and image placed in the heap is destroyed first (see
 	// spudgpu.h).
 	assert(heap->_placed_count == 0);
-	free((void *)heap->_debug_name);
 #endif
+	free((void *)heap->_debug_name);
 	heap->~spudgpu_heap_d3d12();
 	free(heap);
 }
@@ -175,6 +177,7 @@ SPUDRESULT spudgpu_get_heap_desc(
 	if (!out_desc)
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
 	*out_desc = heap->_desc;
+	out_desc->base = spud_struct_base(SPUD_STRUCT_TYPE_GPU_HEAP_DESC);
 	return SPUD_SUCCESS;
 }
 
@@ -186,8 +189,14 @@ SPUDRESULT spudgpu_get_buffer_placement_requirements(
 		return SPUDRESULT_GPU_INVALID_HEAP;
 	if (!desc)
 		return SPUDRESULT_NULL_DESC;
+	const SPUDRESULT desc_base_sr = spud_struct_check(&desc->base, SPUD_STRUCT_TYPE_GPU_BUFFER_DESC);
+	if (desc_base_sr != SPUD_SUCCESS)
+		return desc_base_sr;
 	if (!out_requirements)
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
+	const SPUDRESULT out_requirements_base_sr = spud_struct_out_check(&out_requirements->base, SPUD_STRUCT_TYPE_GPU_PLACEMENT_REQUIREMENTS);
+	if (out_requirements_base_sr != SPUD_SUCCESS)
+		return out_requirements_base_sr;
 	const SPUDRESULT sr = spudgpu_d3d12_check_buffer_placement(heap, desc);
 	if (sr != SPUD_SUCCESS)
 		return sr;
@@ -203,8 +212,14 @@ SPUDRESULT spudgpu_get_image_placement_requirements(
 		return SPUDRESULT_GPU_INVALID_HEAP;
 	if (!desc)
 		return SPUDRESULT_NULL_DESC;
+	const SPUDRESULT desc_base_sr = spud_struct_check(&desc->base, SPUD_STRUCT_TYPE_GPU_IMAGE_DESC);
+	if (desc_base_sr != SPUD_SUCCESS)
+		return desc_base_sr;
 	if (!out_requirements)
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
+	const SPUDRESULT out_requirements_base_sr = spud_struct_out_check(&out_requirements->base, SPUD_STRUCT_TYPE_GPU_PLACEMENT_REQUIREMENTS);
+	if (out_requirements_base_sr != SPUD_SUCCESS)
+		return out_requirements_base_sr;
 	SPUDRESULT sr = spudgpu_d3d12_check_image_placement(heap, desc);
 	if (sr != SPUD_SUCCESS)
 		return sr;
@@ -224,6 +239,9 @@ SPUDRESULT spudgpu_create_placed_buffer(
 		return SPUDRESULT_GPU_INVALID_HEAP;
 	if (!desc)
 		return SPUDRESULT_NULL_DESC;
+	const SPUDRESULT base_sr = spud_struct_check(&desc->base, SPUD_STRUCT_TYPE_GPU_BUFFER_DESC);
+	if (base_sr != SPUD_SUCCESS)
+		return base_sr;
 	if (!out_buffer)
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
 	SPUDRESULT sr = spudgpu_d3d12_check_buffer_placement(heap, desc);
@@ -254,20 +272,19 @@ SPUDRESULT spudgpu_create_placed_buffer(
 		free(buffer);
 		return SPUDRESULT_API_SPECIFIC_FAILURE;
 	}
-	buffer->_d3d_gpu_address           = buffer->_d3d_resource->GetGPUVirtualAddress();
-	buffer->_desc.gpu_address_location = buffer->_d3d_gpu_address;
+	buffer->_d3d_gpu_address = buffer->_d3d_resource->GetGPUVirtualAddress();
 	buffer->_heap                      = heap;
 
 #if _DEBUG
 	// Counted before the name is copied: a failed copy destroys the buffer,
 	// which takes it off the count again.
 	heap->_placed_count++;
+#endif
 	if (spud_debug_name_set(buffer, desc->debug_name) != SPUD_SUCCESS) {
 		spudgpu_destroy_buffer(buffer);
 		return SPUDRESULT_OUT_OF_MEMORY;
 	}
 	buffer->_desc.debug_name = buffer->_debug_name;
-#endif
 
 	*out_buffer = buffer;
 	return SPUD_SUCCESS;
@@ -282,6 +299,9 @@ SPUDRESULT spudgpu_create_placed_image(
 		return SPUDRESULT_GPU_INVALID_HEAP;
 	if (!desc)
 		return SPUDRESULT_NULL_DESC;
+	const SPUDRESULT base_sr = spud_struct_check(&desc->base, SPUD_STRUCT_TYPE_GPU_IMAGE_DESC);
+	if (base_sr != SPUD_SUCCESS)
+		return base_sr;
 	if (!out_image)
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
 	SPUDRESULT sr = spudgpu_d3d12_check_image_placement(heap, desc);
@@ -326,12 +346,12 @@ SPUDRESULT spudgpu_create_placed_image(
 
 #if _DEBUG
 	heap->_placed_count++;
+#endif
 	if (spud_debug_name_set(image, desc->debug_name) != SPUD_SUCCESS) {
 		spudgpu_destroy_image(image);
 		return SPUDRESULT_OUT_OF_MEMORY;
 	}
 	image->_desc.debug_name = image->_debug_name;
-#endif
 
 	*out_image = image;
 	return SPUD_SUCCESS;

@@ -7,6 +7,7 @@
 #include "spudgpuvulkan.h"
 #include "stdlib.h"
 #include "stdbool.h"
+#include "../../../spudstructbase.h"
 
 VkFormat convert_spud_to_vulkan_format(SPUDGPU_FORMAT format) {
     switch (format) {
@@ -249,10 +250,10 @@ static VkDevice spudgpuvulkan___initialize_vk_logical_device_internal(
     // no VK_IMAGE_VIEW_TYPE_CUBE_ARRAY view and no shader that declares one.
     deviceFeatures.imageCubeArray    = availableFeatures.imageCubeArray;
 
-    // spudgpu_create_buffer/spudgpu_create_image always call
-    // vkGetBufferDeviceAddress/equivalent to populate desc.gpu_address_location
-    // (see spudgpu.h's documented contract that it's valid after creation,
-    // matching D3D12's always-available GetGPUVirtualAddress), so this
+    // spudgpu_create_buffer and spudgpu_create_placed_buffer always call
+    // vkGetBufferDeviceAddress, for spudgpu_get_buffer_gpu_address (see
+    // spudgpu.h: every buffer has an address after creation, matching
+    // D3D12's always-available GetGPUVirtualAddress), so this
     // feature must be enabled here and VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT
     // must be set on every buffer (see spudgpuvulkanbuffer.c).
     VkPhysicalDeviceVulkan12Features vk12Features = {0};
@@ -528,17 +529,13 @@ SPUDRESULT spudgpu_destroy_instance(spudgpu_instance instance) {
         // Created for every device in spudgpu_enumerate_devices.
         spudgpuvulkan___destroy_bindless_state((spudgpu_device) dev);
         vkDestroyDevice(dev->_logical_device_vk, NULL);
-#if _DEBUG
         free((void *)dev->_debug_name);
-#endif
         free(dev);
     }
     free(instance->_devices);
 
     vkDestroyInstance(instance->_instance_vk, NULL);
-#if _DEBUG
     free((void *)instance->_debug_name);
-#endif
     free(instance);
     return SPUD_SUCCESS;
 }
@@ -671,9 +668,7 @@ SPUDRESULT spudgpu_enumerate_devices(
 
     for (size_t i = 0; i < deviceCount; i++) {
         spudgpu_device_vulkan *pDeviceVulkan = malloc(sizeof(spudgpu_device_vulkan));
-#if _DEBUG
         pDeviceVulkan->_debug_name = NULL;
-#endif
         pDeviceVulkan->_bindless = NULL;
         pDeviceVulkan->_instance = *instance;
         pDeviceVulkan->_physical_device_vk = physicalDevices[i];
@@ -702,9 +697,14 @@ SPUDRESULT spudgpu_get_device_properties(
 		return SPUDRESULT_GPU_INVALID_DEVICE;
 	if (!out_properties)
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
+	const SPUDRESULT base_sr = spud_struct_out_check(&out_properties->base, SPUD_STRUCT_TYPE_GPU_DEVICE_PROPERTIES);
+	if (base_sr != SPUD_SUCCESS)
+		return base_sr;
 	memcpy(
 	    out_properties, &device->_properties,
 	    sizeof(SPUDGPU_DEVICE_PROPERTIES));
+	// Whatever was copied over it, the base stays the caller's.
+	out_properties->base = spud_struct_base_out(SPUD_STRUCT_TYPE_GPU_DEVICE_PROPERTIES);
 	return SPUD_SUCCESS;
 }
 
@@ -719,8 +719,13 @@ SPUDRESULT spudgpu_get_mesh_shading_capabilities(
         return SPUDRESULT_GPU_INVALID_DEVICE;
     if (!out_caps)
         return SPUDRESULT_NULL_OUTPUT_PARAMETER;
+    const SPUDRESULT base_sr = spud_struct_out_check(&out_caps->base, SPUD_STRUCT_TYPE_GPU_MESH_SHADING_CAPABILITIES);
+    if (base_sr != SPUD_SUCCESS)
+        return base_sr;
 
     memset(out_caps, 0, sizeof(*out_caps));
+    // Whatever was copied over it, the base stays the caller's.
+    out_caps->base = spud_struct_base_out(SPUD_STRUCT_TYPE_GPU_MESH_SHADING_CAPABILITIES);
     out_caps->supported = device->_mesh_shading_supported;
     if (device->_mesh_shading_supported) {
         out_caps->max_mesh_output_vertices       = device->_mesh_shading_max_output_vertices;
@@ -738,8 +743,13 @@ SPUDRESULT spudgpu_get_depth_bounds_capabilities(
         return SPUDRESULT_GPU_INVALID_DEVICE;
     if (!out_caps)
         return SPUDRESULT_NULL_OUTPUT_PARAMETER;
+    const SPUDRESULT base_sr = spud_struct_out_check(&out_caps->base, SPUD_STRUCT_TYPE_GPU_DEPTH_BOUNDS_CAPABILITIES);
+    if (base_sr != SPUD_SUCCESS)
+        return base_sr;
 
     memset(out_caps, 0, sizeof(*out_caps));
+    // Whatever was copied over it, the base stays the caller's.
+    out_caps->base = spud_struct_base_out(SPUD_STRUCT_TYPE_GPU_DEPTH_BOUNDS_CAPABILITIES);
     out_caps->supported = device->_depth_bounds_test_supported;
     return SPUD_SUCCESS;
 }

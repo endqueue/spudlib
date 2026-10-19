@@ -7,6 +7,7 @@
 
 #include <dxcapi.h>
 #include <spirv_hlsl.hpp>
+#include "../../../spudstructbase.h"
 
 static const wchar_t *stage_to_dxc_profile(SPUDGPU_SHADER_STAGE stage) {
 	switch (stage) {
@@ -438,13 +439,11 @@ static SPUDRESULT spudgpu_d3d12___create_mesh_shader_pipeline(
 	// [outputtopology(...)] attribute, not the input assembler) - left at
 	// its zero-initialized value.
 
-#if _DEBUG
 	if (spud_debug_name_set(pResult, desc->debug_name) != SPUD_SUCCESS) {
 		spudgpu_destroy_shader_pipeline(pResult);
 		return SPUDRESULT_OUT_OF_MEMORY;
 	}
 	pResult->_desc.debug_name = pResult->_debug_name;
-#endif
 
 	*out_pipeline = pResult;
 	return SPUD_SUCCESS;
@@ -501,6 +500,9 @@ SPUDRESULT spudgpu_create_shader_module(
 		return SPUDRESULT_GPU_INVALID_DEVICE;
 	if (!desc)
 		return SPUDRESULT_NULL_DESC;
+	const SPUDRESULT base_sr = spud_struct_check(&desc->base, SPUD_STRUCT_TYPE_GPU_SHADER_MODULE_DESC);
+	if (base_sr != SPUD_SUCCESS)
+		return base_sr;
 	if (!out_module)
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
 	if (!desc->spirv_code || desc->spirv_size == 0)
@@ -624,13 +626,11 @@ SPUDRESULT spudgpu_create_shader_module(
 	pResult->_device = pDev;
 	pResult->_d3d_blob = d3d_blob;
 
-#if _DEBUG
 	if (spud_debug_name_set(pResult, desc->debug_name) != SPUD_SUCCESS) {
 		spudgpu_destroy_shader_module(pResult);
 		return SPUDRESULT_OUT_OF_MEMORY;
 	}
 	pResult->_desc.debug_name = pResult->_debug_name;
-#endif
 
 	*out_module = (spudgpu_shader_module)pResult;
 	return SPUD_SUCCESS;
@@ -639,9 +639,7 @@ SPUDRESULT spudgpu_create_shader_module(
 void spudgpu_destroy_shader_module(spudgpu_shader_module shader_module) {
 	if (!shader_module)
 		return;
-#if _DEBUG
 	free((void *)shader_module->_debug_name);
-#endif
 	shader_module->~spudgpu_shader_module_d3d12();
 	free(shader_module);
 }
@@ -654,6 +652,9 @@ SPUDRESULT spudgpu_create_shader_pipeline(
 		return SPUDRESULT_GPU_INVALID_DEVICE;
 	if (!desc)
 		return SPUDRESULT_NULL_DESC;
+	const SPUDRESULT base_sr = spud_struct_check(&desc->base, SPUD_STRUCT_TYPE_GPU_SHADER_PIPELINE_DESC);
+	if (base_sr != SPUD_SUCCESS)
+		return base_sr;
 	if (!out_pipeline)
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
 
@@ -834,13 +835,11 @@ SPUDRESULT spudgpu_create_shader_pipeline(
 
 	pResult->_d3d_primitive_topology = topology;
 
-#if _DEBUG
 	if (spud_debug_name_set(pResult, desc->debug_name) != SPUD_SUCCESS) {
 		spudgpu_destroy_shader_pipeline(pResult);
 		return SPUDRESULT_OUT_OF_MEMORY;
 	}
 	pResult->_desc.debug_name = pResult->_debug_name;
-#endif
 
 	*out_pipeline = pResult;
 	return SPUD_SUCCESS;
@@ -849,9 +848,7 @@ SPUDRESULT spudgpu_create_shader_pipeline(
 void spudgpu_destroy_shader_pipeline(spudgpu_shader_pipeline pipeline) {
 	if (!pipeline)
 		return;
-#if _DEBUG
 	free((void *)pipeline->_debug_name);
-#endif
 	pipeline->~spudgpu_shader_pipeline_d3d12();
 	free(pipeline);
 }
@@ -863,6 +860,7 @@ SPUDRESULT spudgpu_get_shader_pipeline_desc(
 	if (!out_desc)
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
 	*out_desc = pipeline->_desc;
+	out_desc->base = spud_struct_base(SPUD_STRUCT_TYPE_GPU_SHADER_PIPELINE_DESC);
 	return SPUD_SUCCESS;
 }
 
@@ -934,6 +932,9 @@ SPUDRESULT spudgpu_create_compute_pipeline(
 		return SPUDRESULT_GPU_INVALID_DEVICE;
 	if (!desc)
 		return SPUDRESULT_NULL_DESC;
+	const SPUDRESULT base_sr = spud_struct_check(&desc->base, SPUD_STRUCT_TYPE_GPU_COMPUTE_PIPELINE_DESC);
+	if (base_sr != SPUD_SUCCESS)
+		return base_sr;
 	if (!out_pipeline)
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
 	if (!desc->compute_module)
@@ -978,13 +979,11 @@ SPUDRESULT spudgpu_create_compute_pipeline(
 		return SPUDRESULT_API_SPECIFIC_FAILURE;
 	}
 
-#if _DEBUG
 	if (spud_debug_name_set(pResult, desc->debug_name) != SPUD_SUCCESS) {
 		spudgpu_destroy_compute_pipeline(pResult);
 		return SPUDRESULT_OUT_OF_MEMORY;
 	}
 	pResult->_desc.debug_name = pResult->_debug_name;
-#endif
 
 	*out_pipeline = pResult;
 	return SPUD_SUCCESS;
@@ -993,9 +992,7 @@ SPUDRESULT spudgpu_create_compute_pipeline(
 void spudgpu_destroy_compute_pipeline(spudgpu_compute_pipeline pipeline) {
 	if (!pipeline)
 		return;
-#if _DEBUG
 	free((void *)pipeline->_debug_name);
-#endif
 	pipeline->~spudgpu_compute_pipeline_d3d12();
 	free(pipeline);
 }
@@ -1008,6 +1005,7 @@ SPUDRESULT spudgpu_get_compute_pipeline_desc(
 	if (!out_desc)
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
 	*out_desc = pipeline->_desc;
+	out_desc->base = spud_struct_base(SPUD_STRUCT_TYPE_GPU_COMPUTE_PIPELINE_DESC);
 	return SPUD_SUCCESS;
 }
 

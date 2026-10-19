@@ -293,8 +293,8 @@ pub const SPUDGPU_PRESENT_MODE_MAILBOX: SPUDGPU_PRESENT_MODE   = 2;
 pub struct spudgpu_buffer_desc {
     pub usage: u32,
     pub memory_kind: u32,
-    pub gpu_address_location: u64,
     pub size: u64,
+    pub debug_name: *const c_char,
 }
 
 #[repr(C)]
@@ -311,7 +311,6 @@ pub struct spudgpu_buffer_view_desc {
 pub struct spudgpu_image_desc {
     pub usage: u32,
     pub type_: u32,          // 'type' is a keyword in Rust
-    pub gpu_address_location: u64,
     pub format: SPUDGPU_FORMAT,
     pub width: u32,
     pub height: u32,
@@ -401,6 +400,8 @@ extern "C" {
     ) -> spudgpu_buffer;
 
     pub fn spudgpu_get_buffer_desc(buffer: spudgpu_buffer) -> spudgpu_buffer_desc;
+
+    pub fn spudgpu_get_buffer_gpu_address(buffer: spudgpu_buffer, out_address: *mut u64) -> u32;
 
     pub fn spudgpu_destroy_buffer(device: spudgpu_device, buffer: spudgpu_buffer);
 

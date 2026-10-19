@@ -6,6 +6,7 @@
 #include "spudgpuvulkan.h"
 #include <stdlib.h>
 #include <string.h>
+#include "../../../spudstructbase.h"
 
 uint32_t spudgpuvulkan___find_memory_type_internal(
     VkPhysicalDevice physicalDevice,
@@ -161,8 +162,8 @@ void spudgpuvulkan___buffer_create_info(
     // Covert SPUDGPU_BUFFER_USAGE to native Vulkan usage
     spudgpuvulkan___buffer_usage_flags_internal(desc->usage, &out_info->usage);
 
-    // Every spudgpu_buffer gets a valid desc.gpu_address_location after
-    // creation (see spudgpu.h), mirroring D3D12's always-available
+    // Every spudgpu_buffer has a GPU address after creation
+    // (spudgpu_get_buffer_gpu_address), mirroring D3D12's always-available
     // GetGPUVirtualAddress — so every buffer needs this usage bit.
     out_info->usage |= VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
 }
@@ -177,6 +178,8 @@ SPUDRESULT spudgpu_create_buffer(
     spudgpu_buffer *out_buffer) {
     if (!device) return SPUDRESULT_GPU_INVALID_DEVICE;
     if (!desc) return SPUDRESULT_NULL_DESC;
+    const SPUDRESULT base_sr = spud_struct_check(&desc->base, SPUD_STRUCT_TYPE_GPU_BUFFER_DESC);
+    if (base_sr != SPUD_SUCCESS) return base_sr;
     if (!out_buffer) return SPUDRESULT_NULL_OUTPUT_PARAMETER;
 
     const SPUDRESULT descResult = spudgpuvulkan___check_buffer_desc(&device->_properties, desc);
@@ -243,25 +246,23 @@ SPUDRESULT spudgpu_create_buffer(
         }
     }
 
-    // Retrieve the GPU Address point for gpu_buffer_desc
+    // The address spudgpu_get_buffer_gpu_address hands back
     {
         VkBufferDeviceAddressInfoKHR info = {0};
         info.pNext = NULL;
         info.sType = VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO;
         info.buffer = result._buffer_vk;
-        result._desc.gpu_address_location = vkGetBufferDeviceAddress(vk_device, &info);
+        result._gpu_address_vk = vkGetBufferDeviceAddress(vk_device, &info);
     }
 
     // If all successful, return a memcpy'ed heap pointer
     spudgpu_buffer_vulkan *pResult = malloc(sizeof(spudgpu_buffer_vulkan));
     memcpy(pResult, &result, sizeof(spudgpu_buffer_vulkan));
-#if _DEBUG
     if (spud_debug_name_set(pResult, desc->debug_name) != SPUD_SUCCESS) {
         spudgpu_destroy_buffer(pResult);
         return SPUDRESULT_OUT_OF_MEMORY;
     }
     pResult->_desc.debug_name = pResult->_debug_name;
-#endif
 
     *out_buffer = pResult;
     return SPUD_SUCCESS;
@@ -273,6 +274,16 @@ SPUDRESULT spudgpu_get_buffer_desc(
     if (!buffer) return SPUDRESULT_GPU_INVALID_BUFFER;
     if (!out_desc) return SPUDRESULT_NULL_OUTPUT_PARAMETER;
     *out_desc = buffer->_desc;
+    out_desc->base = spud_struct_base(SPUD_STRUCT_TYPE_GPU_BUFFER_DESC);
+    return SPUD_SUCCESS;
+}
+
+SPUDRESULT spudgpu_get_buffer_gpu_address(
+    spudgpu_buffer buffer,
+    uint64_t *out_address) {
+    if (!buffer) return SPUDRESULT_GPU_INVALID_BUFFER;
+    if (!out_address) return SPUDRESULT_NULL_OUTPUT_PARAMETER;
+    *out_address = buffer->_gpu_address_vk;
     return SPUD_SUCCESS;
 }
 
@@ -285,8 +296,8 @@ void spudgpu_destroy_buffer(spudgpu_buffer buffer) {
 #if _DEBUG
     if (buffer->_heap)
         buffer->_heap->_placed_count--;
-    free((void *)buffer->_debug_name);
 #endif
+    free((void *)buffer->_debug_name);
     free(buffer);
 }
 
@@ -296,6 +307,8 @@ SPUDRESULT spudgpu_create_buffer_view(
     spudgpu_buffer_view *out_view) {
     if (!buffer) return SPUDRESULT_GPU_INVALID_BUFFER;
     if (!desc) return SPUDRESULT_NULL_DESC;
+    const SPUDRESULT base_sr = spud_struct_check(&desc->base, SPUD_STRUCT_TYPE_GPU_BUFFER_VIEW_DESC);
+    if (base_sr != SPUD_SUCCESS) return base_sr;
     if (!out_view) return SPUDRESULT_NULL_OUTPUT_PARAMETER;
 
 	// Validate desc
@@ -330,6 +343,7 @@ SPUDRESULT spudgpu_get_buffer_view_desc(
     if (!buffer_view) return SPUDRESULT_GPU_INVALID_BUFFER_VIEW;
     if (!out_desc) return SPUDRESULT_NULL_OUTPUT_PARAMETER;
     *out_desc = buffer_view->_desc;
+    out_desc->base = spud_struct_base(SPUD_STRUCT_TYPE_GPU_BUFFER_VIEW_DESC);
     return SPUD_SUCCESS;
 }
 
@@ -338,9 +352,7 @@ void spudgpu_destroy_buffer_view(spudgpu_buffer_view buffer_view) {
 	vkDestroyBufferView(
 	    buffer_view->_desc.parent_buffer->_device._logical_device_vk,
 	    buffer_view->_buffer_view_vk, NULL);
-#if _DEBUG
 	free((void *)buffer_view->_debug_name);
-#endif
 	free(buffer_view);
 }
 

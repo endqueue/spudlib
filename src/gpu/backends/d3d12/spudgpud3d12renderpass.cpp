@@ -5,6 +5,7 @@
 #include "../../spudgpushared.h"
 #include <cstdio>
 #include <vector>
+#include "../../../spudstructbase.h"
 
 // Maps SPUDGPU_IMAGE_LAYOUT to D3D12_RESOURCE_STATES.
 static D3D12_RESOURCE_STATES spudgpu_d3d12_layout_to_state(SPUDGPU_IMAGE_LAYOUT layout) {
@@ -502,6 +503,8 @@ void spudgpu_cmd_begin_rendering(
     spudgpu_command_list cmd,
     const spudgpu_rendering_begin_desc *desc) {
 	if (!cmd || !desc)
+		return;
+	if (spud_struct_check(&desc->base, SPUD_STRUCT_TYPE_GPU_RENDERING_BEGIN_DESC) != SPUD_SUCCESS)
 		return;
 	// Color attachments, a depth attachment, or both: a depth-only pass (a
 	// shadow map, a depth pre-pass) has no color attachment at all, as on

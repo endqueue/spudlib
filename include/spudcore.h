@@ -42,7 +42,7 @@ extern "C" {
  * one specific failure. Test a result with SPUDFAIL() and print it with
  * spudresult_str().
  *
- * The values are grouped by module: 1-11 are general, 199-354 are SpudGPU
+ * The values are grouped by module: 1-14 are general, 199-354 are SpudGPU
  * (`SPUDRESULT_GPU_*`), 1001-1007 SpudFiles (`SPUDRESULT_SFS_*`), 2001-2026
  * SpudMemory (`SPUDRESULT_SMEM_*`), 3001-3033 SpudNet (`SPUDRESULT_SPUDNET_*`),
  * 4001-4012 SpudAudio (`SPUDRESULT_SAUD_*`) and 5001-5005 SpudInput
@@ -51,29 +51,37 @@ extern "C" {
  */
 typedef enum SPUDRESULT {
 	/** The call succeeded. */
-	SPUD_SUCCESS                       = 0,
+	SPUD_SUCCESS                         = 0,
 	/** The call failed and no more specific result applies. */
-	SPUDRESULT_GENERAL_FAILURE         = 1,
+	SPUDRESULT_GENERAL_FAILURE           = 1,
 	/** A call into the platform's own API failed. */
-	SPUDRESULT_API_SPECIFIC_FAILURE    = 2,
+	SPUDRESULT_API_SPECIFIC_FAILURE      = 2,
 	/** The native API asked for is not one this build can use. */
-	SPUDRESULT_INVALID_API             = 3,
+	SPUDRESULT_INVALID_API               = 3,
 	/** A desc pointer is NULL. */
-	SPUDRESULT_NULL_DESC               = 4,
+	SPUDRESULT_NULL_DESC                 = 4,
 	/** An output pointer is NULL. */
-	SPUDRESULT_NULL_OUTPUT_PARAMETER   = 5,
+	SPUDRESULT_NULL_OUTPUT_PARAMETER     = 5,
 	/** A desc holds a value the call cannot accept. */
-	SPUDRESULT_DESC_INVALID_PARAMETERS = 6,
+	SPUDRESULT_DESC_INVALID_PARAMETERS   = 6,
 	/** An index is past the end of what it indexes. */
-	SPUDRESULT_INDEX_OUT_OF_RANGE      = 7,
+	SPUDRESULT_INDEX_OUT_OF_RANGE        = 7,
 	/** A size or count is zero. */
-	SPUDRESULT_ZERO_SIZE               = 8,
+	SPUDRESULT_ZERO_SIZE                 = 8,
 	/** An allocation failed. */
-	SPUDRESULT_OUT_OF_MEMORY           = 9,
+	SPUDRESULT_OUT_OF_MEMORY             = 9,
 	/** The call, or the option asked of it, is not implemented yet. */
-	SPUDRESULT_NOT_IMPLEMENTED_YET     = 10,
+	SPUDRESULT_NOT_IMPLEMENTED_YET       = 10,
 	/** An object handle is NULL. */
-	SPUDRESULT_NULL_OBJECT             = 11,
+	SPUDRESULT_NULL_OBJECT               = 11,
+	/** A struct's `base.type` is not the type the call takes there (see
+	 * SPUD_STRUCT_BASE). 0 is never a valid type. */
+	SPUDRESULT_STRUCT_WRONG_TYPE         = 12,
+	/** A struct in a chain is of a type the call does not take in that
+	 * chain, or one this build does not know. Never skipped. */
+	SPUDRESULT_STRUCT_UNKNOWN_IN_CHAIN   = 13,
+	/** One type appears twice in a chain. */
+	SPUDRESULT_STRUCT_DUPLICATE_IN_CHAIN = 14,
 
 	SPUDRESULT_GPU_DEVICE_ENUMERATION_FAILURE                  = 199,
 	SPUDRESULT_GPU_INVALID_INSTANCE                            = 200,
@@ -251,6 +259,132 @@ typedef enum SPUDRESULT {
 #define SPUDFAIL(sr) ((sr) != SPUD_SUCCESS)
 
 /**
+ * @defgroup spud_struct_base Struct bases
+ * @brief How a struct that may gain fields is extended without changing
+ * its layout.
+ *
+ * An extensible struct's first member is a SPUD_STRUCT_BASE (one the
+ * caller fills in) or a SPUD_STRUCT_BASE_OUT (one SpudLib fills in), named
+ * `base`. `base.type` says which struct it is; `base.next` points to the
+ * next struct in its chain, or is NULL. A struct's layout never changes
+ * once it is released: a new field comes as a new struct with a base of
+ * its own, which the caller chains on. A struct with no base is frozen and
+ * never changes at all; a new need gets a new type.
+ *
+ * - The caller sets every `base.type` in a chain, the root's included.
+ *   A type that isn't the one the call takes is refused with
+ *   SPUDRESULT_STRUCT_WRONG_TYPE.
+ * - A chained struct the call doesn't take there, or this build doesn't
+ *   know, is refused with SPUDRESULT_STRUCT_UNKNOWN_IN_CHAIN, never
+ *   skipped: skipping it would decide for the caller that it didn't
+ *   matter. One type twice in a chain is refused with
+ *   SPUDRESULT_STRUCT_DUPLICATE_IN_CHAIN.
+ * - Leaving a chained struct out means that addition isn't used. Each
+ *   chained struct's fields have no defaults, as no desc's do.
+ *
+ * ```c
+ * spudgpu_image_desc desc = {
+ * 	.base = { SPUD_STRUCT_TYPE_GPU_IMAGE_DESC, NULL },
+ * 	...
+ * };
+ * ```
+ *
+ * The member is nested, not two loose fields, so that a pointer to any based
+ * struct converts to a pointer to its base and back (C11 6.7.2.1p15): a
+ * chain is walked through SPUD_STRUCT_BASE pointers with defined behaviour.
+ * @{
+ */
+
+/**
+ * @brief Which struct a based struct is.
+ *
+ * Numbered in blocks per module, as SPUDRESULT is: 1000+ SpudGPU, 2000+
+ * SpudAudio, 3000+ SpudNet, 4000+ SpudInput, 5000+ SpudFiles. A value is
+ * never renumbered or reused, a retired struct's included.
+ */
+typedef enum SPUD_STRUCT_TYPE {
+	/** Never valid: a struct left zeroed is refused, not misread. */
+	SPUD_STRUCT_TYPE_UNKNOWN  = 0,
+
+	/* SpudGPU */
+	/** SPUDGPU_DEVICE_PROPERTIES (SPUD_STRUCT_BASE_OUT). */
+	SPUD_STRUCT_TYPE_GPU_DEVICE_PROPERTIES          = 1000,
+	/** spudgpu_submit_desc (SPUD_STRUCT_BASE). */
+	SPUD_STRUCT_TYPE_GPU_SUBMIT_DESC                = 1001,
+	/** spudgpu_command_allocator_desc (SPUD_STRUCT_BASE). */
+	SPUD_STRUCT_TYPE_GPU_COMMAND_ALLOCATOR_DESC     = 1002,
+	/** spudgpu_buffer_desc (SPUD_STRUCT_BASE). */
+	SPUD_STRUCT_TYPE_GPU_BUFFER_DESC                = 1003,
+	/** spudgpu_buffer_view_desc (SPUD_STRUCT_BASE). */
+	SPUD_STRUCT_TYPE_GPU_BUFFER_VIEW_DESC           = 1004,
+	/** spudgpu_image_desc (SPUD_STRUCT_BASE). */
+	SPUD_STRUCT_TYPE_GPU_IMAGE_DESC                 = 1005,
+	/** spudgpu_image_view_desc (SPUD_STRUCT_BASE). */
+	SPUD_STRUCT_TYPE_GPU_IMAGE_VIEW_DESC            = 1006,
+	/** spudgpu_heap_desc (SPUD_STRUCT_BASE). */
+	SPUD_STRUCT_TYPE_GPU_HEAP_DESC                  = 1007,
+	/** spudgpu_placement_requirements (SPUD_STRUCT_BASE_OUT). */
+	SPUD_STRUCT_TYPE_GPU_PLACEMENT_REQUIREMENTS     = 1008,
+	/** spudgpu_buffer_barrier (SPUD_STRUCT_BASE). */
+	SPUD_STRUCT_TYPE_GPU_BUFFER_BARRIER             = 1009,
+	/** spudgpu_image_barrier (SPUD_STRUCT_BASE). */
+	SPUD_STRUCT_TYPE_GPU_IMAGE_BARRIER              = 1010,
+	/** spudgpu_swap_chain_desc (SPUD_STRUCT_BASE). */
+	SPUD_STRUCT_TYPE_GPU_SWAP_CHAIN_DESC            = 1011,
+	/** spudgpu_descriptor_set_layout_desc (SPUD_STRUCT_BASE). */
+	SPUD_STRUCT_TYPE_GPU_DESCRIPTOR_SET_LAYOUT_DESC = 1012,
+	/** spudgpu_descriptor_pool_desc (SPUD_STRUCT_BASE). */
+	SPUD_STRUCT_TYPE_GPU_DESCRIPTOR_POOL_DESC       = 1013,
+	/** spudgpu_descriptor_set_desc (SPUD_STRUCT_BASE). */
+	SPUD_STRUCT_TYPE_GPU_DESCRIPTOR_SET_DESC        = 1014,
+	/** spudgpu_sampler_desc (SPUD_STRUCT_BASE). */
+	SPUD_STRUCT_TYPE_GPU_SAMPLER_DESC               = 1015,
+	/** spudgpu_write_descriptor_set (SPUD_STRUCT_BASE). */
+	SPUD_STRUCT_TYPE_GPU_WRITE_DESCRIPTOR_SET       = 1016,
+	/** spudgpu_bindless_capabilities (SPUD_STRUCT_BASE_OUT). */
+	SPUD_STRUCT_TYPE_GPU_BINDLESS_CAPABILITIES      = 1017,
+	/** spudgpu_shader_module_desc (SPUD_STRUCT_BASE). */
+	SPUD_STRUCT_TYPE_GPU_SHADER_MODULE_DESC         = 1018,
+	/** spudgpu_shader_pipeline_desc (SPUD_STRUCT_BASE). */
+	SPUD_STRUCT_TYPE_GPU_SHADER_PIPELINE_DESC       = 1019,
+	/** spudgpu_mesh_shading_capabilities (SPUD_STRUCT_BASE_OUT). */
+	SPUD_STRUCT_TYPE_GPU_MESH_SHADING_CAPABILITIES  = 1020,
+	/** spudgpu_depth_bounds_capabilities (SPUD_STRUCT_BASE_OUT). */
+	SPUD_STRUCT_TYPE_GPU_DEPTH_BOUNDS_CAPABILITIES  = 1021,
+	/** spudgpu_compute_pipeline_desc (SPUD_STRUCT_BASE). */
+	SPUD_STRUCT_TYPE_GPU_COMPUTE_PIPELINE_DESC      = 1022,
+	/** spudgpu_rendering_begin_desc (SPUD_STRUCT_BASE). */
+	SPUD_STRUCT_TYPE_GPU_RENDERING_BEGIN_DESC       = 1023,
+	/** spudgpu_bundle_inheritance_desc (SPUD_STRUCT_BASE). */
+	SPUD_STRUCT_TYPE_GPU_BUNDLE_INHERITANCE_DESC    = 1024,
+
+	/** Keeps the enum 32 bits wide on every compiler. Never a valid type. */
+	SPUD_STRUCT_TYPE_MAX_ENUM = 0x7FFFFFFF
+} SPUD_STRUCT_TYPE;
+
+/** @brief The first member, `base`, of every extensible struct the caller
+ * fills in. */
+typedef struct SPUD_STRUCT_BASE {
+	/** This struct's own type. */
+	SPUD_STRUCT_TYPE type;
+	/** The next struct in the chain, or NULL. SpudLib only reads it. */
+	const struct SPUD_STRUCT_BASE *next;
+} SPUD_STRUCT_BASE;
+
+/** @brief The first member, `base`, of every extensible struct SpudLib
+ * fills in for the caller. The caller builds the chain and sets each
+ * `type`; SpudLib writes the other fields and leaves `type` and `next` as
+ * they are. */
+typedef struct SPUD_STRUCT_BASE_OUT {
+	/** This struct's own type. */
+	SPUD_STRUCT_TYPE type;
+	/** The next struct in the chain, or NULL. */
+	struct SPUD_STRUCT_BASE_OUT *next;
+} SPUD_STRUCT_BASE_OUT;
+
+/** @} */
+
+/**
  * @brief Returns the name of a SPUDRESULT enumerator as a string.
  *
  * For logs and error messages. The string is the enumerator's identifier
@@ -264,13 +398,13 @@ typedef enum SPUDRESULT {
  */
 const char *spudresult_str(SPUDRESULT r);
 
-#ifdef _DEBUG
 /**
  * @brief Gives a SpudLib object a debug name, replacing any it already has.
  *
  * The string is copied, so it need not outlive the call. The object's
  * previous name is freed, and the object's own destroy call frees the name it
- * holds at that point. Exists in debug builds only.
+ * holds at that point. Exists in every build, and the name is kept in every
+ * build: a debug name never changes a struct's layout or a library's symbols.
  *
  * @param[in,out] object A handle to an object that carries a debug name.
  *                       Every SpudGPU, SpudAudio and SpudNet handle does, and
@@ -288,8 +422,7 @@ SPUDRESULT spud_debug_name_set(void *object, const char *name);
 
 /**
  * @brief Calls spud_debug_name_set(), casting the handle to `void *`.
- *
- * Exists in debug builds only.
+
  *
  * @param[in] obj  A handle of any type that carries a debug name.
  * @param[in] name The new name, or NULL to remove the current one.
@@ -301,8 +434,7 @@ SPUDRESULT spud_debug_name_set(void *object, const char *name);
 
 /**
  * @brief Returns an object's debug name.
- *
- * Exists in debug builds only.
+
  *
  * @param[in] object A handle to an object that carries a debug name (see
  *                   spud_debug_name_set()), or NULL.
@@ -316,15 +448,13 @@ const char *spud_debug_name_get(void *object);
 
 /**
  * @brief Calls spud_debug_name_get(), casting the handle to `void *`.
- *
- * Exists in debug builds only.
+
  *
  * @param[in] obj A handle of any type that carries a debug name, or NULL.
  *
  * @return What spud_debug_name_get() returns.
  */
 #define SPUD_GET_DEBUG_NAME(obj) spud_debug_name_get((void *)(obj))
-#endif
 
 #if __cplusplus
 }

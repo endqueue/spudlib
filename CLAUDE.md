@@ -331,6 +331,15 @@ not in each backend.
 
 ## Code conventions
 
+- **Every struct that may grow starts with a `base`** (`SPUD_STRUCT_BASE`,
+  or `SPUD_STRUCT_BASE_OUT` for one SpudLib fills in; `spudcore.h`). Every
+  other public struct has a `/* Frozen: ... */` line above its `typedef`.
+  A released layout never changes: a new field is a new struct chained on.
+  A call checks a based argument with `spud_struct_check` /
+  `spud_struct_out_check` (`src/spudstructbase.h`) right after its null
+  check, in every backend. SpudGPU is converted; the rest of the plan, and
+  the rules, are in `STRUCT_BASE_TODO.md`.
+
 - **Argument checks are one `if` per distinct return.** They sit at the top of
   the function, in parameter order, before any allocation or platform call, and
   each returns the `SPUDRESULT` that names exactly what was wrong:
@@ -512,9 +521,12 @@ not in each backend.
   `spudgpud3d12context.cpp`, `spudgpud3d12command.cpp`, `spudgpud3d12renderpass.cpp`
   and `spudgpud3d12shader.cpp`, and the bindless free stacks) still allocate
   through the standard allocator, which reports failure by throwing.
-- **In a debug build, a debug name is copied, never kept as the caller's
-  pointer.** `debug_name` fields and the name member of a handle exist only
-  under `#if _DEBUG`. Every handle that carries a name has it as its first
+- **A debug name is copied, never kept as the caller's pointer, in every
+  build.** `debug_name` fields and the name member of a handle exist in
+  Debug and Release alike (since 2026-10-18; before, only under
+  `#if _DEBUG`, which made a desc's layout differ between the two). A
+  build switch never changes a public struct's layout or which functions
+  exist. Every handle that carries a name has it as its first
   member (`_debug_name` in SpudGPU, `debug_name` in SpudAudio, SpudNet and
   SpudFiles), and that member is either null or a copy SpudLib allocated. The
   caller may free or reuse its own string as soon as the call that took it
@@ -526,13 +538,11 @@ not in each backend.
   `debug_name` calls it; so does a caller renaming an object later.
 
   ```c
-  #if _DEBUG
   	if (spud_debug_name_set(pResult, desc->debug_name) != SPUD_SUCCESS) {
   		spudgpu_destroy_buffer(pResult);
   		return SPUDRESULT_OUT_OF_MEMORY;
   	}
   	pResult->_desc.debug_name = pResult->_debug_name;
-  #endif
   ```
 - A null `debug_name` stays null: there is nothing to copy and it is not an
   error.
@@ -755,7 +765,7 @@ one.
   reports what one indirect call takes (1 without it; UINT32_MAX on D3D12
   and Metal). A larger count records nothing, on every backend.
 
-- The debug name rule (see "In a debug build, a debug name is copied") was
+- The debug name rule (see "A debug name is copied") was
   applied to every module on 2026-10-09. Two kinds of Vulkan handle have no
   release path at all, so a name given to one is never freed either: the queue
   `spudgpu_get_graphics_queue` returns, and the sets from

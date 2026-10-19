@@ -67,9 +67,7 @@ void spudgpu_destroy_fence(spudgpu_fence fence) {
 		if (fence_metal->_shared_event_mtl) {
 			[fence_metal->_shared_event_mtl release];
 		}
-#if _DEBUG
 		free((void *)fence_metal->_debug_name);
-#endif
 		free(fence_metal);
 	}
 }
@@ -232,9 +230,7 @@ void spudgpu_destroy_semaphore(spudgpu_semaphore semaphore) {
 		if (semaphore_metal->_event_mtl) {
 			[semaphore_metal->_event_mtl release];
 		}
-#if _DEBUG
 		free((void *)semaphore_metal->_debug_name);
-#endif
 		free(semaphore_metal);
 	}
 }

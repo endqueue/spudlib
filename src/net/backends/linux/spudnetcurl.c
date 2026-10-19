@@ -117,9 +117,7 @@ void spudnet_instance_destroy(spudnet_instance instance) {
 		return;
 	// Thread-safe on any libcurl an instance could have been made with.
 	curl_global_cleanup();
-#if _DEBUG
 	free((void *)instance->debug_name);
-#endif
 	free(instance);
 }
 
@@ -482,9 +480,7 @@ static enum spudnet_curl_outcome spudnet_curl_run(
  * connection, taking an unfinished one off drops it. */
 
 struct spudnet_http_client_t {
-#if _DEBUG
 	const char *debug_name;
-#endif
 	// Holds the open connections, and is driven by whichever transfer is
 	// under way - one at a time, which `busy` keeps to.
 	CURLM      *multi;
@@ -510,9 +506,7 @@ void spudnet_http_client_destroy(spudnet_http_client client) {
 		curl_multi_cleanup(client->multi);
 	spudnet_curl_tls_free(&client->tls);
 	spudnet_proxy_free(&client->proxy);
-#if _DEBUG
 	free((void *)client->debug_name);
-#endif
 	free(client);
 }
 
@@ -998,9 +992,7 @@ SPUDRESULT spudnet_http_backend_recv(
 #if LIBCURL_VERSION_NUM >= 0x080b00
 
 struct spudnet_websocket_t {
-#if _DEBUG
 	const char *debug_name;
-#endif
 	spudnet_instance instance;
 	// The multi handle only drives the opening request; the easy handle
 	// stays on it afterwards because that is what keeps a connect-only
@@ -1150,9 +1142,7 @@ void spudnet_websocket_destroy(spudnet_websocket socket) {
 	if (socket->wake >= 0)
 		close(socket->wake);
 	pthread_mutex_destroy(&socket->lock);
-#if _DEBUG
 	free((void *)socket->debug_name);
-#endif
 	free(socket);
 }
 

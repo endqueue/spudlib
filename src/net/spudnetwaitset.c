@@ -102,9 +102,7 @@ struct spudnet_wait_member {
 };
 
 struct spudnet_wait_set_t {
-#if _DEBUG
 	const char *debug_name;
-#endif
 	// The one it was made with, and every member's.
 	spudnet_instance            instance;
 	struct spudnet_wait_member *members;
@@ -334,9 +332,7 @@ void spudnet_wait_set_destroy(spudnet_wait_set set) {
 	spudnet_wait_wake_destroy(set);
 	free(set->members);
 	free(set->entries);
-#if _DEBUG
 	free((void *)set->debug_name);
-#endif
 	free(set);
 }
 

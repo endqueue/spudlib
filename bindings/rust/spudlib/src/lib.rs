@@ -302,8 +302,8 @@ impl Buffer {
         let raw_desc = sys::spudgpu_buffer_desc {
             usage: desc.usage.0,
             memory_kind: desc.memory_kind.0,
-            gpu_address_location: 0,
             size: desc.size,
+            debug_name: std::ptr::null(),
         };
 
         let raw = unsafe { sys::spudgpu_create_buffer(device.0, &raw_desc) };
@@ -317,7 +317,9 @@ impl Buffer {
 
     /// Returns the GPU virtual address assigned after creation.
     pub fn gpu_address(&self) -> u64 {
-        unsafe { sys::spudgpu_get_buffer_desc(self.raw) }.gpu_address_location
+        let mut address = 0u64;
+        unsafe { sys::spudgpu_get_buffer_gpu_address(self.raw, &mut address) };
+        address
     }
 
     /// Returns the allocated size in bytes.
@@ -368,7 +370,6 @@ impl Image {
         let raw_desc = sys::spudgpu_image_desc {
             usage: desc.usage.0,
             type_: 0,   // derived from usage on the C side currently
-            gpu_address_location: 0,
             format: desc.format.to_raw(),
             width: desc.width,
             height: desc.height,

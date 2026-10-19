@@ -15,6 +15,7 @@
 #include "../../spudgpushared.h"
 #include <Metal/Metal.h>
 #include <spirv_cross_c.h>
+#include "../../../spudstructbase.h"
 
 // -----------------------------------------------------------------------
 // SPIR-V -> MSL cross-compilation
@@ -209,6 +210,9 @@ SPUDRESULT spudgpu_create_shader_module(
 		return SPUDRESULT_GPU_INVALID_DEVICE;
 	if (!desc)
 		return SPUDRESULT_NULL_DESC;
+	const SPUDRESULT base_sr = spud_struct_check(&desc->base, SPUD_STRUCT_TYPE_GPU_SHADER_MODULE_DESC);
+	if (base_sr != SPUD_SUCCESS)
+		return base_sr;
 	if (!out_module)
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
 	if (!desc->spirv_code || desc->spirv_size == 0)
@@ -263,13 +267,11 @@ SPUDRESULT spudgpu_create_shader_module(
 		}
 	}
 
-#if _DEBUG
 	if (spud_debug_name_set(module_metal, desc->debug_name) != SPUD_SUCCESS) {
 		spudgpu_destroy_shader_module((spudgpu_shader_module)module_metal);
 		return SPUDRESULT_OUT_OF_MEMORY;
 	}
 	module_metal->_desc.debug_name = module_metal->_debug_name;
-#endif
 
 	*out_module = (spudgpu_shader_module)module_metal;
 
@@ -297,9 +299,7 @@ void spudgpu_destroy_shader_module(spudgpu_shader_module shader_module) {
 		if (module_metal->_library_mtl) {
 			[module_metal->_library_mtl release];
 		}
-#if _DEBUG
 		free((void *)module_metal->_debug_name);
-#endif
 		free(module_metal);
 	}
 }
@@ -440,6 +440,9 @@ SPUDRESULT spudgpu_create_shader_pipeline(
 		return SPUDRESULT_GPU_INVALID_DEVICE;
 	if (!desc)
 		return SPUDRESULT_NULL_DESC;
+	const SPUDRESULT base_sr = spud_struct_check(&desc->base, SPUD_STRUCT_TYPE_GPU_SHADER_PIPELINE_DESC);
+	if (base_sr != SPUD_SUCCESS)
+		return base_sr;
 	if (!out_pipeline)
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
 	if ((!desc->vertex_module && !desc->mesh_module) || !desc->fragment_module)
@@ -612,13 +615,11 @@ SPUDRESULT spudgpu_create_shader_pipeline(
 		}
 	}
 
-#if _DEBUG
 	if (spud_debug_name_set(pipeline_metal, desc->debug_name) != SPUD_SUCCESS) {
 		spudgpu_destroy_shader_pipeline((spudgpu_shader_pipeline)pipeline_metal);
 		return SPUDRESULT_OUT_OF_MEMORY;
 	}
 	pipeline_metal->_desc.debug_name = pipeline_metal->_debug_name;
-#endif
 
 	*out_pipeline = (spudgpu_shader_pipeline)pipeline_metal;
 
@@ -646,9 +647,7 @@ void spudgpu_destroy_shader_pipeline(spudgpu_shader_pipeline pipeline) {
 		if (pipeline_metal->_render_pipeline_state_mtl) {
 			[pipeline_metal->_render_pipeline_state_mtl release];
 		}
-#if _DEBUG
 		free((void *)pipeline_metal->_debug_name);
-#endif
 		free(pipeline_metal);
 	}
 }
@@ -665,6 +664,9 @@ SPUDRESULT spudgpu_get_mesh_shading_capabilities(
 		return SPUDRESULT_GPU_INVALID_DEVICE;
 	if (!out_caps)
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
+	const SPUDRESULT base_sr = spud_struct_out_check(&out_caps->base, SPUD_STRUCT_TYPE_GPU_MESH_SHADING_CAPABILITIES);
+	if (base_sr != SPUD_SUCCESS)
+		return base_sr;
 
 	// Metal 3 mesh shading is required on every device this backend targets
 	// (see spudgpu.h's bindless section for the same Metal-3-only baseline).
@@ -694,6 +696,9 @@ SPUDRESULT spudgpu_get_depth_bounds_capabilities(
 		return SPUDRESULT_GPU_INVALID_DEVICE;
 	if (!out_caps)
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
+	const SPUDRESULT base_sr = spud_struct_out_check(&out_caps->base, SPUD_STRUCT_TYPE_GPU_DEPTH_BOUNDS_CAPABILITIES);
+	if (base_sr != SPUD_SUCCESS)
+		return base_sr;
 
 	// Set once at device enumeration (spudgpumetalcontext.m) from
 	// [_device_mtl supportsFamily:MTLGPUFamilyApple10].
@@ -714,6 +719,9 @@ SPUDRESULT spudgpu_create_compute_pipeline(
 		return SPUDRESULT_GPU_INVALID_DEVICE;
 	if (!desc)
 		return SPUDRESULT_NULL_DESC;
+	const SPUDRESULT base_sr = spud_struct_check(&desc->base, SPUD_STRUCT_TYPE_GPU_COMPUTE_PIPELINE_DESC);
+	if (base_sr != SPUD_SUCCESS)
+		return base_sr;
 	if (!out_pipeline)
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
 	if (!desc->compute_module)
@@ -755,13 +763,11 @@ SPUDRESULT spudgpu_create_compute_pipeline(
 		}
 	}
 
-#if _DEBUG
 	if (spud_debug_name_set(pipeline_metal, desc->debug_name) != SPUD_SUCCESS) {
 		spudgpu_destroy_compute_pipeline((spudgpu_compute_pipeline)pipeline_metal);
 		return SPUDRESULT_OUT_OF_MEMORY;
 	}
 	pipeline_metal->_desc.debug_name = pipeline_metal->_debug_name;
-#endif
 
 	*out_pipeline = (spudgpu_compute_pipeline)pipeline_metal;
 
@@ -783,9 +789,7 @@ void spudgpu_destroy_compute_pipeline(spudgpu_compute_pipeline pipeline) {
 		if (pipeline_metal->_compute_pipeline_state_mtl) {
 			[pipeline_metal->_compute_pipeline_state_mtl release];
 		}
-#if _DEBUG
 		free((void *)pipeline_metal->_debug_name);
-#endif
 		free(pipeline_metal);
 	}
 }
@@ -799,6 +803,7 @@ SPUDRESULT spudgpu_get_compute_pipeline_desc(
 	if (!out_desc)
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
 	*out_desc = pipeline_metal->_desc;
+	out_desc->base = spud_struct_base(SPUD_STRUCT_TYPE_GPU_COMPUTE_PIPELINE_DESC);
 	return SPUD_SUCCESS;
 }
 

@@ -48,6 +48,7 @@ id<MTLBuffer> spudgpu_get_mtl_buffer(spudgpu_buffer buffer);
  * *_BUFFER_VIEW descs) - buffers are bound directly with an offset/stride
  * at bind time. This struct carries the same information out of SpudGPU's
  * own view abstraction instead of a native handle. */
+/* Frozen: a fact of the Metal API. It never changes; a new need gets a new type. */
 typedef struct SPUDGPU_MTL_BUFFER_VIEW {
 	id<MTLBuffer> buffer;
 	NSUInteger offset;

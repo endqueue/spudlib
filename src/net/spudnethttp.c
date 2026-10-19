@@ -260,9 +260,7 @@ void spudnet_http_transfer_destroy(spudnet_http_transfer transfer) {
 		return;
 	spudnet_http_backend_destroy(transfer);
 	spudnet_head_clear(&transfer->head);
-#if _DEBUG
 	free((void *)transfer->debug_name);
-#endif
 	free(transfer);
 }
 

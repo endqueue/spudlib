@@ -18,9 +18,7 @@ extern "C" {
 #endif // __cplusplus
 
 struct sfs_file_t {
-#if _DEBUG
 	const char *debug_name;
-#endif
 	int fd;
 };
 
@@ -71,9 +69,7 @@ sfs_file_open(
 		close(fd);
 		return SPUDRESULT_OUT_OF_MEMORY;
 	}
-#if _DEBUG
 	f->debug_name = NULL;
-#endif
 	f->fd     = fd;
 	*out_file = f;
 	return SPUD_SUCCESS;
@@ -83,9 +79,7 @@ SPUDRESULT sfs_file_release(sfs_file file) {
 	if (!file)
 		return SPUDRESULT_SFS_INVALID_FILE;
 	close(file->fd);
-#if _DEBUG
 	free((void *)file->debug_name);
-#endif
 	free(file);
 	return SPUD_SUCCESS;
 }

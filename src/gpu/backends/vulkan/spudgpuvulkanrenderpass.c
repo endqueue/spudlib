@@ -5,6 +5,7 @@
 #include "../../spudgpushared.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include "../../../spudstructbase.h"
 
 // ---------------------------------------------------------------------------
 // Internal helpers: map SpudGPU layout enum → VkImageLayout
@@ -439,6 +440,8 @@ void spudgpu_cmd_begin_rendering(
     const spudgpu_rendering_begin_desc *desc) {
 	if (!cmd || !desc)
 		return;
+	if (spud_struct_check(&desc->base, SPUD_STRUCT_TYPE_GPU_RENDERING_BEGIN_DESC) != SPUD_SUCCESS)
+		return;
 
 	uint32_t color_count = desc->color_attachment_count;
 	if (color_count > SPUDGPU_MAX_COLOR_ATTACHMENTS)
@@ -557,6 +560,8 @@ void spudgpu_cmd_end_rendering(spudgpu_command_list cmd) {
 void spudgpu_begin_bundle_command_list(
     spudgpu_command_list bundle, const spudgpu_bundle_inheritance_desc *desc) {
     if (!bundle || !desc)
+        return;
+    if (spud_struct_check(&desc->base, SPUD_STRUCT_TYPE_GPU_BUNDLE_INHERITANCE_DESC) != SPUD_SUCCESS)
         return;
 #if _DEBUG
     spudgpuvulkan___debug_list_opened(bundle);
@@ -684,6 +689,7 @@ void spudgpu_cmd_clear_color_attachment(
     color.clear_color[3] = a;
 
     spudgpu_rendering_begin_desc desc = {0};
+    desc.base.type = SPUD_STRUCT_TYPE_GPU_RENDERING_BEGIN_DESC;
     desc.color_attachments[0] = color;
     desc.color_attachment_count = 1;
     desc.width = width;
@@ -731,6 +737,7 @@ void spudgpu_cmd_clear_depth_attachment(
     }
 
     spudgpu_rendering_begin_desc desc = {0};
+    desc.base.type = SPUD_STRUCT_TYPE_GPU_RENDERING_BEGIN_DESC;
     desc.depth_attachment.image_view = attachment;
     desc.depth_attachment.depth_load_op = clear_depth ? SPUDGPU_LOAD_OP_CLEAR : SPUDGPU_LOAD_OP_LOAD;
     desc.depth_attachment.depth_store_op = SPUDGPU_STORE_OP_STORE;

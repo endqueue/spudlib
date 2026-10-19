@@ -50,9 +50,7 @@ SPUDRESULT spudgpu_create_fence(
 void spudgpu_destroy_fence(spudgpu_fence fence) {
 	if (!fence)
 		return;
-#if _DEBUG
 	free((void *)fence->_debug_name);
-#endif
 	fence->~spudgpu_fence_d3d12();
 	free(fence);
 }
@@ -166,9 +164,7 @@ SPUDRESULT spudgpu_create_semaphore(
 void spudgpu_destroy_semaphore(spudgpu_semaphore semaphore) {
 	if (!semaphore)
 		return;
-#if _DEBUG
 	free((void *)semaphore->_debug_name);
-#endif
 	semaphore->~spudgpu_semaphore_d3d12();
 	free(semaphore);
 }

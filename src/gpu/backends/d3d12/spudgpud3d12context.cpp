@@ -4,6 +4,7 @@
 #include "spudgpud3d12.hpp"
 #include <vector>
 #include <string>
+#include "../../../spudstructbase.h"
 
 static SPUDRESULT ___internal_spudgpu_d3d12_create_command_queues_per_family(
     spudgpu_device device,
@@ -37,9 +38,7 @@ static void ___internal_spudgpu_d3d12_destroy_command_queues_per_family(
 	for (size_t i = 0; i < arr.size(); ++i) {
 		if (!arr[i])
 			continue;
-#if _DEBUG
 		free((void *)arr[i]->_debug_name);
-#endif
 		arr[i]->~spudgpu_command_queue_d3d12();
 		free(arr[i]);
 		arr[i] = nullptr;
@@ -127,17 +126,13 @@ static void ___internal_spudgpu_d3d12_destroy_device(spudgpu_device device) {
 	___internal_spudgpu_d3d12_destroy_command_queues_per_family(
 	    device->_cmd_queues_compute);
 	if (device->_bindless) {
-#if _DEBUG
 		if (device->_bindless->layout)
 			free((void *)device->_bindless->layout->_debug_name);
-#endif
 		free(device->_bindless->layout);
 		device->_bindless->~spudgpu_bindless_state_d3d12();
 		free(device->_bindless);
 	}
-#if _DEBUG
 	free((void *)device->_debug_name);
-#endif
 	device->~spudgpu_device_d3d12();
 	free(device);
 }
@@ -238,9 +233,7 @@ SPUDRESULT spudgpu_destroy_instance(spudgpu_instance instance) {
 	___internal_spudgpu_d3d12_destroy_devices(
 	    instance->_gpu_devices, instance->_gpu_device_count);
 	free(instance->_gpu_devices);
-#if _DEBUG
 	free((void *)instance->_debug_name);
-#endif
 	instance->~spudgpu_instance_d3d12();
 	free(instance);
 	return SPUD_SUCCESS;
@@ -440,9 +433,14 @@ SPUDRESULT spudgpu_get_device_properties(
 		return SPUDRESULT_GPU_INVALID_DEVICE;
 	if (!out_properties)
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
+	const SPUDRESULT base_sr = spud_struct_out_check(&out_properties->base, SPUD_STRUCT_TYPE_GPU_DEVICE_PROPERTIES);
+	if (base_sr != SPUD_SUCCESS)
+		return base_sr;
 	memcpy(
 	    out_properties, &device->_properties,
 	    sizeof(SPUDGPU_DEVICE_PROPERTIES));
+	// Whatever was copied over it, the base stays the caller's.
+	out_properties->base = spud_struct_base_out(SPUD_STRUCT_TYPE_GPU_DEVICE_PROPERTIES);
 	return SPUD_SUCCESS;
 }
 
@@ -457,8 +455,13 @@ SPUDRESULT spudgpu_get_mesh_shading_capabilities(
 		return SPUDRESULT_GPU_INVALID_DEVICE;
 	if (!out_caps)
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
+	const SPUDRESULT base_sr = spud_struct_out_check(&out_caps->base, SPUD_STRUCT_TYPE_GPU_MESH_SHADING_CAPABILITIES);
+	if (base_sr != SPUD_SUCCESS)
+		return base_sr;
 
 	*out_caps = {};
+	// Whatever was copied over it, the base stays the caller's.
+	out_caps->base = spud_struct_base_out(SPUD_STRUCT_TYPE_GPU_MESH_SHADING_CAPABILITIES);
 
 	D3D12_FEATURE_DATA_D3D12_OPTIONS7 options7 = {};
 	HRESULT hr                                 = device->_d3d_device->CheckFeatureSupport(
@@ -485,8 +488,13 @@ SPUDRESULT spudgpu_get_depth_bounds_capabilities(
 		return SPUDRESULT_GPU_INVALID_DEVICE;
 	if (!out_caps)
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
+	const SPUDRESULT base_sr = spud_struct_out_check(&out_caps->base, SPUD_STRUCT_TYPE_GPU_DEPTH_BOUNDS_CAPABILITIES);
+	if (base_sr != SPUD_SUCCESS)
+		return base_sr;
 
 	*out_caps = {};
+	// Whatever was copied over it, the base stays the caller's.
+	out_caps->base = spud_struct_base_out(SPUD_STRUCT_TYPE_GPU_DEPTH_BOUNDS_CAPABILITIES);
 
 	D3D12_FEATURE_DATA_D3D12_OPTIONS2 options2 = {};
 	HRESULT hr                                  = device->_d3d_device->CheckFeatureSupport(
@@ -519,9 +527,7 @@ SPUDRESULT spudgpu_create_surface(
 void spudgpu_destroy_surface(spudgpu_surface surface) {
 	if (!surface)
 		return;
-#if _DEBUG
 	free((void *)surface->_debug_name);
-#endif
 	free(surface);
 }
 }

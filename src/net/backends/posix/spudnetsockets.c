@@ -218,9 +218,7 @@ static int spudnet_posix_open_tcp(int family) {
 // --------------------------------------------------------------------------
 
 struct spudnet_tcp_listener_t {
-#if _DEBUG
 	const char *debug_name;
-#endif
 	spudnet_instance           instance; // also every socket's it accepts
 	int                        fd;
 	struct spudnet_posix_abort abort;
@@ -229,9 +227,7 @@ struct spudnet_tcp_listener_t {
 };
 
 struct spudnet_tcp_socket_t {
-#if _DEBUG
 	const char *debug_name;
-#endif
 	spudnet_instance instance;
 	// -1 until connect makes it; read by other calls only once `open` says
 	// the connection is up, and closed only by destroy.
@@ -290,9 +286,7 @@ void spudnet_tcp_listener_destroy(spudnet_tcp_listener listener) {
 	if (listener->fd >= 0)
 		close(listener->fd);
 	spudnet_posix_abort_free(&listener->abort);
-#if _DEBUG
 	free((void *)listener->debug_name);
-#endif
 	free(listener);
 }
 
@@ -471,9 +465,7 @@ void spudnet_tcp_socket_destroy(spudnet_tcp_socket socket) {
 	if (socket->fd >= 0)
 		close(socket->fd);
 	spudnet_posix_abort_free(&socket->abort);
-#if _DEBUG
 	free((void *)socket->debug_name);
-#endif
 	free(socket);
 }
 
@@ -701,9 +693,7 @@ SPUDRESULT spudnet_tcp_socket_get_peer_address(
  * Apple's systems). The resolver takes the instance only to refuse NULL,
  * and keeps nothing of it. */
 struct spudnet_resolver_t {
-#if _DEBUG
 	const char *debug_name;
-#endif
 	atomic_int references;
 
 	// Set by create and only read after.
@@ -736,9 +726,7 @@ static void spudnet_posix_resolver_release(struct spudnet_resolver_t *resolver) 
 	pthread_mutex_destroy(&resolver->lock);
 	free(resolver->addresses);
 	free(resolver->host);
-#if _DEBUG
 	free((void *)resolver->debug_name);
-#endif
 	free(resolver);
 }
 

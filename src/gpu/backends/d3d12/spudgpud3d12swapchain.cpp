@@ -2,6 +2,7 @@
 #if SPUDGPU_COMPILE_D3D12_API
 
 #include "spudgpud3d12.hpp"
+#include "../../../spudstructbase.h"
 
 // Releases a swap chain and its back buffer arrays. Either array may still
 // be null, which is how a swap chain that failed part-way through creation
@@ -9,23 +10,17 @@
 static void spudgpu_d3d12___release_swap_chain(spudgpu_swap_chain_d3d12 *swap_chain) {
 	if (swap_chain->_back_buffer_images) {
 		for (uint32_t i = 0; i < swap_chain->_desc.buffer_count; ++i) {
-#if _DEBUG
 			free((void *)swap_chain->_back_buffer_images[i]._debug_name);
-#endif
 			swap_chain->_back_buffer_images[i].~spudgpu_image_d3d12();
 		}
 		free(swap_chain->_back_buffer_images);
 	}
-#if _DEBUG
 	if (swap_chain->_back_buffer_image_views) {
 		for (uint32_t i = 0; i < swap_chain->_desc.buffer_count; ++i)
 			free((void *)swap_chain->_back_buffer_image_views[i]._debug_name);
 	}
-#endif
 	free(swap_chain->_back_buffer_image_views);
-#if _DEBUG
 	free((void *)swap_chain->_debug_name);
-#endif
 	swap_chain->~spudgpu_swap_chain_d3d12();
 	free(swap_chain);
 }
@@ -40,6 +35,9 @@ SPUDRESULT spudgpu_create_swap_chain(
 		return SPUDRESULT_GPU_INVALID_DEVICE;
 	if (!desc)
 		return SPUDRESULT_NULL_DESC;
+	const SPUDRESULT base_sr = spud_struct_check(&desc->base, SPUD_STRUCT_TYPE_GPU_SWAP_CHAIN_DESC);
+	if (base_sr != SPUD_SUCCESS)
+		return base_sr;
 	if (!out_swap_chain)
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
 	if (!desc->surface)
@@ -192,6 +190,7 @@ SPUDRESULT spudgpu_get_swap_chain_desc(
 	if (!out_desc)
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
 	*out_desc = swap_chain->_desc;
+	out_desc->base = spud_struct_base(SPUD_STRUCT_TYPE_GPU_SWAP_CHAIN_DESC);
 	return SPUD_SUCCESS;
 }
 

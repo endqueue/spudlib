@@ -482,9 +482,7 @@ static bool spudnet_win_tls_accepts(HINTERNET request, const struct spudnet_win_
 #define SPUDNET_WIN_HTTP_CHUNK_FRAME 32
 
 struct spudnet_http_client_t {
-#if _DEBUG
 	const char *debug_name;
-#endif
 	// Holds the connections. Its proxy was settled when it was opened.
 	HINTERNET              session;
 	struct spudnet_win_tls tls;
@@ -600,9 +598,7 @@ void spudnet_http_client_destroy(spudnet_http_client client) {
 	if (client->session)
 		WinHttpCloseHandle(client->session);
 	spudnet_win_tls_free(&client->tls);
-#if _DEBUG
 	free((void *)client->debug_name);
-#endif
 	free(client);
 }
 
@@ -1079,9 +1075,7 @@ SPUDRESULT spudnet_http_backend_recv(
 #define SPUDNET_WIN_RECEIVE_BUFFER_SIZE (16 * 1024)
 
 struct spudnet_websocket_t {
-#if _DEBUG
 	const char *debug_name;
-#endif
 	// Set by create and only read after.
 	spudnet_instance instance;
 	// Guards everything below that more than one thread touches, and every
@@ -1292,9 +1286,7 @@ void spudnet_websocket_destroy(spudnet_websocket socket) {
 		CloseHandle(socket->send_event);
 	spudnet_win_tls_free(&socket->tls);
 	DeleteCriticalSection(&socket->lock);
-#if _DEBUG
 	free((void *)socket->debug_name);
-#endif
 	free(socket);
 }
 

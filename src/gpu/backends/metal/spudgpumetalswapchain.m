@@ -15,6 +15,7 @@
 #include "spudcore.h"
 #include "spudgpumetal.h"
 #include <Metal/Metal.h>
+#include "../../../spudstructbase.h"
 
 // Only the formats realistically requested for a swap chain's color
 // attachment - not a general spudgpu_image format table (that belongs to
@@ -41,40 +42,30 @@ static void spudgpumetal___internal_destroy_swap_chain(spudgpu_swap_chain_metal 
 		if (swap_chain_metal->_image_available_semaphore->_event_mtl) {
 			[swap_chain_metal->_image_available_semaphore->_event_mtl release];
 		}
-#if _DEBUG
 		free((void *)swap_chain_metal->_image_available_semaphore->_debug_name);
-#endif
 		free(swap_chain_metal->_image_available_semaphore);
 	}
 	if (swap_chain_metal->_render_finished_semaphore) {
 		if (swap_chain_metal->_render_finished_semaphore->_event_mtl) {
 			[swap_chain_metal->_render_finished_semaphore->_event_mtl release];
 		}
-#if _DEBUG
 		free((void *)swap_chain_metal->_render_finished_semaphore->_debug_name);
-#endif
 		free(swap_chain_metal->_render_finished_semaphore);
 	}
 	if (swap_chain_metal->_in_flight_fence) {
 		if (swap_chain_metal->_in_flight_fence->_shared_event_mtl) {
 			[swap_chain_metal->_in_flight_fence->_shared_event_mtl release];
 		}
-#if _DEBUG
 		free((void *)swap_chain_metal->_in_flight_fence->_debug_name);
-#endif
 		free(swap_chain_metal->_in_flight_fence);
 	}
-#if _DEBUG
 	if (swap_chain_metal->_back_buffer_images)
 		free((void *)swap_chain_metal->_back_buffer_images->_debug_name);
 	if (swap_chain_metal->_back_buffer_image_views)
 		free((void *)swap_chain_metal->_back_buffer_image_views->_debug_name);
-#endif
 	free(swap_chain_metal->_back_buffer_images);
 	free(swap_chain_metal->_back_buffer_image_views);
-#if _DEBUG
 	free((void *)swap_chain_metal->_debug_name);
-#endif
 	free(swap_chain_metal);
 }
 
@@ -118,9 +109,7 @@ failedattempt:
 void spudgpu_destroy_surface(spudgpu_surface surface) {
 	spudgpu_surface_metal *surface_metal = (spudgpu_surface_metal *)surface;
 	if (surface_metal) {
-#if _DEBUG
 		free((void *)surface_metal->_debug_name);
-#endif
 		free(surface_metal);
 	}
 }
@@ -149,6 +138,9 @@ SPUDRESULT spudgpu_create_swap_chain(
 		return SPUDRESULT_GPU_INVALID_DEVICE;
 	if (!desc)
 		return SPUDRESULT_NULL_DESC;
+	const SPUDRESULT base_sr = spud_struct_check(&desc->base, SPUD_STRUCT_TYPE_GPU_SWAP_CHAIN_DESC);
+	if (base_sr != SPUD_SUCCESS)
+		return base_sr;
 	if (!out_swap_chain)
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
 	if (!desc->surface)
@@ -302,6 +294,7 @@ SPUDRESULT spudgpu_get_swap_chain_desc(
 	if (!out_desc)
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
 	*out_desc = swap_chain_metal->_desc;
+	out_desc->base = spud_struct_base(SPUD_STRUCT_TYPE_GPU_SWAP_CHAIN_DESC);
 	return SPUD_SUCCESS;
 }
 

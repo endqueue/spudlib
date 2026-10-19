@@ -355,6 +355,9 @@ SPUDRESULT spudgpu_enumerate_devices(
  * reports them.
  */
 typedef struct SPUDGPU_DEVICE_PROPERTIES {
+	/** `type` is SPUD_STRUCT_TYPE_GPU_DEVICE_PROPERTIES; `next` is NULL (nothing is chained onto
+	 * this struct yet). The caller builds the chain and sets each type; SpudGPU fills in the rest. See SPUD_STRUCT_BASE. */
+	SPUD_STRUCT_BASE_OUT base;
 	/** Device name. */
 	char description[128];
 	/** PCI vendor ID, e.g. SPUDGPU_VENDOR_NVIDIA. */
@@ -539,6 +542,9 @@ typedef struct SPUDGPU_DEVICE_PROPERTIES {
  * @retval SPUD_SUCCESS `out_properties` was filled in.
  * @retval SPUDRESULT_GPU_INVALID_DEVICE `device` is NULL.
  * @retval SPUDRESULT_NULL_OUTPUT_PARAMETER `out_properties` is NULL.
+ * @retval SPUDRESULT_STRUCT_WRONG_TYPE `out_properties->base.type` is not
+ *         SPUD_STRUCT_TYPE_GPU_DEVICE_PROPERTIES.
+ * @retval SPUDRESULT_STRUCT_UNKNOWN_IN_CHAIN `out_properties->base.next` is not NULL.
  */
 SPUDRESULT spudgpu_get_device_properties(
     spudgpu_device device,
@@ -682,6 +688,9 @@ SPUDRESULT spudgpu_submit_command_lists_synced(
  * @brief What spudgpu_queue_submit() submits and how it is synchronized.
  */
 typedef struct spudgpu_submit_desc {
+	/** `type` is SPUD_STRUCT_TYPE_GPU_SUBMIT_DESC; `next` is NULL (nothing is chained onto
+	 * this struct yet). Set by the caller. See SPUD_STRUCT_BASE. */
+	SPUD_STRUCT_BASE base;
 	/** Array of closed command lists to submit. */
 	spudgpu_command_list *cmd_lists;
 	/** Number of elements in cmd_lists. */
@@ -738,6 +747,9 @@ typedef struct spudgpu_submit_desc {
  * @retval SPUD_SUCCESS The command lists were submitted.
  * @retval SPUDRESULT_GPU_INVALID_COMMAND_QUEUE `queue` is NULL.
  * @retval SPUDRESULT_NULL_DESC `desc` is NULL.
+ * @retval SPUDRESULT_STRUCT_WRONG_TYPE `desc->base.type` is not
+ *         SPUD_STRUCT_TYPE_GPU_SUBMIT_DESC.
+ * @retval SPUDRESULT_STRUCT_UNKNOWN_IN_CHAIN `desc->base.next` is not NULL.
  * @retval SPUDRESULT_GPU_INVALID_COMMAND_LIST `desc->cmd_lists` is NULL.
  * @retval SPUDRESULT_ZERO_SIZE `desc->cmd_list_count` is 0.
  * @return Another SPUDRESULT if the backend fails, such as
@@ -762,6 +774,9 @@ void spudgpu_queue_wait_idle(spudgpu_command_queue queue);
  * @brief Configuration descriptor for a command allocator.
  */
 typedef struct spudgpu_command_allocator_desc {
+	/** `type` is SPUD_STRUCT_TYPE_GPU_COMMAND_ALLOCATOR_DESC; `next` is NULL (nothing is chained onto
+	 * this struct yet). Set by the caller. See SPUD_STRUCT_BASE. */
+	SPUD_STRUCT_BASE base;
 	/**
 	 * The kind of command list recorded into the allocator.
 	 * @see SPUDGPU_COMMAND_LIST_TYPE
@@ -782,6 +797,9 @@ typedef struct spudgpu_command_allocator_desc {
  * @retval SPUD_SUCCESS The allocator was created.
  * @retval SPUDRESULT_GPU_INVALID_DEVICE `device` is NULL.
  * @retval SPUDRESULT_NULL_DESC `desc` is NULL.
+ * @retval SPUDRESULT_STRUCT_WRONG_TYPE `desc->base.type` is not
+ *         SPUD_STRUCT_TYPE_GPU_COMMAND_ALLOCATOR_DESC.
+ * @retval SPUDRESULT_STRUCT_UNKNOWN_IN_CHAIN `desc->base.next` is not NULL.
  * @retval SPUDRESULT_NULL_OUTPUT_PARAMETER `out_allocator` is NULL.
  * @return Another SPUDRESULT if the backend fails, such as
  *         SPUDRESULT_OUT_OF_MEMORY or SPUDRESULT_API_SPECIFIC_FAILURE.
@@ -1266,6 +1284,9 @@ enum {
  * @brief Descriptor used for a physical GPU buffer.
  */
 typedef struct spudgpu_buffer_desc {
+	/** `type` is SPUD_STRUCT_TYPE_GPU_BUFFER_DESC; `next` is NULL (nothing is chained onto
+	 * this struct yet). Set by the caller. See SPUD_STRUCT_BASE. */
+	SPUD_STRUCT_BASE base;
 	/**
 	 * Every way the buffer will be bound or copied, as a bitmask. Which
 	 * usages are allowed depends on #memory_kind.
@@ -1280,21 +1301,12 @@ typedef struct spudgpu_buffer_desc {
 	 */
 	SPUDGPU_MEMORY_KIND memory_kind;
 
-	/**
-	 * @brief Hardware memory address.
-	 * @note This will remain '0' until after the gpu_buffer is created.
-	 * After creation, this will be assigned a value when calling
-	 * 'spudgpu_get_buffer_desc(gpu_buffer)'.
-	 */
-	uint64_t gpu_address_location;
-
 	/** Total allocated size of the buffer resource in bytes. */
 	uint64_t size;
-#if _DEBUG
 
-	/** @brief A string identifier used for diagnostic tracking. */
+	/** @brief A name for diagnostics, or NULL. Copied, in every build; see
+	 * spud_debug_name_set(). */
 	const char *debug_name;
-#endif
 } spudgpu_buffer_desc;
 
 /**
@@ -1311,6 +1323,9 @@ typedef struct spudgpu_buffer_desc {
  * @retval SPUD_SUCCESS The buffer was created.
  * @retval SPUDRESULT_GPU_INVALID_DEVICE `device` is NULL.
  * @retval SPUDRESULT_NULL_DESC `desc` is NULL.
+ * @retval SPUDRESULT_STRUCT_WRONG_TYPE `desc->base.type` is not
+ *         SPUD_STRUCT_TYPE_GPU_BUFFER_DESC.
+ * @retval SPUDRESULT_STRUCT_UNKNOWN_IN_CHAIN `desc->base.next` is not NULL.
  * @retval SPUDRESULT_NULL_OUTPUT_PARAMETER `out_buffer` is NULL.
  * @retval SPUDRESULT_GPU_ZERO_BUFFER_SIZE `desc->size` is 0.
  * @retval SPUDRESULT_GPU_INVALID_BUFFER_USAGE `desc->usage` is
@@ -1350,8 +1365,9 @@ void spudgpu_destroy_buffer(spudgpu_buffer buffer);
 /**
  * @brief Reads the descriptor a buffer was created with.
  *
- * `out_desc->gpu_address_location` holds the buffer's address, which the
- * descriptor passed to spudgpu_create_buffer() did not.
+ * `out_desc->debug_name` is the buffer's own copy of its name (see
+ * spud_debug_name_set()): valid until the buffer is renamed or destroyed,
+ * and NULL if it has none.
  *
  * @param[in]  buffer   Buffer to query.
  * @param[out] out_desc Receives the buffer's descriptor.
@@ -1365,6 +1381,25 @@ SPUDRESULT spudgpu_get_buffer_desc(
     spudgpu_buffer_desc *out_desc);
 
 /**
+ * @brief Reads a buffer's GPU virtual address.
+ *
+ * Every buffer has one, on every backend, from the moment it is created
+ * until it is destroyed: D3D12's GetGPUVirtualAddress, Vulkan's
+ * vkGetBufferDeviceAddress, Metal's gpuAddress. A buffer placed in a heap
+ * has one too.
+ *
+ * @param[in]  buffer      Buffer to query.
+ * @param[out] out_address Receives the address.
+ *
+ * @retval SPUD_SUCCESS `out_address` was filled in.
+ * @retval SPUDRESULT_GPU_INVALID_BUFFER `buffer` is NULL.
+ * @retval SPUDRESULT_NULL_OUTPUT_PARAMETER `out_address` is NULL.
+ */
+SPUDRESULT spudgpu_get_buffer_gpu_address(
+    spudgpu_buffer buffer,
+    uint64_t *out_address);
+
+/**
  * @brief Configuration descriptor defining a sub-allocated window (view) into
  * an existing buffer.
  *
@@ -1373,6 +1408,9 @@ SPUDRESULT spudgpu_get_buffer_desc(
  * additional physical device memory.
  */
 typedef struct spudgpu_buffer_view_desc {
+	/** `type` is SPUD_STRUCT_TYPE_GPU_BUFFER_VIEW_DESC; `next` is NULL (nothing is chained onto
+	 * this struct yet). Set by the caller. See SPUD_STRUCT_BASE. */
+	SPUD_STRUCT_BASE base;
 	/** Handle to the GPU buffer that this view window reads from or writes to. */
 	spudgpu_buffer parent_buffer;
 
@@ -1405,6 +1443,9 @@ typedef struct spudgpu_buffer_view_desc {
  * @retval SPUD_SUCCESS The view was created.
  * @retval SPUDRESULT_GPU_INVALID_BUFFER `buffer` is NULL.
  * @retval SPUDRESULT_NULL_DESC `desc` is NULL.
+ * @retval SPUDRESULT_STRUCT_WRONG_TYPE `desc->base.type` is not
+ *         SPUD_STRUCT_TYPE_GPU_BUFFER_VIEW_DESC.
+ * @retval SPUDRESULT_STRUCT_UNKNOWN_IN_CHAIN `desc->base.next` is not NULL.
  * @retval SPUDRESULT_NULL_OUTPUT_PARAMETER `out_buffer_view` is NULL.
  * @retval SPUDRESULT_GPU_ZERO_BUFFER_SIZE `desc->size` is 0.
  * @retval SPUDRESULT_GPU_BUFFER_OR_IMAGE_VIEW_RANGE_OUT_OF_SCOPE
@@ -1646,6 +1687,7 @@ enum {
 /**
  * @brief A depth value and a stencil value, used together as a clear value.
  */
+/* Frozen: a value, held by value in SPUDGPU_CLEAR_VALUE. It never changes; a new need gets a new type. */
 typedef struct SPUDGPU_DEPTH_STENCIL_VALUE {
 	/** Depth, 0 to 1. */
 	float depth;
@@ -1657,6 +1699,7 @@ typedef struct SPUDGPU_DEPTH_STENCIL_VALUE {
  * @brief The value an image is expected to be cleared to: a color, or a
  * depth/stencil pair, depending on `format`.
  */
+/* Frozen: a value, held by value in spudgpu_image_desc. It never changes; a new need gets a new type. */
 typedef struct SPUDGPU_CLEAR_VALUE {
 	/** The format the value is for. */
 	SPUDGPU_FORMAT format;
@@ -1678,6 +1721,9 @@ typedef struct SPUDGPU_CLEAR_VALUE {
  * memory and is never mapped (see SPUDGPU_MEMORY_KIND).
  */
 typedef struct spudgpu_image_desc {
+	/** `type` is SPUD_STRUCT_TYPE_GPU_IMAGE_DESC; `next` is NULL (nothing is chained onto
+	 * this struct yet). Set by the caller. See SPUD_STRUCT_BASE. */
+	SPUD_STRUCT_BASE base;
 	/**
 	 * Every way the image will be used, as a bitmask.
 	 * @see SPUDGPU_IMAGE_USAGE
@@ -1697,14 +1743,6 @@ typedef struct spudgpu_image_desc {
 	 * SPUDGPU_CLEAR_VALUE::format. Vulkan and Metal do not read it.
 	 */
 	SPUDGPU_CLEAR_VALUE clear_value;
-
-	/**
-	 * @brief Hardware memory address.
-	 * @note This will remain '0' until after the gpu_image is created.
-	 * After creation, this will be assigned a value when calling
-	 * 'spudgpu_get_image_desc(gpu_image)'.
-	 */
-	uint64_t gpu_address_location;
 
 	/**
 	 * The texel data layout and channel bit-depth configuration (e.g.,
@@ -1759,10 +1797,9 @@ typedef struct spudgpu_image_desc {
 	 * SPUDGPU_IMAGE_VIEW_TYPE_2D_ARRAY.
 	 */
 	bool cube_capable;
-#if _DEBUG
-	/** @brief A string identifier used for diagnostic tracking. */
+	/** @brief A name for diagnostics, or NULL. Copied, in every build; see
+	 * spud_debug_name_set(). */
 	const char *debug_name;
-#endif
 } spudgpu_image_desc;
 
 /**
@@ -1779,6 +1816,9 @@ typedef struct spudgpu_image_desc {
  * @retval SPUD_SUCCESS The image was created.
  * @retval SPUDRESULT_GPU_INVALID_DEVICE `device` is NULL.
  * @retval SPUDRESULT_NULL_DESC `desc` is NULL.
+ * @retval SPUDRESULT_STRUCT_WRONG_TYPE `desc->base.type` is not
+ *         SPUD_STRUCT_TYPE_GPU_IMAGE_DESC.
+ * @retval SPUDRESULT_STRUCT_UNKNOWN_IN_CHAIN `desc->base.next` is not NULL.
  * @retval SPUDRESULT_NULL_OUTPUT_PARAMETER `out_image` is NULL.
  * @retval SPUDRESULT_DESC_INVALID_PARAMETERS `desc->width`, `height`, `depth`,
  *         `array_layers` or `mip_levels` is 0.
@@ -1818,6 +1858,10 @@ void spudgpu_destroy_image(spudgpu_image image);
 
 /**
  * @brief Reads the descriptor an image was created with.
+ *
+ * `out_desc->debug_name` is the image's own copy of its name (see
+ * spud_debug_name_set()): valid until the image is renamed or destroyed,
+ * and NULL if it has none.
  *
  * @param[in]  image    Image to query.
  * @param[out] out_desc Receives the image's descriptor.
@@ -1894,6 +1938,7 @@ enum {
  * Allows a pipeline stage to isolate and bind specific layers or mip levels
  * of a parent image rather than the entire allocation.
  */
+/* Frozen: held by value in spudgpu_image_view_desc. It never changes; a new need gets a new type. */
 typedef struct spudgpu_image_view_desc_subresource_range {
 	/**
 	 * @brief Which aspects of the image the range covers, as
@@ -1956,6 +2001,9 @@ typedef struct spudgpu_image_view_desc_subresource_range {
  * in their own order.
  */
 typedef struct spudgpu_image_view_desc {
+	/** `type` is SPUD_STRUCT_TYPE_GPU_IMAGE_VIEW_DESC; `next` is NULL (nothing is chained onto
+	 * this struct yet). Set by the caller. See SPUD_STRUCT_BASE. */
+	SPUD_STRUCT_BASE base;
 	/** Handle to the physical GPU image containing the pixel data. */
 	spudgpu_image parent_image;
 
@@ -1982,6 +2030,9 @@ typedef struct spudgpu_image_view_desc {
  * @retval SPUD_SUCCESS The view was created.
  * @retval SPUDRESULT_GPU_INVALID_IMAGE `image` is NULL.
  * @retval SPUDRESULT_NULL_DESC `desc` is NULL.
+ * @retval SPUDRESULT_STRUCT_WRONG_TYPE `desc->base.type` is not
+ *         SPUD_STRUCT_TYPE_GPU_IMAGE_VIEW_DESC.
+ * @retval SPUDRESULT_STRUCT_UNKNOWN_IN_CHAIN `desc->base.next` is not NULL.
  * @retval SPUDRESULT_NULL_OUTPUT_PARAMETER `out_image_view` is NULL.
  * @retval SPUDRESULT_GPU_INVALID_IMAGE_VIEW_TYPE `desc->type` is
  *         SPUDGPU_IMAGE_VIEW_TYPE_CUBE or SPUDGPU_IMAGE_VIEW_TYPE_CUBE_ARRAY
@@ -2092,6 +2143,9 @@ enum {
  * are the caller's.
  */
 typedef struct spudgpu_heap_desc {
+	/** `type` is SPUD_STRUCT_TYPE_GPU_HEAP_DESC; `next` is NULL (nothing is chained onto
+	 * this struct yet). Set by the caller. See SPUD_STRUCT_BASE. */
+	SPUD_STRUCT_BASE base;
 	/**
 	 * The memory every resource placed in the heap is in, with the contract
 	 * SPUDGPU_MEMORY_KIND states for a buffer of that kind. An image heap's
@@ -2105,10 +2159,9 @@ typedef struct spudgpu_heap_desc {
 
 	/** Bytes. A multiple of SPUDGPU_HEAP_SIZE_GRANULARITY, not 0. */
 	uint64_t size;
-#if _DEBUG
-	/** @brief A string identifier used for diagnostic tracking. */
+	/** @brief A name for diagnostics, or NULL. Copied, in every build; see
+	 * spud_debug_name_set(). */
 	const char *debug_name;
-#endif
 } spudgpu_heap_desc;
 
 /**
@@ -2124,6 +2177,9 @@ typedef struct spudgpu_heap_desc {
  * @retval SPUD_SUCCESS The heap was created.
  * @retval SPUDRESULT_GPU_INVALID_DEVICE `device` is NULL.
  * @retval SPUDRESULT_NULL_DESC `desc` is NULL.
+ * @retval SPUDRESULT_STRUCT_WRONG_TYPE `desc->base.type` is not
+ *         SPUD_STRUCT_TYPE_GPU_HEAP_DESC.
+ * @retval SPUDRESULT_STRUCT_UNKNOWN_IN_CHAIN `desc->base.next` is not NULL.
  * @retval SPUDRESULT_NULL_OUTPUT_PARAMETER `out_heap` is NULL.
  * @retval SPUDRESULT_ZERO_SIZE `desc->size` is 0.
  * @retval SPUDRESULT_GPU_INVALID_HEAP_SIZE `desc->size` is not a multiple of
@@ -2182,6 +2238,9 @@ SPUDRESULT spudgpu_get_heap_desc(
  * and what its offset is a multiple of.
  */
 typedef struct spudgpu_placement_requirements {
+	/** `type` is SPUD_STRUCT_TYPE_GPU_PLACEMENT_REQUIREMENTS; `next` is NULL (nothing is chained onto
+	 * this struct yet). The caller builds the chain and sets each type; SpudGPU fills in the rest. See SPUD_STRUCT_BASE. */
+	SPUD_STRUCT_BASE_OUT base;
 	/**
 	 * Bytes the resource covers from its offset. Never less than a buffer's
 	 * size, and often more: on D3D12 every buffer covers a multiple of
@@ -2206,14 +2265,19 @@ typedef struct spudgpu_placement_requirements {
  *
  * @param[in]  heap             Heap the buffer would be placed in.
  * @param[in]  desc             The buffer, as spudgpu_create_placed_buffer()
- *                              would be given it. `gpu_address_location` is
- *                              not read.
+ *                              would be given it.
  * @param[out] out_requirements Receives the size and alignment.
  *
  * @retval SPUD_SUCCESS `out_requirements` was filled in.
  * @retval SPUDRESULT_GPU_INVALID_HEAP `heap` is NULL.
  * @retval SPUDRESULT_NULL_DESC `desc` is NULL.
+ * @retval SPUDRESULT_STRUCT_WRONG_TYPE `desc->base.type` is not
+ *         SPUD_STRUCT_TYPE_GPU_BUFFER_DESC.
+ * @retval SPUDRESULT_STRUCT_UNKNOWN_IN_CHAIN `desc->base.next` is not NULL.
  * @retval SPUDRESULT_NULL_OUTPUT_PARAMETER `out_requirements` is NULL.
+ * @retval SPUDRESULT_STRUCT_WRONG_TYPE `out_requirements->base.type` is not
+ *         SPUD_STRUCT_TYPE_GPU_PLACEMENT_REQUIREMENTS.
+ * @retval SPUDRESULT_STRUCT_UNKNOWN_IN_CHAIN `out_requirements->base.next` is not NULL.
  * @retval SPUDRESULT_GPU_ZERO_BUFFER_SIZE `desc->size` is 0.
  * @retval SPUDRESULT_GPU_INVALID_BUFFER_USAGE `desc->usage` is
  *         SPUDGPU_BUFFER_USAGE_NONE, or is one `desc->memory_kind` does not
@@ -2249,7 +2313,13 @@ SPUDRESULT spudgpu_get_buffer_placement_requirements(
  * @retval SPUD_SUCCESS `out_requirements` was filled in.
  * @retval SPUDRESULT_GPU_INVALID_HEAP `heap` is NULL.
  * @retval SPUDRESULT_NULL_DESC `desc` is NULL.
+ * @retval SPUDRESULT_STRUCT_WRONG_TYPE `desc->base.type` is not
+ *         SPUD_STRUCT_TYPE_GPU_IMAGE_DESC.
+ * @retval SPUDRESULT_STRUCT_UNKNOWN_IN_CHAIN `desc->base.next` is not NULL.
  * @retval SPUDRESULT_NULL_OUTPUT_PARAMETER `out_requirements` is NULL.
+ * @retval SPUDRESULT_STRUCT_WRONG_TYPE `out_requirements->base.type` is not
+ *         SPUD_STRUCT_TYPE_GPU_PLACEMENT_REQUIREMENTS.
+ * @retval SPUDRESULT_STRUCT_UNKNOWN_IN_CHAIN `out_requirements->base.next` is not NULL.
  * @retval (each result of spudgpu_create_image()'s desc checks, in its
  *         order.)
  * @retval SPUDRESULT_GPU_INVALID_IMAGE_USAGE `desc->usage` has
@@ -2271,7 +2341,7 @@ SPUDRESULT spudgpu_get_image_placement_requirements(
  *
  * The result is a spudgpu_buffer like any other: its views, binding, copies,
  * barriers, spudgpu_get_buffer_desc() and spudgpu_destroy_buffer() are
- * unchanged, and its `gpu_address_location` is valid. Destroying it frees
+ * unchanged, and spudgpu_get_buffer_gpu_address() gives its address. Destroying it frees
  * nothing to the device; the bytes stay the heap's, and once the buffer is
  * destroyed another resource may be placed over them. Its contents are
  * undefined until written, as any new buffer's are, whatever was in those
@@ -2293,7 +2363,8 @@ SPUDRESULT spudgpu_get_image_placement_requirements(
  *
  * @retval SPUD_SUCCESS The buffer was created.
  * @retval (each result of spudgpu_get_buffer_placement_requirements(), in
- *         its order, with `out_buffer` in place of `out_requirements`.)
+ *         its order, with `out_buffer` in place of `out_requirements`, and
+ *         without the two about `out_requirements->base`.)
  * @retval SPUDRESULT_GPU_PLACEMENT_MISALIGNED `offset` is not a multiple of
  *         the reported alignment.
  * @retval SPUDRESULT_GPU_PLACEMENT_OUT_OF_RANGE `offset` plus the reported
@@ -2333,7 +2404,8 @@ SPUDRESULT spudgpu_create_placed_buffer(
  *
  * @retval SPUD_SUCCESS The image was created.
  * @retval (each result of spudgpu_get_image_placement_requirements(), in
- *         its order, with `out_image` in place of `out_requirements`.)
+ *         its order, with `out_image` in place of `out_requirements`, and
+ *         without the two about `out_requirements->base`.)
  * @retval SPUDRESULT_GPU_PLACEMENT_MISALIGNED `offset` is not a multiple of
  *         the reported alignment.
  * @retval SPUDRESULT_GPU_PLACEMENT_OUT_OF_RANGE `offset` plus the reported
@@ -2521,6 +2593,9 @@ enum {
  * @brief One buffer state transition for spudgpu_cmd_pipeline_barrier().
  */
 typedef struct spudgpu_buffer_barrier {
+	/** `type` is SPUD_STRUCT_TYPE_GPU_BUFFER_BARRIER; `next` is NULL (nothing is chained onto
+	 * this struct yet). Set by the caller. See SPUD_STRUCT_BASE. */
+	SPUD_STRUCT_BASE base;
 	/**
 	 * The buffer to move. Never one of SPUDGPU_MEMORY_KIND_UPLOAD or
 	 * SPUDGPU_MEMORY_KIND_READBACK, which stay in the state they are
@@ -2541,6 +2616,9 @@ typedef struct spudgpu_buffer_barrier {
  * layouts.
  */
 typedef struct spudgpu_image_barrier {
+	/** `type` is SPUD_STRUCT_TYPE_GPU_IMAGE_BARRIER; `next` is NULL (nothing is chained onto
+	 * this struct yet). Set by the caller. See SPUD_STRUCT_BASE. */
+	SPUD_STRUCT_BASE base;
 	/** The image to move. */
 	spudgpu_image image;
 	/** The state the image is in when the barrier executes. */
@@ -2572,6 +2650,9 @@ typedef struct spudgpu_image_barrier {
  * ResourceBarrier, with a transition barrier between two states and a UAV
  * barrier for the UNORDERED_ACCESS pair (D3D12). Records nothing on Metal,
  * which orders access to a resource itself.
+ *
+ * Nothing is recorded if an element of `buffer_barriers` has a `base` other than {SPUD_STRUCT_TYPE_GPU_BUFFER_BARRIER, NULL} or an element of `image_barriers` has a `base` other than {SPUD_STRUCT_TYPE_GPU_IMAGE_BARRIER, NULL}
+ * (see SPUD_STRUCT_BASE).
  *
  * @param[in] cmd                  Command list being recorded.
  * @param[in] buffer_barriers      Array of buffer state transitions. May be
@@ -2744,6 +2825,9 @@ enum {
  * that flip onto the screen.
  */
 typedef struct spudgpu_swap_chain_desc {
+	/** `type` is SPUD_STRUCT_TYPE_GPU_SWAP_CHAIN_DESC; `next` is NULL (nothing is chained onto
+	 * this struct yet). Set by the caller. See SPUD_STRUCT_BASE. */
+	SPUD_STRUCT_BASE base;
 	/** The window surface the swap chain presents to. */
 	spudgpu_surface surface;
 
@@ -2823,6 +2907,9 @@ typedef struct spudgpu_swap_chain_desc {
  * @retval SPUD_SUCCESS The swap chain was created.
  * @retval SPUDRESULT_GPU_INVALID_DEVICE `device` is NULL.
  * @retval SPUDRESULT_NULL_DESC `desc` is NULL.
+ * @retval SPUDRESULT_STRUCT_WRONG_TYPE `desc->base.type` is not
+ *         SPUD_STRUCT_TYPE_GPU_SWAP_CHAIN_DESC.
+ * @retval SPUDRESULT_STRUCT_UNKNOWN_IN_CHAIN `desc->base.next` is not NULL.
  * @retval SPUDRESULT_NULL_OUTPUT_PARAMETER `out_swap_chain` is NULL.
  * @retval SPUDRESULT_GPU_INVALID_SURFACE `desc->surface` is NULL.
  * @retval SPUDRESULT_GPU_INVALID_COMMAND_QUEUE `desc->queue` is NULL.
@@ -3007,6 +3094,7 @@ enum {
  *
  * Each entry corresponds to one `layout(set=N, binding=M)` declaration in GLSL.
  */
+/* Frozen: an array element, held by value in spudgpu_descriptor_set_layout_desc. It never changes; a new need gets a new type. */
 typedef struct spudgpu_descriptor_binding_desc {
 	/**
 	 * Slot index matching `layout(binding = N)` in GLSL. Must be unique within
@@ -3046,10 +3134,12 @@ typedef struct spudgpu_descriptor_binding_desc {
  * handle into spudgpu_shader_pipeline_desc::descriptor_set_layouts[].
  */
 typedef struct spudgpu_descriptor_set_layout_desc {
-#if _DEBUG
-	/** @brief A string identifier used for diagnostic tracking. */
+	/** `type` is SPUD_STRUCT_TYPE_GPU_DESCRIPTOR_SET_LAYOUT_DESC; `next` is NULL (nothing is chained onto
+	 * this struct yet). Set by the caller. See SPUD_STRUCT_BASE. */
+	SPUD_STRUCT_BASE base;
+	/** @brief A name for diagnostics, or NULL. Copied, in every build; see
+	 * spud_debug_name_set(). */
 	const char *debug_name;
-#endif
 
 	/** The set's binding slots. Only the first #binding_count are read. */
 	spudgpu_descriptor_binding_desc bindings[SPUDGPU_MAX_DESCRIPTOR_BINDINGS_PER_SET];
@@ -3084,6 +3174,9 @@ typedef struct spudgpu_descriptor_set_layout_desc {
  * @retval SPUD_SUCCESS The layout was created.
  * @retval SPUDRESULT_GPU_INVALID_DEVICE `device` is NULL.
  * @retval SPUDRESULT_NULL_DESC `desc` is NULL.
+ * @retval SPUDRESULT_STRUCT_WRONG_TYPE `desc->base.type` is not
+ *         SPUD_STRUCT_TYPE_GPU_DESCRIPTOR_SET_LAYOUT_DESC.
+ * @retval SPUDRESULT_STRUCT_UNKNOWN_IN_CHAIN `desc->base.next` is not NULL.
  * @retval SPUDRESULT_NULL_OUTPUT_PARAMETER `out_layout` is NULL.
  * @retval SPUDRESULT_GPU_TOO_MANY_DESCRIPTOR_BINDINGS `desc->binding_count`
  *         exceeds SPUDGPU_MAX_DESCRIPTOR_BINDINGS_PER_SET.
@@ -3120,6 +3213,7 @@ void spudgpu_destroy_descriptor_set_layout(spudgpu_descriptor_set_layout layout)
  * Vulkan requires knowing the total capacity up front. Size your pool to cover
  * the worst-case count across all frames-in-flight.
  */
+/* Frozen: an array element, held by value in spudgpu_descriptor_pool_desc. It never changes; a new need gets a new type. */
 typedef struct spudgpu_descriptor_pool_size {
 	/** The type of descriptor counted. */
 	SPUDGPU_DESCRIPTOR_TYPE descriptor_type;
@@ -3136,10 +3230,12 @@ typedef struct spudgpu_descriptor_pool_size {
  * @brief Configuration descriptor for a descriptor pool.
  */
 typedef struct spudgpu_descriptor_pool_desc {
-#if _DEBUG
-	/** @brief A string identifier used for diagnostic tracking. */
+	/** `type` is SPUD_STRUCT_TYPE_GPU_DESCRIPTOR_POOL_DESC; `next` is NULL (nothing is chained onto
+	 * this struct yet). Set by the caller. See SPUD_STRUCT_BASE. */
+	SPUD_STRUCT_BASE base;
+	/** @brief A name for diagnostics, or NULL. Copied, in every build; see
+	 * spud_debug_name_set(). */
 	const char *debug_name;
-#endif
 
 	/** Maximum number of descriptor sets that can be allocated from this pool. */
 	uint32_t max_sets;
@@ -3163,6 +3259,9 @@ typedef struct spudgpu_descriptor_pool_desc {
  * @retval SPUD_SUCCESS The pool was created.
  * @retval SPUDRESULT_GPU_INVALID_DEVICE `device` is NULL.
  * @retval SPUDRESULT_NULL_DESC `desc` is NULL.
+ * @retval SPUDRESULT_STRUCT_WRONG_TYPE `desc->base.type` is not
+ *         SPUD_STRUCT_TYPE_GPU_DESCRIPTOR_POOL_DESC.
+ * @retval SPUDRESULT_STRUCT_UNKNOWN_IN_CHAIN `desc->base.next` is not NULL.
  * @retval SPUDRESULT_NULL_OUTPUT_PARAMETER `out_pool` is NULL.
  * @retval SPUDRESULT_GPU_TOO_MANY_DESCRIPTOR_POOLS `desc->pool_size_count`
  *         exceeds SPUDGPU_MAX_DESCRIPTOR_POOL_SIZES.
@@ -3215,6 +3314,9 @@ void spudgpu_destroy_descriptor_pool(spudgpu_descriptor_pool pool);
  * driver round-trip (matches vkAllocateDescriptorSets semantics).
  */
 typedef struct spudgpu_descriptor_set_desc {
+	/** `type` is SPUD_STRUCT_TYPE_GPU_DESCRIPTOR_SET_DESC; `next` is NULL (nothing is chained onto
+	 * this struct yet). Set by the caller. See SPUD_STRUCT_BASE. */
+	SPUD_STRUCT_BASE base;
 	/** The pool the sets are allocated from, and released by. */
 	spudgpu_descriptor_pool pool;
 
@@ -3237,6 +3339,9 @@ typedef struct spudgpu_descriptor_set_desc {
  * @retval SPUD_SUCCESS The sets were allocated.
  * @retval SPUDRESULT_GPU_INVALID_DEVICE `device` is NULL.
  * @retval SPUDRESULT_NULL_DESC `desc` is NULL.
+ * @retval SPUDRESULT_STRUCT_WRONG_TYPE `desc->base.type` is not
+ *         SPUD_STRUCT_TYPE_GPU_DESCRIPTOR_SET_DESC.
+ * @retval SPUDRESULT_STRUCT_UNKNOWN_IN_CHAIN `desc->base.next` is not NULL.
  * @retval SPUDRESULT_NULL_OUTPUT_PARAMETER `out_sets` is NULL.
  * @retval SPUDRESULT_GPU_INVALID_DESCRIPTOR_POOL `desc->pool` is NULL.
  * @retval SPUDRESULT_GPU_ZERO_DESCRIPTOR_SET_LAYOUTS `desc->set_count` is 0.
@@ -3318,6 +3423,9 @@ enum {
  * @brief Configuration descriptor for a texture sampler.
  */
 typedef struct spudgpu_sampler_desc {
+	/** `type` is SPUD_STRUCT_TYPE_GPU_SAMPLER_DESC; `next` is NULL (nothing is chained onto
+	 * this struct yet). Set by the caller. See SPUD_STRUCT_BASE. */
+	SPUD_STRUCT_BASE base;
 	/** Filter when a texel covers more than one pixel (magnification). */
 	SPUDGPU_FILTER mag_filter;
 	/** Filter when a pixel covers more than one texel (minification). */
@@ -3353,10 +3461,9 @@ typedef struct spudgpu_sampler_desc {
 	bool compare_enable;
 	/** What the reference is compared with the texel by, the reference first: SPUDGPU_COMPARE_OP_LESS_OR_EQUAL passes where reference <= texel. */
 	SPUDGPU_COMPARE_OP compare_op;
-#if _DEBUG
-	/** @brief A string identifier used for diagnostic tracking. */
+	/** @brief A name for diagnostics, or NULL. Copied, in every build; see
+	 * spud_debug_name_set(). */
 	const char *debug_name;
-#endif
 } spudgpu_sampler_desc;
 
 /**
@@ -3369,6 +3476,9 @@ typedef struct spudgpu_sampler_desc {
  * @retval SPUD_SUCCESS The sampler was created.
  * @retval SPUDRESULT_GPU_INVALID_DEVICE `device` is NULL.
  * @retval SPUDRESULT_NULL_DESC `desc` is NULL.
+ * @retval SPUDRESULT_STRUCT_WRONG_TYPE `desc->base.type` is not
+ *         SPUD_STRUCT_TYPE_GPU_SAMPLER_DESC.
+ * @retval SPUDRESULT_STRUCT_UNKNOWN_IN_CHAIN `desc->base.next` is not NULL.
  * @retval SPUDRESULT_NULL_OUTPUT_PARAMETER `out_sampler` is NULL.
  * @return Another SPUDRESULT if the backend fails, such as
  *         SPUDRESULT_OUT_OF_MEMORY or SPUDRESULT_API_SPECIFIC_FAILURE.
@@ -3395,6 +3505,7 @@ void spudgpu_destroy_sampler(spudgpu_sampler sampler);
 /**
  * @brief Describes a buffer range to write into a binding slot.
  */
+/* Frozen: an array element of spudgpu_write_descriptor_set. It never changes; a new need gets a new type. */
 typedef struct spudgpu_descriptor_buffer_info {
 	/** The buffer to bind. */
 	spudgpu_buffer buffer;
@@ -3409,6 +3520,7 @@ typedef struct spudgpu_descriptor_buffer_info {
 /**
  * @brief Describes an image view + sampler to write into a binding slot.
  */
+/* Frozen: an array element of spudgpu_write_descriptor_set. It never changes; a new need gets a new type. */
 typedef struct spudgpu_descriptor_image_info {
 	/** The image view to bind. */
 	spudgpu_image_view image_view;
@@ -3433,6 +3545,9 @@ typedef struct spudgpu_descriptor_image_info {
  * The unused field is ignored by the backend.
  */
 typedef struct spudgpu_write_descriptor_set {
+	/** `type` is SPUD_STRUCT_TYPE_GPU_WRITE_DESCRIPTOR_SET; `next` is NULL (nothing is chained onto
+	 * this struct yet). Set by the caller. See SPUD_STRUCT_BASE. */
+	SPUD_STRUCT_BASE base;
 	/** The descriptor set to write into. */
 	spudgpu_descriptor_set dst_set;
 
@@ -3472,6 +3587,9 @@ typedef struct spudgpu_write_descriptor_set {
  *
  * The equivalent of vkUpdateDescriptorSets. Call after allocating sets and
  * before binding them to a command list.
+ *
+ * Nothing is recorded if an element of `writes` has a `base` other than {SPUD_STRUCT_TYPE_GPU_WRITE_DESCRIPTOR_SET, NULL}
+ * (see SPUD_STRUCT_BASE).
  *
  * @param[in] device      Device that owns the sets.
  * @param[in] writes      Array of write operations.
@@ -3591,6 +3709,9 @@ void spudgpu_cmd_bind_descriptor_sets_compute(
  * needed before indexing it from the shader.
  */
 typedef struct spudgpu_bindless_capabilities {
+	/** `type` is SPUD_STRUCT_TYPE_GPU_BINDLESS_CAPABILITIES; `next` is NULL (nothing is chained onto
+	 * this struct yet). The caller builds the chain and sets each type; SpudGPU fills in the rest. See SPUD_STRUCT_BASE. */
+	SPUD_STRUCT_BASE_OUT base;
 	/**
 	 * Whether the device supports bindless descriptor indexing. When false
 	 * the limits below are 0 and the bindless calls return
@@ -3622,6 +3743,9 @@ typedef struct spudgpu_bindless_capabilities {
  * @retval SPUD_SUCCESS `out_caps` was filled in.
  * @retval SPUDRESULT_GPU_INVALID_DEVICE `device` is NULL.
  * @retval SPUDRESULT_NULL_OUTPUT_PARAMETER `out_caps` is NULL.
+ * @retval SPUDRESULT_STRUCT_WRONG_TYPE `out_caps->base.type` is not
+ *         SPUD_STRUCT_TYPE_GPU_BINDLESS_CAPABILITIES.
+ * @retval SPUDRESULT_STRUCT_UNKNOWN_IN_CHAIN `out_caps->base.next` is not NULL.
  */
 SPUDRESULT spudgpu_get_bindless_capabilities(
     spudgpu_device device,
@@ -3855,6 +3979,7 @@ enum {
  * @brief One vertex attribute: where it sits in a vertex and which shader
  * input it feeds.
  */
+/* Frozen: an array element of spudgpu_shader_pipeline_desc. It never changes; a new need gets a new type. */
 typedef struct spudgpu_vertex_attribute_desc {
 	/**
 	 * Which shader location slot this attribute binds to (layout(location =
@@ -3879,6 +4004,7 @@ typedef struct spudgpu_vertex_attribute_desc {
  * @brief One vertex buffer binding slot: its stride and whether it advances
  * per vertex or per instance.
  */
+/* Frozen: an array element of spudgpu_shader_pipeline_desc. It never changes; a new need gets a new type. */
 typedef struct spudgpu_vertex_binding_desc {
 	/** The binding slot index this entry targets. */
 	uint32_t binding;
@@ -3900,6 +4026,7 @@ typedef struct spudgpu_vertex_binding_desc {
  * @brief A byte range of the push constant block and the shader stages that
  * read it.
  */
+/* Frozen: an array element of the pipeline descs. It never changes; a new need gets a new type. */
 typedef struct spudgpu_push_constant_range_desc {
 	/**
 	 * Bitmask of shader stages that can read this push constant range.
@@ -3951,6 +4078,7 @@ enum {
  * @brief Per-attachment blend configuration.
  * Ignored entirely when blend_enable is false.
  */
+/* Frozen: an array element of spudgpu_shader_pipeline_desc. It never changes; a new need gets a new type. */
 typedef struct spudgpu_blend_attachment_desc {
 	/** When false the fragment's color replaces the attachment's. */
 	bool blend_enable;
@@ -3974,6 +4102,9 @@ typedef struct spudgpu_blend_attachment_desc {
  * @brief Configuration descriptor for loading a SPIR-V shader binary.
  */
 typedef struct spudgpu_shader_module_desc {
+	/** `type` is SPUD_STRUCT_TYPE_GPU_SHADER_MODULE_DESC; `next` is NULL (nothing is chained onto
+	 * this struct yet). Set by the caller. See SPUD_STRUCT_BASE. */
+	SPUD_STRUCT_BASE base;
 	/**
 	 * Which pipeline stage this module targets.
 	 * @see SPUDGPU_SHADER_STAGE
@@ -3986,10 +4117,9 @@ typedef struct spudgpu_shader_module_desc {
 	/** Byte size of the SPIR-V blob. Must be a multiple of 4. */
 	uint64_t spirv_size;
 
-#if _DEBUG
-	/** @brief A string identifier used for diagnostic tracking. */
+	/** @brief A name for diagnostics, or NULL. Copied, in every build; see
+	 * spud_debug_name_set(). */
 	const char *debug_name;
-#endif
 } spudgpu_shader_module_desc;
 
 /**
@@ -4002,6 +4132,9 @@ typedef struct spudgpu_shader_module_desc {
  * @retval SPUD_SUCCESS The module was created.
  * @retval SPUDRESULT_GPU_INVALID_DEVICE `device` is NULL.
  * @retval SPUDRESULT_NULL_DESC `desc` is NULL.
+ * @retval SPUDRESULT_STRUCT_WRONG_TYPE `desc->base.type` is not
+ *         SPUD_STRUCT_TYPE_GPU_SHADER_MODULE_DESC.
+ * @retval SPUDRESULT_STRUCT_UNKNOWN_IN_CHAIN `desc->base.next` is not NULL.
  * @retval SPUDRESULT_NULL_OUTPUT_PARAMETER `out_module` is NULL.
  * @retval SPUDRESULT_GPU_NULL_SPIRV `desc->spirv_code` is NULL or
  *         `desc->spirv_size` is 0.
@@ -4037,11 +4170,13 @@ void spudgpu_destroy_shader_module(spudgpu_shader_module shader_module);
  * field to indicate how many entries are valid.
  */
 typedef struct spudgpu_shader_pipeline_desc {
+	/** `type` is SPUD_STRUCT_TYPE_GPU_SHADER_PIPELINE_DESC; `next` is NULL (nothing is chained onto
+	 * this struct yet). Set by the caller. See SPUD_STRUCT_BASE. */
+	SPUD_STRUCT_BASE base;
 
-#if _DEBUG
-	/** @brief A string identifier used for diagnostic tracking. */
+	/** @brief A name for diagnostics, or NULL. Copied, in every build; see
+	 * spud_debug_name_set(). */
 	const char *debug_name;
-#endif
 
 	// -----------------------------------------------------------------------
 	// Shader stages
@@ -4306,6 +4441,9 @@ typedef struct spudgpu_shader_pipeline_desc {
  * @retval SPUD_SUCCESS The pipeline was created.
  * @retval SPUDRESULT_GPU_INVALID_DEVICE `device` is NULL.
  * @retval SPUDRESULT_NULL_DESC `desc` is NULL.
+ * @retval SPUDRESULT_STRUCT_WRONG_TYPE `desc->base.type` is not
+ *         SPUD_STRUCT_TYPE_GPU_SHADER_PIPELINE_DESC.
+ * @retval SPUDRESULT_STRUCT_UNKNOWN_IN_CHAIN `desc->base.next` is not NULL.
  * @retval SPUDRESULT_NULL_OUTPUT_PARAMETER `out_pipeline` is NULL.
  * @retval SPUDRESULT_GPU_VERTEX_AND_FRAGMENT_SHADER_REQUIRED
  *         `desc->fragment_module` is NULL, or both `desc->vertex_module` and
@@ -4387,6 +4525,7 @@ void spudgpu_cmd_push_constants(
  * Maps normalized device coordinates (NDC) ranging [-1, 1] horizontally and
  * vertically directly into a target render target screen pixel domain.
  */
+/* Frozen: a value. It never changes; a new need gets a new type. */
 typedef struct SPUDGPU_VIEWPORT {
 	/** X-coordinate of the upper-left corner of the viewport region in pixels. */
 	float x;
@@ -4435,6 +4574,7 @@ void spudgpu_cmd_set_viewports(
  * by the rasterizer, optimizing rendering execution for partial UI elements or
  * UI windows.
  */
+/* Frozen: a value. It never changes; a new need gets a new type. */
 typedef struct SPUDGPU_SCISSOR_RECT {
 	/** Leftmost X coordinate of the scissor bounding box in pixels. */
 	float x;
@@ -4561,6 +4701,7 @@ void spudgpu_cmd_draw_indexed_instanced(
  * directly by a compute shader and consumed by any of the three backends
  * with no repacking.
  */
+/* Frozen: read by the GPU, so its layout is the GPU's. It never changes; a new need gets a new type. */
 typedef struct spudgpu_draw_indirect_args {
 	/** Number of vertices to draw. */
 	uint32_t vertex_count;
@@ -4579,6 +4720,7 @@ typedef struct spudgpu_draw_indirect_args {
  * Bit-for-bit identical to VkDrawIndexedIndirectCommand /
  * D3D12_DRAW_INDEXED_ARGUMENTS / MTLDrawIndexedPrimitivesIndirectArguments.
  */
+/* Frozen: read by the GPU, so its layout is the GPU's. It never changes; a new need gets a new type. */
 typedef struct spudgpu_draw_indexed_indirect_args {
 	/** Number of indices to draw. */
 	uint32_t index_count;
@@ -4692,6 +4834,9 @@ void spudgpu_cmd_draw_indexed_indirect(
  * — Metal 3 mesh shading is required on every device this backend targets.
  */
 typedef struct spudgpu_mesh_shading_capabilities {
+	/** `type` is SPUD_STRUCT_TYPE_GPU_MESH_SHADING_CAPABILITIES; `next` is NULL (nothing is chained onto
+	 * this struct yet). The caller builds the chain and sets each type; SpudGPU fills in the rest. See SPUD_STRUCT_BASE. */
+	SPUD_STRUCT_BASE_OUT base;
 	/**
 	 * Whether the device can draw with a mesh-shader pipeline. When false
 	 * the limits below are 0.
@@ -4716,6 +4861,9 @@ typedef struct spudgpu_mesh_shading_capabilities {
  * @retval SPUD_SUCCESS `out_caps` was filled in.
  * @retval SPUDRESULT_GPU_INVALID_DEVICE `device` is NULL.
  * @retval SPUDRESULT_NULL_OUTPUT_PARAMETER `out_caps` is NULL.
+ * @retval SPUDRESULT_STRUCT_WRONG_TYPE `out_caps->base.type` is not
+ *         SPUD_STRUCT_TYPE_GPU_MESH_SHADING_CAPABILITIES.
+ * @retval SPUDRESULT_STRUCT_UNKNOWN_IN_CHAIN `out_caps->base.next` is not NULL.
  */
 SPUDRESULT spudgpu_get_mesh_shading_capabilities(
     spudgpu_device device,
@@ -4805,6 +4953,9 @@ void spudgpu_cmd_dispatch_mesh(
  * field today.
  */
 typedef struct spudgpu_depth_bounds_capabilities {
+	/** `type` is SPUD_STRUCT_TYPE_GPU_DEPTH_BOUNDS_CAPABILITIES; `next` is NULL (nothing is chained onto
+	 * this struct yet). The caller builds the chain and sets each type; SpudGPU fills in the rest. See SPUD_STRUCT_BASE. */
+	SPUD_STRUCT_BASE_OUT base;
 	/** Whether the device supports the depth bounds test. */
 	bool supported;
 } spudgpu_depth_bounds_capabilities;
@@ -4819,6 +4970,9 @@ typedef struct spudgpu_depth_bounds_capabilities {
  * @retval SPUD_SUCCESS `out_caps` was filled in.
  * @retval SPUDRESULT_GPU_INVALID_DEVICE `device` is NULL.
  * @retval SPUDRESULT_NULL_OUTPUT_PARAMETER `out_caps` is NULL.
+ * @retval SPUDRESULT_STRUCT_WRONG_TYPE `out_caps->base.type` is not
+ *         SPUD_STRUCT_TYPE_GPU_DEPTH_BOUNDS_CAPABILITIES.
+ * @retval SPUDRESULT_STRUCT_UNKNOWN_IN_CHAIN `out_caps->base.next` is not NULL.
  */
 SPUDRESULT spudgpu_get_depth_bounds_capabilities(
     spudgpu_device device,
@@ -4866,6 +5020,9 @@ void spudgpu_cmd_set_depth_bounds(
  * blend state, or render pass. Just a single compute stage and its layout.
  */
 typedef struct spudgpu_compute_pipeline_desc {
+	/** `type` is SPUD_STRUCT_TYPE_GPU_COMPUTE_PIPELINE_DESC; `next` is NULL (nothing is chained onto
+	 * this struct yet). Set by the caller. See SPUD_STRUCT_BASE. */
+	SPUD_STRUCT_BASE base;
 	/** Compiled compute shader module. Required. */
 	spudgpu_shader_module compute_module;
 
@@ -4896,10 +5053,9 @@ typedef struct spudgpu_compute_pipeline_desc {
 	/** Number of valid entries in #push_constant_ranges. */
 	uint32_t push_constant_range_count;
 
-#if _DEBUG
-	/** @brief A string identifier used for diagnostic tracking. */
+	/** @brief A name for diagnostics, or NULL. Copied, in every build; see
+	 * spud_debug_name_set(). */
 	const char *debug_name;
-#endif
 } spudgpu_compute_pipeline_desc;
 
 /**
@@ -4912,6 +5068,9 @@ typedef struct spudgpu_compute_pipeline_desc {
  * @retval SPUD_SUCCESS The pipeline was created.
  * @retval SPUDRESULT_GPU_INVALID_DEVICE `device` is NULL.
  * @retval SPUDRESULT_NULL_DESC `desc` is NULL.
+ * @retval SPUDRESULT_STRUCT_WRONG_TYPE `desc->base.type` is not
+ *         SPUD_STRUCT_TYPE_GPU_COMPUTE_PIPELINE_DESC.
+ * @retval SPUDRESULT_STRUCT_UNKNOWN_IN_CHAIN `desc->base.next` is not NULL.
  * @retval SPUDRESULT_NULL_OUTPUT_PARAMETER `out_pipeline` is NULL.
  * @retval SPUDRESULT_GPU_INVALID_COMPUTE_MODULE `desc->compute_module` is
  *         NULL.
@@ -5035,6 +5194,7 @@ void spudgpu_cmd_dispatch(
  *
  * Maps to Vulkan's VkBufferImageCopy / D3D12's PlacedFootprint region.
  */
+/* Frozen: a copy region, passed in arrays. It never changes; a new need gets a new type. */
 typedef struct spudgpu_image_buffer_copy_desc {
 	/** Byte offset into the buffer where this region starts (or is read from). */
 	uint64_t buffer_offset;
@@ -5208,6 +5368,7 @@ SPUDRESULT spudgpu_get_image_buffer_copy_offset_alignment(
  * of a blit vs. a plain copy) — most commonly src = mip N at full size, dst =
  * mip N+1 at half size, when generating a mip chain.
  */
+/* Frozen: a blit region, passed in arrays. It never changes; a new need gets a new type. */
 typedef struct spudgpu_image_blit_desc {
 	/** Mip level read from. */
 	uint32_t src_mip_level;
@@ -5295,6 +5456,7 @@ enum {
 /**
  * @brief One color attachment bound for a rendering pass.
  */
+/* Frozen: an array element, held by value in spudgpu_rendering_begin_desc. It never changes; a new need gets a new type. */
 typedef struct spudgpu_color_attachment_desc {
 	/** The view to render into. */
 	spudgpu_image_view image_view;
@@ -5311,6 +5473,7 @@ typedef struct spudgpu_color_attachment_desc {
 /**
  * @brief The depth/stencil attachment bound for a rendering pass.
  */
+/* Frozen: held by value in spudgpu_rendering_begin_desc. It never changes; a new need gets a new type. */
 typedef struct spudgpu_depth_attachment_desc {
 	/** NULL for no depth/stencil attachment. */
 	spudgpu_image_view image_view;
@@ -5352,6 +5515,9 @@ typedef struct spudgpu_depth_attachment_desc {
  * not supported: there is no `VkRenderPass` / `VkFramebuffer` path.
  */
 typedef struct spudgpu_rendering_begin_desc {
+	/** `type` is SPUD_STRUCT_TYPE_GPU_RENDERING_BEGIN_DESC; `next` is NULL (nothing is chained onto
+	 * this struct yet). Set by the caller. See SPUD_STRUCT_BASE. */
+	SPUD_STRUCT_BASE base;
 	/** The color attachments. Only the first #color_attachment_count are read. */
 	spudgpu_color_attachment_desc color_attachments[SPUDGPU_MAX_COLOR_ATTACHMENTS];
 	/** Number of valid entries in #color_attachments. */
@@ -5447,6 +5613,9 @@ typedef struct spudgpu_rendering_begin_desc {
  *
  * Must be matched with spudgpu_cmd_end_rendering() before submitting. Bind a
  * pipeline with spudgpu_cmd_bind_pipeline() after this call, not before.
+ *
+ * Nothing is recorded if `desc->base` is not {SPUD_STRUCT_TYPE_GPU_RENDERING_BEGIN_DESC, NULL}
+ * (see SPUD_STRUCT_BASE).
  *
  * @param[in] cmd  Command list being recorded.
  * @param[in] desc Attachments and render area.
@@ -5750,6 +5919,9 @@ SPUDRESULT spudgpu_get_timestamps(
  * is executed.
  */
 typedef struct spudgpu_bundle_inheritance_desc {
+	/** `type` is SPUD_STRUCT_TYPE_GPU_BUNDLE_INHERITANCE_DESC; `next` is NULL (nothing is chained onto
+	 * this struct yet). Set by the caller. See SPUD_STRUCT_BASE. */
+	SPUD_STRUCT_BASE base;
 	/**
 	 * The pass's color attachment formats, in its order. Only the first
 	 * #color_attachment_count are read.
@@ -5789,6 +5961,9 @@ typedef struct spudgpu_bundle_inheritance_desc {
  * buffer's inheritance info and to set its viewport and scissor. Close the
  * bundle with the shared spudgpu_end_command_list(); there is no separate
  * "end bundle" call.
+ *
+ * Nothing is recorded if `desc->base` is not {SPUD_STRUCT_TYPE_GPU_BUNDLE_INHERITANCE_DESC, NULL}
+ * (see SPUD_STRUCT_BASE).
  *
  * @param[in] bundle Command list created against an allocator of type
  *                   SPUDGPU_COMMAND_LIST_TYPE_BUNDLE.

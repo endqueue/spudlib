@@ -72,9 +72,7 @@ SPUDRESULT spudgpu_create_timestamp_set(
 void spudgpu_destroy_timestamp_set(spudgpu_timestamp_set set) {
 	if (!set)
 		return;
-#if _DEBUG
 	free((void *)set->_debug_name);
-#endif
 	set->~spudgpu_timestamp_set_d3d12();
 	free(set);
 }

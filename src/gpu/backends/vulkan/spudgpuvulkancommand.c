@@ -5,6 +5,7 @@
 #include "stdio.h"
 #include "stdlib.h"
 #include <assert.h>
+#include "../../../spudstructbase.h"
 
 #if __cplusplus
 extern "C" {
@@ -83,6 +84,7 @@ SPUDRESULT spudgpu_submit_command_lists_synced(
     if (!swap_chain) return SPUDRESULT_GPU_INVALID_SWAP_CHAIN;
 
     spudgpu_submit_desc desc = {0};
+    desc.base.type = SPUD_STRUCT_TYPE_GPU_SUBMIT_DESC;
     desc.cmd_lists      = cmd_lists;
     desc.cmd_list_count = cmd_list_count;
     desc.swap_chain     = swap_chain;
@@ -95,6 +97,8 @@ SPUDRESULT spudgpu_create_command_allocator(
 	spudgpu_command_allocator *out_allocator) {
     if (!device) return SPUDRESULT_GPU_INVALID_DEVICE;
     if (!desc) return SPUDRESULT_NULL_DESC;
+    const SPUDRESULT base_sr = spud_struct_check(&desc->base, SPUD_STRUCT_TYPE_GPU_COMMAND_ALLOCATOR_DESC);
+    if (base_sr != SPUD_SUCCESS) return base_sr;
     if (!out_allocator) return SPUDRESULT_NULL_OUTPUT_PARAMETER;
 
     // Re-query graphics family (you'll want to cache this on the device later)
@@ -151,9 +155,7 @@ SPUDRESULT spudgpu_reset_command_allocator(spudgpu_command_allocator allocator) 
 void spudgpu_destroy_command_allocator(spudgpu_command_allocator allocator) {
     if (!allocator) return;
     vkDestroyCommandPool(allocator->_device._logical_device_vk, allocator->_command_pool_vk, NULL);
-#if _DEBUG
     free((void *)allocator->_debug_name);
-#endif
     free(allocator);
 }
 
@@ -198,8 +200,8 @@ void spudgpu_destroy_command_list(spudgpu_command_list cmd) {
 #if _DEBUG
     // A list destroyed open is not open any more.
     spudgpuvulkan___debug_list_closed(cmd);
-    free((void *)cmd->_debug_name);
 #endif
+    free((void *)cmd->_debug_name);
     free(cmd);
 }
 
@@ -424,6 +426,8 @@ void spudgpu_cmd_draw_indexed_instanced(
 SPUDRESULT spudgpu_queue_submit(spudgpu_command_queue queue, const spudgpu_submit_desc *desc) {
     if (!queue) return SPUDRESULT_GPU_INVALID_COMMAND_QUEUE;
     if (!desc) return SPUDRESULT_NULL_DESC;
+    const SPUDRESULT base_sr = spud_struct_check(&desc->base, SPUD_STRUCT_TYPE_GPU_SUBMIT_DESC);
+    if (base_sr != SPUD_SUCCESS) return base_sr;
     if (!desc->cmd_lists) return SPUDRESULT_GPU_INVALID_COMMAND_LIST;
     if (desc->cmd_list_count == 0) return SPUDRESULT_ZERO_SIZE;
 
@@ -789,7 +793,13 @@ void spudgpu_cmd_pipeline_barrier(
     uint32_t image_barrier_count) {
     if (!cmd) return;
     if (buffer_barrier_count > 0 && !buffer_barriers) return;
+    for (uint32_t buffer_barriers_i = 0; buffer_barriers_i < buffer_barrier_count; ++buffer_barriers_i)
+        if (spud_struct_check(&buffer_barriers[buffer_barriers_i].base, SPUD_STRUCT_TYPE_GPU_BUFFER_BARRIER) != SPUD_SUCCESS)
+            return;
     if (image_barrier_count > 0 && !image_barriers) return;
+    for (uint32_t image_barriers_i = 0; image_barriers_i < image_barrier_count; ++image_barriers_i)
+        if (spud_struct_check(&image_barriers[image_barriers_i].base, SPUD_STRUCT_TYPE_GPU_IMAGE_BARRIER) != SPUD_SUCCESS)
+            return;
     if (buffer_barrier_count == 0 && image_barrier_count == 0) return;
 
     VkPipelineStageFlags src_stage = 0;

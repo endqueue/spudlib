@@ -22,6 +22,7 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include "../../../spudstructbase.h"
 
 
 #if __cplusplus
@@ -417,9 +418,7 @@ void spudgpu_destroy_surface(spudgpu_surface surface) {
 	vkDestroySurfaceKHR(
 		surface->_instance._instance_vk,
 		surface->_surface_vk, NULL);
-#if _DEBUG
 	free((void *)surface->_debug_name);
-#endif
 	free(surface);
 }
 
@@ -454,6 +453,8 @@ SPUDRESULT spudgpu_create_swap_chain(
 	spudgpu_swap_chain *out_swap_chain) {
 	if (!device) return SPUDRESULT_GPU_INVALID_DEVICE;
 	if (!desc) return SPUDRESULT_NULL_DESC;
+	const SPUDRESULT base_sr = spud_struct_check(&desc->base, SPUD_STRUCT_TYPE_GPU_SWAP_CHAIN_DESC);
+	if (base_sr != SPUD_SUCCESS) return base_sr;
 	if (!out_swap_chain) return SPUDRESULT_NULL_OUTPUT_PARAMETER;
 	if (!desc->surface) return SPUDRESULT_GPU_INVALID_SURFACE;
 	if (!desc->queue) return SPUDRESULT_GPU_INVALID_COMMAND_QUEUE;
@@ -493,28 +494,22 @@ void spudgpu_destroy_swap_chain(spudgpu_swap_chain swap_chain) {
 	for (uint32_t i = 0; i < swap_chain->_max_frames_in_flight; i++) {
 		vkDestroySemaphore(dev, swap_chain->_image_available_semaphores[i]._semaphore_vk, NULL);
 		vkDestroyFence(dev, swap_chain->_in_flight_fences_vk[i], NULL);
-#if _DEBUG
 		free((void *)swap_chain->_image_available_semaphores[i]._debug_name);
-#endif
 	}
 	// render_finished_semaphores is sized/indexed by swapchain image count, not
 	// _max_frames_in_flight — see spudgpuvulkan___fences_semaphores_swapchain_creation_internal.
 	for (uint32_t i = 0; i < swap_chain->_swapchain_images_count; i++) {
 		vkDestroySemaphore(dev, swap_chain->_render_finished_semaphores[i]._semaphore_vk, NULL);
-#if _DEBUG
 		free((void *)swap_chain->_render_finished_semaphores[i]._debug_name);
-#endif
 	}
 	free(swap_chain->_image_available_semaphores);
 	free(swap_chain->_render_finished_semaphores);
 	free(swap_chain->_in_flight_fences_vk);
 
 	for (uint32_t i = 0; i < swap_chain->_swapchain_image_views_count; i++) {
-#if _DEBUG
 		if (swap_chain->_swapchain_image_views_vk[i]._desc.parent_image)
 			free((void *)swap_chain->_swapchain_image_views_vk[i]._desc.parent_image->_debug_name);
 		free((void *)swap_chain->_swapchain_image_views_vk[i]._debug_name);
-#endif
 		free(swap_chain->_swapchain_image_views_vk[i]._desc.parent_image);
 		vkDestroyImageView(dev, swap_chain->_swapchain_image_views_vk[i]._image_view_vk, NULL);
 	}
@@ -526,9 +521,7 @@ void spudgpu_destroy_swap_chain(spudgpu_swap_chain swap_chain) {
 	if (swap_chain->_swapchain_vk != VK_NULL_HANDLE)
 		vkDestroySwapchainKHR(dev, swap_chain->_swapchain_vk, NULL);
 
-#if _DEBUG
 	free((void *)swap_chain->_debug_name);
-#endif
 	free(swap_chain);
 }
 
@@ -539,6 +532,7 @@ SPUDRESULT spudgpu_get_swap_chain_desc(
 	if (!swap_chain) return SPUDRESULT_GPU_INVALID_SWAP_CHAIN;
 	if (!out_desc) return SPUDRESULT_NULL_OUTPUT_PARAMETER;
 	*out_desc = ((spudgpu_swap_chain_vulkan *) swap_chain)->_desc;
+	out_desc->base = spud_struct_base(SPUD_STRUCT_TYPE_GPU_SWAP_CHAIN_DESC);
 	return SPUD_SUCCESS;
 }
 

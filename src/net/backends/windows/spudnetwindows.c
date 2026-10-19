@@ -91,9 +91,7 @@ void spudnet_instance_destroy(spudnet_instance instance) {
 	if (!instance)
 		return;
 	WSACleanup();
-#if _DEBUG
 	free((void *)instance->debug_name);
-#endif
 	free(instance);
 }
 
@@ -244,9 +242,7 @@ static SOCKET spudnet_win_open_tcp(int family) {
 // --------------------------------------------------------------------------
 
 struct spudnet_tcp_listener_t {
-#if _DEBUG
 	const char *debug_name;
-#endif
 	spudnet_instance            instance; // also every socket's it accepts
 	struct spudnet_win_endpoint endpoint;
 	// The last accept that failed.
@@ -254,9 +250,7 @@ struct spudnet_tcp_listener_t {
 };
 
 struct spudnet_tcp_socket_t {
-#if _DEBUG
 	const char *debug_name;
-#endif
 	spudnet_instance instance;
 	// The endpoint's handle is made by connect, read by other calls only
 	// once `open` says the connection is up, and closed only by destroy.
@@ -311,9 +305,7 @@ void spudnet_tcp_listener_destroy(spudnet_tcp_listener listener) {
 	if (!listener)
 		return;
 	spudnet_win_endpoint_free(&listener->endpoint);
-#if _DEBUG
 	free((void *)listener->debug_name);
-#endif
 	free(listener);
 }
 
@@ -490,9 +482,7 @@ void spudnet_tcp_socket_destroy(spudnet_tcp_socket socket) {
 	if (!socket)
 		return;
 	spudnet_win_endpoint_free(&socket->endpoint);
-#if _DEBUG
 	free((void *)socket->debug_name);
-#endif
 	free(socket);
 }
 
@@ -719,9 +709,7 @@ SPUDRESULT spudnet_tcp_socket_get_peer_address(
  * lookup is still out. So the resolver has a start of Winsock of its own
  * (`started`), made by create and given back when the resolver is freed. */
 struct spudnet_resolver_t {
-#if _DEBUG
 	const char *debug_name;
-#endif
 	volatile LONG references;
 	bool          started; // WSAStartup succeeded and WSACleanup is owed
 
@@ -754,9 +742,7 @@ static void spudnet_win_resolver_release(struct spudnet_resolver_t *resolver) {
 	free(resolver->addresses);
 	free(resolver->host);
 	bool started = resolver->started;
-#if _DEBUG
 	free((void *)resolver->debug_name);
-#endif
 	free(resolver);
 	// Last, with nothing of the resolver's left that could need Winsock.
 	if (started)

@@ -33,9 +33,7 @@ extern "C" {
  */
 
 struct spudaudio_device_t {
-#if _DEBUG
 	const char *debug_name;
-#endif
 	SPUDAUDIO_DIRECTION direction;
 	char persistent_id[256]; // the ALSA PCM name, e.g. "hw:CARD=PCH,DEV=0"
 	char name[128];          // DESC hint, lines joined; else the PCM name
@@ -48,9 +46,7 @@ struct spudaudio_device_t {
  * (once it exists) and read from any thread, hence C11 atomics.
  */
 struct spudaudio_stream_t {
-#if _DEBUG
 	const char *debug_name;
-#endif
 	snd_pcm_t *pcm;
 	// The PCM's channel map before this stream applied its layout (NULL if
 	// it had none / no layout requested) — restored on destroy, since some
@@ -126,9 +122,7 @@ struct alsa_watch {
 };
 
 struct spudaudio_instance_t {
-#if _DEBUG
 	const char *debug_name;
-#endif
 	struct spudaudio_device_t *devices; // every PCM ever enumerated
 	spudaudio_device *enumerated[2];    // latest array per direction
 	struct alsa_watch *watch;           // NULL while no device-event callback is set
@@ -538,17 +532,13 @@ SPUDRESULT spudaudio_destroy_instance(spudaudio_instance instance) {
 	struct spudaudio_device_t *dev = instance->devices;
 	while (dev) {
 		struct spudaudio_device_t *next = dev->next;
-#if _DEBUG
 		free((void *)dev->debug_name);
-#endif
 		free(dev);
 		dev = next;
 	}
 	free(instance->enumerated[0]);
 	free(instance->enumerated[1]);
-#if _DEBUG
 	free((void *)instance->debug_name);
-#endif
 	free(instance);
 	return SPUD_SUCCESS;
 }
@@ -1013,9 +1003,7 @@ static void alsa_free_stream(struct spudaudio_stream_t *s) {
 	free(s->original_chmap);
 	free(s->planes);
 	free(s->scratch);
-#if _DEBUG
 	free((void *)s->debug_name);
-#endif
 	free(s);
 }
 

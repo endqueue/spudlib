@@ -48,9 +48,7 @@ extern "C" {
  * member of another instance from one of its own. The rest (an HTTP
  * client, a resolver) take theirs only to refuse NULL. */
 struct spudnet_instance_t {
-#if _DEBUG
 	const char *debug_name;
-#endif
 	// So that the struct has a size, and two instances two addresses.
 	char held;
 };
@@ -209,9 +207,7 @@ enum spudnet_http_phase {
  * `head` when the response arrives, records its failures in `error`, and
  * keeps its own state behind `backend`. */
 struct spudnet_http_transfer_t {
-#if _DEBUG
 	const char *debug_name;
-#endif
 	spudnet_http_client     client;
 	enum spudnet_http_phase phase;
 

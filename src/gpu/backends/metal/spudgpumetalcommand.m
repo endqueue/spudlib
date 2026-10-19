@@ -14,6 +14,7 @@
 #include <Metal/Metal.h>
 #include <assert.h>
 #include <string.h>
+#include "../../../spudstructbase.h"
 
 spudgpu_command_queue spudgpu_get_graphics_queue(spudgpu_device device) {
 	if (!device)
@@ -114,6 +115,7 @@ SPUDRESULT spudgpu_submit_command_lists_synced(
 
 	// spudgpu_queue_submit with only the command lists and the swap chain set.
 	spudgpu_submit_desc desc = {0};
+	desc.base.type = SPUD_STRUCT_TYPE_GPU_SUBMIT_DESC;
 	desc.cmd_lists           = cmd_lists;
 	desc.cmd_list_count      = cmd_list_count;
 	desc.swap_chain          = swap_chain;
@@ -185,6 +187,9 @@ SPUDRESULT spudgpu_create_command_allocator(
 		return SPUDRESULT_GPU_INVALID_DEVICE;
 	if (!desc)
 		return SPUDRESULT_NULL_DESC;
+	const SPUDRESULT base_sr = spud_struct_check(&desc->base, SPUD_STRUCT_TYPE_GPU_COMMAND_ALLOCATOR_DESC);
+	if (base_sr != SPUD_SUCCESS)
+		return base_sr;
 	if (!out_allocator)
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
 
@@ -215,9 +220,7 @@ void spudgpu_destroy_command_allocator(spudgpu_command_allocator allocator) {
 		// _parent_queue is a borrowed reference into the device's cached
 		// queue families (owned/released by spudgpu_destroy_instance) - not
 		// this allocator's to release.
-#if _DEBUG
 		free((void *)allocator_metal->_debug_name);
-#endif
 		free(allocator_metal);
 	}
 }
@@ -277,8 +280,8 @@ void spudgpu_destroy_command_list(spudgpu_command_list cmd) {
 		// A list destroyed open is not open any more.
 		if (cmd_list_metal->_parent_allocator->_open_list == cmd)
 			cmd_list_metal->_parent_allocator->_open_list = NULL;
-		free((void *)cmd_list_metal->_debug_name);
 #endif
+		free((void *)cmd_list_metal->_debug_name);
 		free(cmd_list_metal);
 	}
 }
@@ -1025,6 +1028,9 @@ SPUDRESULT spudgpu_queue_submit(
 		return SPUDRESULT_GPU_INVALID_COMMAND_QUEUE;
 	if (!desc)
 		return SPUDRESULT_NULL_DESC;
+	const SPUDRESULT base_sr = spud_struct_check(&desc->base, SPUD_STRUCT_TYPE_GPU_SUBMIT_DESC);
+	if (base_sr != SPUD_SUCCESS)
+		return base_sr;
 	if (!desc->cmd_lists)
 		return SPUDRESULT_GPU_INVALID_COMMAND_LIST;
 	if (desc->cmd_list_count == 0)

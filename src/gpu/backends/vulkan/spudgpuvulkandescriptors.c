@@ -6,6 +6,7 @@
 #include "spudgpuvulkan.h"
 #include <stdlib.h>
 #include <string.h>
+#include "../../../spudstructbase.h"
 
 #if __cplusplus
 extern "C" {
@@ -49,6 +50,8 @@ SPUDRESULT spudgpu_create_sampler(
     spudgpu_sampler *out_sampler) {
     if (!device) return SPUDRESULT_GPU_INVALID_DEVICE;
     if (!desc) return SPUDRESULT_NULL_DESC;
+    const SPUDRESULT base_sr = spud_struct_check(&desc->base, SPUD_STRUCT_TYPE_GPU_SAMPLER_DESC);
+    if (base_sr != SPUD_SUCCESS) return base_sr;
     if (!out_sampler) return SPUDRESULT_NULL_OUTPUT_PARAMETER;
 
     VkSamplerCreateInfo info = {0};
@@ -77,12 +80,10 @@ SPUDRESULT spudgpu_create_sampler(
         return SPUDRESULT_API_SPECIFIC_FAILURE;
     }
 
-#if _DEBUG
     if (spud_debug_name_set(pResult, desc->debug_name) != SPUD_SUCCESS) {
         spudgpu_destroy_sampler(pResult);
         return SPUDRESULT_OUT_OF_MEMORY;
     }
-#endif
 
     *out_sampler = pResult;
     return SPUD_SUCCESS;
@@ -91,9 +92,7 @@ SPUDRESULT spudgpu_create_sampler(
 void spudgpu_destroy_sampler(spudgpu_sampler sampler) {
     if (!sampler) return;
     vkDestroySampler(sampler->_device._logical_device_vk, sampler->_sampler_vk, NULL);
-#if _DEBUG
     free((void *)sampler->_debug_name);
-#endif
     free(sampler);
 }
 
@@ -103,6 +102,8 @@ SPUDRESULT spudgpu_create_descriptor_set_layout(
 	spudgpu_descriptor_set_layout *out_layout) {
     if (!device) return SPUDRESULT_GPU_INVALID_DEVICE;
     if (!desc) return SPUDRESULT_NULL_DESC;
+    const SPUDRESULT base_sr = spud_struct_check(&desc->base, SPUD_STRUCT_TYPE_GPU_DESCRIPTOR_SET_LAYOUT_DESC);
+    if (base_sr != SPUD_SUCCESS) return base_sr;
     if (!out_layout) return SPUDRESULT_NULL_OUTPUT_PARAMETER;
     if (desc->binding_count > SPUDGPU_MAX_DESCRIPTOR_BINDINGS_PER_SET) return SPUDRESULT_GPU_TOO_MANY_DESCRIPTOR_BINDINGS;
 
@@ -162,13 +163,11 @@ SPUDRESULT spudgpu_create_descriptor_set_layout(
     spudgpu_descriptor_set_layout_vulkan *pResult =
             malloc(sizeof(spudgpu_descriptor_set_layout_vulkan));
     memcpy(pResult, &result, sizeof(spudgpu_descriptor_set_layout_vulkan));
-#if _DEBUG
     if (spud_debug_name_set(pResult, desc->debug_name) != SPUD_SUCCESS) {
         spudgpu_destroy_descriptor_set_layout(pResult);
         return SPUDRESULT_OUT_OF_MEMORY;
     }
     pResult->_desc.debug_name = pResult->_debug_name;
-#endif
 
     *out_layout = pResult;
     return SPUD_SUCCESS;
@@ -181,9 +180,7 @@ void spudgpu_destroy_descriptor_set_layout(
         layout->_device._logical_device_vk,
         layout->_layout_vk,
         NULL);
-#if _DEBUG
     free((void *)layout->_debug_name);
-#endif
     free(layout);
 }
 
@@ -193,6 +190,8 @@ SPUDRESULT spudgpu_create_descriptor_pool(
 	spudgpu_descriptor_pool *out_pool) {
     if (!device) return SPUDRESULT_GPU_INVALID_DEVICE;
     if (!desc) return SPUDRESULT_NULL_DESC;
+    const SPUDRESULT base_sr = spud_struct_check(&desc->base, SPUD_STRUCT_TYPE_GPU_DESCRIPTOR_POOL_DESC);
+    if (base_sr != SPUD_SUCCESS) return base_sr;
     if (!out_pool) return SPUDRESULT_NULL_OUTPUT_PARAMETER;
     if (desc->pool_size_count > SPUDGPU_MAX_DESCRIPTOR_POOL_SIZES) return SPUDRESULT_GPU_TOO_MANY_DESCRIPTOR_POOLS;
 
@@ -247,13 +246,11 @@ SPUDRESULT spudgpu_create_descriptor_pool(
 
     spudgpu_descriptor_pool_vulkan *pResult = malloc(sizeof(spudgpu_descriptor_pool_vulkan));
     memcpy(pResult, &result, sizeof(spudgpu_descriptor_pool_vulkan));
-#if _DEBUG
     if (spud_debug_name_set(pResult, desc->debug_name) != SPUD_SUCCESS) {
         spudgpu_destroy_descriptor_pool(pResult);
         return SPUDRESULT_OUT_OF_MEMORY;
     }
     pResult->_desc.debug_name = pResult->_debug_name;
-#endif
 
     *out_pool = pResult;
     return SPUD_SUCCESS;
@@ -274,9 +271,7 @@ void spudgpu_destroy_descriptor_pool(
         pool->_device._logical_device_vk,
         pool->_pool_vk,
         NULL);
-#if _DEBUG
     free((void *)pool->_debug_name);
-#endif
     free(pool);
 }
 
@@ -286,6 +281,8 @@ SPUDRESULT spudgpu_create_descriptor_sets(
     spudgpu_descriptor_set *out_sets) {
     if (!device) return SPUDRESULT_GPU_INVALID_DEVICE;
     if (!desc) return SPUDRESULT_NULL_DESC;
+    const SPUDRESULT base_sr = spud_struct_check(&desc->base, SPUD_STRUCT_TYPE_GPU_DESCRIPTOR_SET_DESC);
+    if (base_sr != SPUD_SUCCESS) return base_sr;
     if (!out_sets) return SPUDRESULT_NULL_OUTPUT_PARAMETER;
     if (!desc->pool) return SPUDRESULT_GPU_INVALID_DESCRIPTOR_POOL;
 	if (!desc->set_count)
@@ -326,9 +323,7 @@ SPUDRESULT spudgpu_create_descriptor_sets(
             // The pool reset at the next frame will reclaim the Vulkan-side sets.
             return SPUDRESULT_GPU_INTERNAL_DESCRIPTOR_SET_ALLOCATION_FAIL;
         }
-#if _DEBUG
         pSet->_debug_name = NULL;
-#endif
         pSet->_pool = *desc->pool;
         pSet->_set_vk = vk_sets[i];
         out_sets[i] = (spudgpu_descriptor_set) pSet;
@@ -343,6 +338,9 @@ void spudgpu_update_descriptor_sets(
     const spudgpu_write_descriptor_set *writes,
     uint32_t write_count) {
     if (!device || !writes || !write_count) return;
+    for (uint32_t writes_i = 0; writes_i < write_count; ++writes_i)
+        if (spud_struct_check(&writes[writes_i].base, SPUD_STRUCT_TYPE_GPU_WRITE_DESCRIPTOR_SET) != SPUD_SUCCESS)
+            return;
 
     // We translate each SpudGPU write into a VkWriteDescriptorSet on the stack.
     // For larger write counts a heap allocation would be safer, but the per-frame
@@ -587,9 +585,7 @@ void spudgpuvulkan___destroy_bindless_state(spudgpu_device device) {
     spudgpu_descriptor_set_layout_vulkan *layoutWrapper = (spudgpu_descriptor_set_layout_vulkan *) state->layout;
     if (layoutWrapper) {
         vkDestroyDescriptorSetLayout(device->_logical_device_vk, layoutWrapper->_layout_vk, NULL);
-#if _DEBUG
         free((void *)layoutWrapper->_debug_name);
-#endif
         free(layoutWrapper);
     }
     free(state);
@@ -616,8 +612,12 @@ SPUDRESULT spudgpu_get_bindless_capabilities(
         spudgpu_bindless_capabilities *out_caps) {
     if (!device) return SPUDRESULT_GPU_INVALID_DEVICE;
     if (!out_caps) return SPUDRESULT_NULL_OUTPUT_PARAMETER;
+    const SPUDRESULT base_sr = spud_struct_out_check(&out_caps->base, SPUD_STRUCT_TYPE_GPU_BINDLESS_CAPABILITIES);
+    if (base_sr != SPUD_SUCCESS) return base_sr;
 
     memset(out_caps, 0, sizeof(*out_caps));
+    // Whatever was copied over it, the base stays the caller's.
+    out_caps->base = spud_struct_base_out(SPUD_STRUCT_TYPE_GPU_BINDLESS_CAPABILITIES);
     // Reflects whether the global layout/pool/set actually got created —
     // eagerly attempted once at device creation (see
     // spudgpuvulkancontext.c), so this is normally already known-good by the

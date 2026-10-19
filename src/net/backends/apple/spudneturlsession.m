@@ -69,9 +69,7 @@ SPUDRESULT spudnet_instance_create(
 void spudnet_instance_destroy(spudnet_instance instance) {
 	if (!instance)
 		return;
-#if _DEBUG
 	free((void *)instance->debug_name);
-#endif
 	free(instance);
 }
 
@@ -613,9 +611,7 @@ static BOOL spudnet_apple_answer_challenge(
 @end
 
 struct spudnet_http_client_t {
-#if _DEBUG
 	const char *debug_name;
-#endif
 	NSURLSession        *session;
 	SpudNetHTTPDelegate *delegate;
 };
@@ -689,9 +685,7 @@ void spudnet_http_client_destroy(spudnet_http_client client) {
 	[client->session invalidateAndCancel];
 	[client->session release];
 	[client->delegate release];
-#if _DEBUG
 	free((void *)client->debug_name);
-#endif
 	free(client);
 }
 
@@ -1158,9 +1152,7 @@ SPUDRESULT spudnet_http_backend_recv(
 @end
 
 struct spudnet_websocket_t {
-#if _DEBUG
 	const char *debug_name;
-#endif
 	spudnet_instance       instance;
 	SpudNetWebSocketState *state;
 	// Made by connect, under the state's condition; nil until then.
@@ -1210,9 +1202,7 @@ void spudnet_websocket_destroy(spudnet_websocket socket) {
 	[socket->task release];
 	[socket->session release];
 	[socket->state release];
-#if _DEBUG
 	free((void *)socket->debug_name);
-#endif
 	free(socket);
 }
 
