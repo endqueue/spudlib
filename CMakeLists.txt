@@ -423,7 +423,8 @@ if(NOT TARGET spudlib)
                 # picks up CMAKE_MSVC_RUNTIME_LIBRARY and matches our CRT per-config
                 # (the SDK's libs are release-only /MD and mismatch /MDd debug builds).
                 # Prefer eqdev/.deps/SPIRV-Cross if vendored (shared with the Metal
-                # path and ApricotFields, no duplicate checkout); else fetch.
+                # path and any caller that builds it too, no duplicate checkout); else
+                # fetch.
                 include(FetchContent)
                 set(SPIRV_CROSS_CLI OFF CACHE BOOL "" FORCE)
                 set(SPIRV_CROSS_ENABLE_TESTS OFF CACHE BOOL "" FORCE)

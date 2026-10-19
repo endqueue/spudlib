@@ -69,6 +69,58 @@
         "CMAKE_MACOSX_BUNDLE": "OFF",
         "CMAKE_CONFIGURATION_TYPES": "Debug;Release;RelWithDebInfo"
       }
+    },
+    {
+      "name": "sanitize-asan",
+      "hidden": true,
+      "cacheVariables": {
+        "CMAKE_CONFIGURATION_TYPES": "Debug",
+        "CMAKE_C_FLAGS": "-fsanitize=address,undefined -fno-sanitize-recover=undefined -fno-omit-frame-pointer",
+        "CMAKE_CXX_FLAGS": "-fsanitize=address,undefined -fno-sanitize-recover=undefined -fno-omit-frame-pointer",
+        "CMAKE_OBJC_FLAGS": "-fsanitize=address,undefined -fno-sanitize-recover=undefined -fno-omit-frame-pointer",
+        "CMAKE_OBJCXX_FLAGS": "-fsanitize=address,undefined -fno-sanitize-recover=undefined -fno-omit-frame-pointer",
+        "CMAKE_EXE_LINKER_FLAGS": "-fsanitize=address,undefined",
+        "CMAKE_SHARED_LINKER_FLAGS": "-fsanitize=address,undefined",
+        "CMAKE_MODULE_LINKER_FLAGS": "-fsanitize=address,undefined"
+      }
+    },
+    {
+      "name": "sanitize-tsan",
+      "hidden": true,
+      "cacheVariables": {
+        "CMAKE_CONFIGURATION_TYPES": "Debug",
+        "CMAKE_C_FLAGS": "-fsanitize=thread -fno-omit-frame-pointer",
+        "CMAKE_CXX_FLAGS": "-fsanitize=thread -fno-omit-frame-pointer",
+        "CMAKE_OBJC_FLAGS": "-fsanitize=thread -fno-omit-frame-pointer",
+        "CMAKE_OBJCXX_FLAGS": "-fsanitize=thread -fno-omit-frame-pointer",
+        "CMAKE_EXE_LINKER_FLAGS": "-fsanitize=thread",
+        "CMAKE_SHARED_LINKER_FLAGS": "-fsanitize=thread",
+        "CMAKE_MODULE_LINKER_FLAGS": "-fsanitize=thread"
+      }
+    },
+    {
+      "name": "macos-metal-asan",
+      "displayName": "SpudLib macOS ASan+UBSan",
+      "inherits": ["sanitize-asan", "macos-metal"],
+      "binaryDir": "${sourceDir}/build-macos-metal-asan"
+    },
+    {
+      "name": "macos-metal-tsan",
+      "displayName": "SpudLib macOS TSan",
+      "inherits": ["sanitize-tsan", "macos-metal"],
+      "binaryDir": "${sourceDir}/build-macos-metal-tsan"
+    },
+    {
+      "name": "linux-vulkan-asan",
+      "displayName": "SpudLib Linux ASan+UBSan",
+      "inherits": ["sanitize-asan", "linux-vulkan"],
+      "binaryDir": "${sourceDir}/build-linux-vulkan-asan"
+    },
+    {
+      "name": "linux-vulkan-tsan",
+      "displayName": "SpudLib Linux TSan",
+      "inherits": ["sanitize-tsan", "linux-vulkan"],
+      "binaryDir": "${sourceDir}/build-linux-vulkan-tsan"
     }
   ],
   "buildPresets": [
@@ -179,6 +231,78 @@
       "displayName": "SpudLib iOS Metal (simulator) (RelWithDebInfo)",
       "configurePreset": "iossimulator-metal",
       "configuration": "RelWithDebInfo"
+    },
+    {
+      "name": "macos-metal-asan-debug",
+      "displayName": "SpudLib macOS ASan+UBSan (Debug)",
+      "configurePreset": "macos-metal-asan",
+      "configuration": "Debug"
+    },
+    {
+      "name": "macos-metal-tsan-debug",
+      "displayName": "SpudLib macOS TSan (Debug)",
+      "configurePreset": "macos-metal-tsan",
+      "configuration": "Debug"
+    },
+    {
+      "name": "linux-vulkan-asan-debug",
+      "displayName": "SpudLib Linux ASan+UBSan (Debug)",
+      "configurePreset": "linux-vulkan-asan",
+      "configuration": "Debug"
+    },
+    {
+      "name": "linux-vulkan-tsan-debug",
+      "displayName": "SpudLib Linux TSan (Debug)",
+      "configurePreset": "linux-vulkan-tsan",
+      "configuration": "Debug"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "macos-metal-asan",
+      "configurePreset": "macos-metal-asan",
+      "configuration": "Debug",
+      "output": {
+        "outputOnFailure": true
+      },
+      "environment": {
+        "ASAN_OPTIONS": "halt_on_error=1:detect_stack_use_after_return=1:check_initialization_order=1:strict_init_order=1",
+        "UBSAN_OPTIONS": "print_stacktrace=1:halt_on_error=1"
+      }
+    },
+    {
+      "name": "macos-metal-tsan",
+      "configurePreset": "macos-metal-tsan",
+      "configuration": "Debug",
+      "output": {
+        "outputOnFailure": true
+      },
+      "environment": {
+        "TSAN_OPTIONS": "halt_on_error=1:second_deadlock_stack=1"
+      }
+    },
+    {
+      "name": "linux-vulkan-asan",
+      "configurePreset": "linux-vulkan-asan",
+      "configuration": "Debug",
+      "output": {
+        "outputOnFailure": true
+      },
+      "environment": {
+        "ASAN_OPTIONS": "halt_on_error=1:detect_stack_use_after_return=1:check_initialization_order=1:strict_init_order=1",
+        "UBSAN_OPTIONS": "print_stacktrace=1:halt_on_error=1"
+      }
+    },
+    {
+      "name": "linux-vulkan-tsan",
+      "configurePreset": "linux-vulkan-tsan",
+      "configuration": "Debug",
+      "output": {
+        "outputOnFailure": true
+      },
+      "environment": {
+        "TSAN_OPTIONS": "halt_on_error=1:second_deadlock_stack=1"
+      }
     }
   ]
 }

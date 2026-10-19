@@ -2,7 +2,7 @@
 // SpudGPU Metal backend - timestamp sets: an MTLCounterSampleBuffer of the
 // timestamp counter set, sampled at a pass's stage boundaries
 // (spudgpumetalrenderpass.m) and resolved on the CPU. Run on an Apple M5 Pro
-// by aprend_gpu_tests (2026-10-16).
+// by a caller's GPU tests (2026-10-16).
 //
 
 #if SPUDGPU_COMPILE_METAL_API

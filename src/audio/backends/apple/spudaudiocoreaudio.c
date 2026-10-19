@@ -378,8 +378,8 @@ static const AudioObjectPropertyAddress ca_hardware_watched[] = {
 };
 
 // Its address is the queue-specific key that marks a watch's queue; the
-// value stored under it is the watch.
-static char ca_watch_key;
+// value stored under it is the watch. Only the address is used.
+static const char ca_watch_key = 0;
 
 // Every endpoint there is now, malloc'd: the same test and the same identity
 // (UID + direction) as spudaudio_enumerate_devices, for both directions.

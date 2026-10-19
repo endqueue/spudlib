@@ -95,7 +95,7 @@ static SPUDRESULT spudgpumetal___internal_cross_compile_spirv_to_msl(
 	// shader's argument buffer struct each resource the entry point doesn't
 	// use, which moves every member after it: a shader that read binding 5
 	// of a set it used nothing else of below 5 but 0 read the wrong argument
-	// (apricottests' test_lit_sky, 2026-10-17). With this every resource the
+	// (a caller's test, 2026-10-17). With this every resource the
 	// shader declares is in its struct, used or not. A shader that doesn't
 	// even declare a binding of the layout below one it reads is still out
 	// of step: CLAUDE.md's known gaps say so.
