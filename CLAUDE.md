@@ -580,7 +580,25 @@ dispatches in a row found that Metal set the pipeline state on the encoder
 at every `spudgpu_cmd_bind_compute_pipeline`, which validation refuses as
 redundant; it is set only when it differs from the encoder's now
 (`_encoder_compute_pipeline_state`), as the render encoder's state already
-was.
+was. The same day `aprend_gpu_tests` ran on Vulkan under synchronization
+validation (`VK_LAYER_VALIDATE_SYNC=1`, both devices), which found 15
+hazards per device in the Vulkan backend's image barriers: `layout_to_access`
+gave colour and depth attachments write access only (a pass loading its
+target read it unordered after the transition), and `layout_to_stage` gave
+depth the early fragment tests only (depth is also written at the late
+ones). Attachments are read and written now, depth at both stages, and
+`spudgpu_cmd_pipeline_barrier`'s RENDER_TARGET and DEPTH_WRITE states read
+and write too; rerun, no message on either device. Also the same day:
+the D3D12 debug layer's messages reached only an attached debugger, so a
+plain Debug run showed none. A Debug build now registers an
+`ID3D12InfoQueue1` message callback per device
+(`spudgpu_d3d12_debug_message`, `spudgpud3d12context.cpp`) that prints
+corruptions, errors and warnings to stdout as `D3D12 <SEVERITY>: [ id ]
+text`, as Vulkan's validation layer does with no messenger; nothing is
+registered when the layer is off or the runtime predates
+`ID3D12InfoQueue1`. Run without a debugger on both devices: silent on the
+tests as they are, and a mismatched clear value put in for the test
+printed its 6 warnings on each.
 
 - **Vulkan** — reference backend, plain C23, complete. Build against this first;
   D3D12 and Metal follow its shape.

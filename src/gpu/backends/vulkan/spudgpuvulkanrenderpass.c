@@ -42,10 +42,13 @@ static VkAccessFlags layout_to_access(VkImageLayout layout) {
 	// order nothing, and GENERAL to GENERAL is the header's ordering barrier.
 	case VK_IMAGE_LAYOUT_GENERAL:
 		return VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+	// An attachment is read as well as written: a load op of LOAD, blending
+	// and the depth test all read it, so a barrier into one must make it
+	// visible to reads and one out of it must wait for them.
 	case VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL:
-		return VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+		return VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
 	case VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL:
-		return VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+		return VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
 	case VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL:
 		return VK_ACCESS_SHADER_READ_BIT;
 	case VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL:
@@ -67,8 +70,10 @@ static VkPipelineStageFlags layout_to_stage(VkImageLayout layout) {
 		return VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_VERTEX_SHADER_BIT;
 	case VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL:
 		return VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+	// Depth and stencil are tested and written at the early fragment tests,
+	// or the late ones when a shader writes depth or discards.
 	case VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL:
-		return VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
+		return VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
 	case VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL:
 		return VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
 	case VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL:

@@ -46,11 +46,80 @@ static void ___internal_spudgpu_d3d12_destroy_command_queues_per_family(
 	}
 }
 
+#if _DEBUG
+static const char *spudgpu_d3d12_severity_name(D3D12_MESSAGE_SEVERITY severity) {
+	switch (severity) {
+	case D3D12_MESSAGE_SEVERITY_CORRUPTION:
+		return "CORRUPTION";
+	case D3D12_MESSAGE_SEVERITY_ERROR:
+		return "ERROR";
+	case D3D12_MESSAGE_SEVERITY_WARNING:
+		return "WARNING";
+	case D3D12_MESSAGE_SEVERITY_INFO:
+		return "INFO";
+	default:
+		return "MESSAGE";
+	}
+}
+
+// Prints the debug layer's corruptions, errors and warnings to stdout, as
+// Vulkan's validation layer does with no messenger registered, so a Debug run
+// shows them without a debugger attached. Info and plain messages are left
+// to the debugger. Called on whichever thread made the D3D12 call that
+// raised the message.
+static void CALLBACK spudgpu_d3d12_debug_message(
+    D3D12_MESSAGE_CATEGORY category,
+    D3D12_MESSAGE_SEVERITY severity,
+    D3D12_MESSAGE_ID id,
+    LPCSTR description,
+    void *context) {
+	(void)category;
+	if (severity == D3D12_MESSAGE_SEVERITY_INFO || severity == D3D12_MESSAGE_SEVERITY_MESSAGE)
+		return;
+	const spudgpu_device_d3d12 *device = (const spudgpu_device_d3d12 *)context;
+	const char *name                   = device->_debug_name ? device->_debug_name : "";
+	printf("D3D12 %s: [ %u ] %s%s%s\n",
+	    spudgpu_d3d12_severity_name(severity),
+	    (unsigned)id,
+	    description,
+	    name[0] ? " | device " : "",
+	    name);
+}
+
+// Registers spudgpu_d3d12_debug_message on [device]. Nothing to do when the
+// debug layer is off (no info queue) or the runtime predates
+// ID3D12InfoQueue1; the device works the same either way, so neither is a
+// failure.
+static void spudgpu_d3d12_register_debug_callback(spudgpu_device_d3d12 *device) {
+	Microsoft::WRL::ComPtr<ID3D12InfoQueue1> info_queue;
+	if (FAILED(device->_d3d_device.As(&info_queue)))
+		return;
+	DWORD cookie = 0;
+	if (FAILED(info_queue->RegisterMessageCallback(spudgpu_d3d12_debug_message, D3D12_MESSAGE_CALLBACK_FLAG_NONE, device, &cookie)))
+		return;
+	device->_debug_callback_cookie = cookie;
+}
+
+// Unregisters it, before the device it was given as context goes.
+static void spudgpu_d3d12_unregister_debug_callback(spudgpu_device_d3d12 *device) {
+	if (device->_debug_callback_cookie == 0)
+		return;
+	Microsoft::WRL::ComPtr<ID3D12InfoQueue1> info_queue;
+	if (SUCCEEDED(device->_d3d_device.As(&info_queue)))
+		info_queue->UnregisterMessageCallback(device->_debug_callback_cookie);
+	device->_debug_callback_cookie = 0;
+}
+#endif
+
 // Releases a device and everything it owns: its command queues and, if one
 // was ever created, its bindless state.
 static void ___internal_spudgpu_d3d12_destroy_device(spudgpu_device device) {
 	if (!device)
 		return;
+#if _DEBUG
+	// First: the callback's context is this device.
+	spudgpu_d3d12_unregister_debug_callback(device);
+#endif
 	___internal_spudgpu_d3d12_destroy_command_queues_per_family(
 	    device->_cmd_queues_direct);
 	___internal_spudgpu_d3d12_destroy_command_queues_per_family(
@@ -315,11 +384,17 @@ SPUDRESULT spudgpu_enumerate_devices(
 			}
 			gpuDevice->_dxgi_adapter = dxgiAdapter;
 			gpuDevice->_instance     = instance;
+#if _DEBUG
+			spudgpu_d3d12_register_debug_callback(gpuDevice);
+#endif
 			if (!___internal_spudgpu_d3d12_make_device_properties(gpuDevice)) {
 				___internal_spudgpu_d3d12_destroy_device(gpuDevice);
 				___internal_spudgpu_d3d12_destroy_devices(
 				    gpuDevices.data(), gpuDevices.size());
-				return sr;
+				// A feature query failed. This returned the outer sr,
+				// still SPUD_SUCCESS here, reporting success with every
+				// device released.
+				return SPUDRESULT_API_SPECIFIC_FAILURE;
 			}
 
 			// Create the premade command queues for use.

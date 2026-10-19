@@ -264,6 +264,14 @@ typedef struct spudgpu_device_t {
 	// several threads.
 	spudgpu_d3d12_indirect_signatures _indirect_signatures;
 	std::mutex _indirect_signature_mutex;
+
+#if _DEBUG
+	// The debug layer's message callback (spudgpu_d3d12_debug_message),
+	// registered when the device is made and unregistered when it is
+	// destroyed. 0 if none was registered: the debug layer is off, or the
+	// runtime has no ID3D12InfoQueue1 (before Windows 11).
+	DWORD _debug_callback_cookie;
+#endif
 } spudgpu_device_d3d12;
 
 typedef struct spudgpu_command_queue_t {
