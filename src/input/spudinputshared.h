@@ -6,10 +6,10 @@
  *
  * The front end is the public API: every argument check, the table of
  * gamepads and their ids, and what each call reports. A backend finds
- * devices and reads them, through the spudinput_backend_* functions at the
- * end of this file, and writes what it reads into the front end's records.
- * So a rule about a call - what it checks, in what order, what it returns -
- * is written once, in the front end, and is the same on every platform.
+ * devices and reads them, through the functions listed at the end of this
+ * file, and writes what it reads into the front end's records. So a rule
+ * about a call - what it checks, in what order, what it returns - is
+ * written once, in the front end, and is the same on every platform.
  *
  * Nothing outside src/ includes this.
  */
@@ -22,8 +22,8 @@ extern "C" {
 
 /*
  * One connected gamepad: everything the public calls report about it, as of
- * the last poll. A backend fills it during spudinput_backend_poll() and
- * nowhere else, so that nothing a caller reads changes between two polls.
+ * the last poll. A backend fills it during its poll and nowhere else, so
+ * that nothing a caller reads changes between two polls.
  */
 typedef struct spudinput_gamepad_record {
 	spudinput_gamepad_id id;
@@ -97,83 +97,79 @@ void spudinput_shared_copy_utf8(
 /* ---- What a backend provides ---- */
 
 /*
- * Exactly one set of these is compiled in: a backend's, or the front end's
- * own (in spudinput.c) where no native API is built, which has no API to
- * accept and so is never asked for anything else.
+ * A backend is part of the front end's translation unit: src/spudinput.c
+ * includes the file of each native API built in (with SPUDINPUT_FRONT_END
+ * defined; a backend file compiled on its own is an #error), and CMake
+ * compiles none of them separately. Each backend defines the verbs below
+ * as spudinput_<api>_<verb> (spudinput_gameinput_poll, ...), every one with
+ * SPUDINPUT_BACKEND_FUNCTION, and the front end calls them from one switch
+ * per verb on the instance's desc.native_api. So any number of APIs can be
+ * built into one build, and the caller's desc chooses between them.
+ *
+ * SPUDINPUT_BACKEND_FUNCTION makes each of them static and forces it
+ * inline into its case of the switch: a call through the switch costs a
+ * compare and a branch, no call. Each is called from exactly one case, so
+ * inlining copies nothing. Where it can't be inlined the build fails:
+ * clang and GCC refuse an always_inline function they can't inline, and
+ * the MSVC build makes C4714 an error. MSVC inlines nothing at /Ob0 (its
+ * Debug default), so there the cases are plain direct calls.
  *
  * Arguments have been checked by the front end: instance and record are
  * real, the record's gamepad has the feature the call is about, and every
  * number is in range.
- */
-
-/* Whether this build can bind an instance to `api`. */
-bool spudinput_backend_has_api(SPUDINPUT_NATIVE_API api);
-
-/* Starts the platform's API for a new instance whose desc is in place.
- * Returns SPUDRESULT_SPUDINPUT_UNSUPPORTED for a read_in_background the API
- * doesn't offer. On failure the instance is freed by the front end and
- * spudinput_backend_destroy() is not called. */
-SPUDRESULT spudinput_backend_create(spudinput_instance instance);
-
-/* Ends it. Every gamepad has already been released. */
-void spudinput_backend_destroy(spudinput_instance instance);
-
-/*
- * Reads the platform: for each device still there, finds its record or
- * adds one (filling its properties), writes its state, battery, touch and
- * motion samples, and marks it seen. The front end then releases what was
- * not seen and rewrites the id list.
  *
- * On failure the front end changes nothing more, so a backend allocates
- * what it needs before it writes to any record.
+ * SPUDRESULT create(spudinput_instance instance)
+ *     Starts the platform's API for a new instance whose desc is in place.
+ *     Returns SPUDRESULT_SPUDINPUT_UNSUPPORTED for a read_in_background the
+ *     API doesn't offer. On failure the instance is freed by the front end
+ *     and destroy is not called.
+ *
+ * void destroy(spudinput_instance instance)
+ *     Ends it. Every gamepad has already been released.
+ *
+ * SPUDRESULT poll(spudinput_instance instance)
+ *     Reads the platform: for each device still there, finds its record or
+ *     adds one (filling its properties), writes its state, battery, touch
+ *     and motion samples, and marks it seen. The front end then releases
+ *     what was not seen and rewrites the id list. On failure the front end
+ *     changes nothing more, so a backend allocates what it needs before it
+ *     writes to any record.
+ *
+ * void release_gamepad(spudinput_instance instance, spudinput_gamepad_record *record)
+ *     The device has gone, or the instance is going: stops its motors and
+ *     its sensors and frees `record->native`.
+ *
+ * SPUDRESULT set_rumble(spudinput_instance instance, spudinput_gamepad_record *record,
+ *                       const SPUDINPUT_GAMEPAD_RUMBLE *rumble)
+ *
+ * SPUDRESULT set_motion_enabled(spudinput_instance instance, spudinput_gamepad_record *record,
+ *                               bool enabled)
+ *     `enabled` differs from record->motion_enabled, which the front end
+ *     sets afterwards, and record->motion_samples is allocated.
+ *
+ * SPUDRESULT set_light_color(spudinput_instance instance, spudinput_gamepad_record *record,
+ *                            float red, float green, float blue)
+ *
+ * SPUDRESULT set_player_indicator(spudinput_instance instance, spudinput_gamepad_record *record,
+ *                                 uint32_t player)
+ *
+ * void get_button_label(spudinput_instance instance, spudinput_gamepad_record *record,
+ *                       SPUDINPUT_GAMEPAD_BUTTONS button, char *out_label, uint32_t label_size)
+ *     `out_label` holds an empty string on entry; left so where the
+ *     platform has no label. `button` is exactly one bit.
+ *
+ * void get_axis_label(spudinput_instance instance, spudinput_gamepad_record *record,
+ *                     SPUDINPUT_GAMEPAD_AXIS axis, char *out_label, uint32_t label_size)
+ *     As get_button_label.
+ *
+ * A new native API adds its file, its #include and a case in each switch
+ * in src/spudinput.c, and its name to the list in spudinput_has_api.
  */
-SPUDRESULT spudinput_backend_poll(spudinput_instance instance);
-
-/* The device has gone, or the instance is going: stops its motors and its
- * sensors and frees `record->native`. */
-void spudinput_backend_release_gamepad(
-    spudinput_instance instance,
-    spudinput_gamepad_record *record);
-
-SPUDRESULT spudinput_backend_set_rumble(
-    spudinput_instance instance,
-    spudinput_gamepad_record *record,
-    const SPUDINPUT_GAMEPAD_RUMBLE *rumble);
-
-/* `enabled` differs from record->motion_enabled, which the front end sets
- * afterwards, and record->motion_samples is allocated. */
-SPUDRESULT spudinput_backend_set_motion_enabled(
-    spudinput_instance instance,
-    spudinput_gamepad_record *record,
-    bool enabled);
-
-SPUDRESULT spudinput_backend_set_light_color(
-    spudinput_instance instance,
-    spudinput_gamepad_record *record,
-    float red,
-    float green,
-    float blue);
-
-SPUDRESULT spudinput_backend_set_player_indicator(
-    spudinput_instance instance,
-    spudinput_gamepad_record *record,
-    uint32_t player);
-
-/* `out_label` holds an empty string on entry; left so where the platform
- * has no label. `button` is exactly one bit. */
-void spudinput_backend_get_button_label(
-    spudinput_instance instance,
-    spudinput_gamepad_record *record,
-    SPUDINPUT_GAMEPAD_BUTTONS button,
-    char *out_label,
-    uint32_t label_size);
-
-void spudinput_backend_get_axis_label(
-    spudinput_instance instance,
-    spudinput_gamepad_record *record,
-    SPUDINPUT_GAMEPAD_AXIS axis,
-    char *out_label,
-    uint32_t label_size);
+#if defined(_MSC_VER) && !defined(__clang__)
+#define SPUDINPUT_BACKEND_FUNCTION static __forceinline
+#else
+#define SPUDINPUT_BACKEND_FUNCTION static inline __attribute__((always_inline))
+#endif
 
 #ifdef __cplusplus
 }

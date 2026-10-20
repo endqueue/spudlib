@@ -1,6 +1,12 @@
 // Only when the GameInput API is compiled in (see spudinput.h).
 #if SPUDINPUT_COMPILE_GAMEINPUT
 
+// Part of src/spudinput.c's translation unit, which includes it; never
+// compiled on its own (see src/input/spudinputshared.h).
+#ifndef SPUDINPUT_FRONT_END
+#error "spudinputgameinput.c is included by src/spudinput.c, not compiled on its own."
+#endif
+
 /*
  * SpudInput on GameInput: Windows.
  *
@@ -346,9 +352,7 @@ static void spudinput_gameinput_read_battery(spudinput_gamepad_record *record) {
 
 /* ---- Backend ---- */
 
-bool spudinput_backend_has_api(SPUDINPUT_NATIVE_API api) { return api == SPUDINPUT_NATIVE_API_GAMEINPUT; }
-
-SPUDRESULT spudinput_backend_create(spudinput_instance instance) {
+SPUDINPUT_BACKEND_FUNCTION SPUDRESULT spudinput_gameinput_create(spudinput_instance instance) {
 	spudinput_gameinput_instance *backend = (spudinput_gameinput_instance *)calloc(1, sizeof(spudinput_gameinput_instance));
 	if (!backend)
 		return SPUDRESULT_OUT_OF_MEMORY;
@@ -389,7 +393,7 @@ SPUDRESULT spudinput_backend_create(spudinput_instance instance) {
 	return SPUD_SUCCESS;
 }
 
-void spudinput_backend_destroy(spudinput_instance instance) {
+SPUDINPUT_BACKEND_FUNCTION void spudinput_gameinput_destroy(spudinput_instance instance) {
 	spudinput_gameinput_instance *backend = (spudinput_gameinput_instance *)instance->backend;
 
 	spudinput_gameinput_unregister(backend);
@@ -401,7 +405,7 @@ void spudinput_backend_destroy(spudinput_instance instance) {
 	instance->backend = NULL;
 }
 
-SPUDRESULT spudinput_backend_poll(spudinput_instance instance) {
+SPUDINPUT_BACKEND_FUNCTION SPUDRESULT spudinput_gameinput_poll(spudinput_instance instance) {
 	spudinput_gameinput_instance *backend = (spudinput_gameinput_instance *)instance->backend;
 
 	/* GameInput's work, the device callbacks among it, without the lock:
@@ -508,7 +512,7 @@ SPUDRESULT spudinput_backend_poll(spudinput_instance instance) {
 	return SPUD_SUCCESS;
 }
 
-void spudinput_backend_release_gamepad(
+SPUDINPUT_BACKEND_FUNCTION void spudinput_gameinput_release_gamepad(
     spudinput_instance instance,
     spudinput_gamepad_record *record) {
 	(void)instance;
@@ -521,7 +525,7 @@ void spudinput_backend_release_gamepad(
 	record->native = NULL;
 }
 
-SPUDRESULT spudinput_backend_set_rumble(
+SPUDINPUT_BACKEND_FUNCTION SPUDRESULT spudinput_gameinput_set_rumble(
     spudinput_instance instance,
     spudinput_gamepad_record *record,
     const SPUDINPUT_GAMEPAD_RUMBLE *rumble) {
@@ -535,7 +539,7 @@ SPUDRESULT spudinput_backend_set_rumble(
 /* What follows is never reached: no gamepad is given the feature it is
  * about, and the front end checks that first. */
 
-SPUDRESULT spudinput_backend_set_motion_enabled(
+SPUDINPUT_BACKEND_FUNCTION SPUDRESULT spudinput_gameinput_set_motion_enabled(
     spudinput_instance instance,
     spudinput_gamepad_record *record,
     bool enabled) {
@@ -545,7 +549,7 @@ SPUDRESULT spudinput_backend_set_motion_enabled(
 	return SPUDRESULT_SPUDINPUT_FEATURE_NOT_PRESENT;
 }
 
-SPUDRESULT spudinput_backend_set_light_color(
+SPUDINPUT_BACKEND_FUNCTION SPUDRESULT spudinput_gameinput_set_light_color(
     spudinput_instance instance,
     spudinput_gamepad_record *record,
     float red,
@@ -559,7 +563,7 @@ SPUDRESULT spudinput_backend_set_light_color(
 	return SPUDRESULT_SPUDINPUT_FEATURE_NOT_PRESENT;
 }
 
-SPUDRESULT spudinput_backend_set_player_indicator(
+SPUDINPUT_BACKEND_FUNCTION SPUDRESULT spudinput_gameinput_set_player_indicator(
     spudinput_instance instance,
     spudinput_gamepad_record *record,
     uint32_t player) {
@@ -569,7 +573,7 @@ SPUDRESULT spudinput_backend_set_player_indicator(
 	return SPUDRESULT_SPUDINPUT_FEATURE_NOT_PRESENT;
 }
 
-void spudinput_backend_get_button_label(
+SPUDINPUT_BACKEND_FUNCTION void spudinput_gameinput_get_button_label(
     spudinput_instance instance,
     spudinput_gamepad_record *record,
     SPUDINPUT_GAMEPAD_BUTTONS button,
@@ -582,7 +586,7 @@ void spudinput_backend_get_button_label(
 	(void)label_size;
 }
 
-void spudinput_backend_get_axis_label(
+SPUDINPUT_BACKEND_FUNCTION void spudinput_gameinput_get_axis_label(
     spudinput_instance instance,
     spudinput_gamepad_record *record,
     SPUDINPUT_GAMEPAD_AXIS axis,

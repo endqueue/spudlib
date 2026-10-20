@@ -1,6 +1,12 @@
 // Only when the GameController API is compiled in (see spudinput.h).
 #if SPUDINPUT_COMPILE_GAMECONTROLLER
 
+// Part of src/spudinput.c's translation unit, which includes it; never
+// compiled on its own (see src/input/spudinputshared.h).
+#ifndef SPUDINPUT_FRONT_END
+#error "spudinputgamecontroller.m is included by src/spudinput.c, not compiled on its own."
+#endif
+
 /*
  * SpudInput on the GameController framework: macOS, iOS and iPadOS.
  *
@@ -557,9 +563,7 @@ static void spudinput_gc_fill_record(
 
 /* ---- The backend ---- */
 
-bool spudinput_backend_has_api(SPUDINPUT_NATIVE_API api) { return api == SPUDINPUT_NATIVE_API_GAMECONTROLLER; }
-
-SPUDRESULT spudinput_backend_create(spudinput_instance instance) {
+SPUDINPUT_BACKEND_FUNCTION SPUDRESULT spudinput_gamecontroller_create(spudinput_instance instance) {
 #if TARGET_OS_OSX
 	/* The framework's switch is the process's, not an instance's: two
 	 * instances that ask for different answers both get the later one. */
@@ -572,9 +576,9 @@ SPUDRESULT spudinput_backend_create(spudinput_instance instance) {
 	return SPUD_SUCCESS;
 }
 
-void spudinput_backend_destroy(spudinput_instance instance) { (void)instance; }
+SPUDINPUT_BACKEND_FUNCTION void spudinput_gamecontroller_destroy(spudinput_instance instance) { (void)instance; }
 
-SPUDRESULT spudinput_backend_poll(spudinput_instance instance) {
+SPUDINPUT_BACKEND_FUNCTION SPUDRESULT spudinput_gamecontroller_poll(spudinput_instance instance) {
 	/* The framework's list and its handlers belong to the main thread. */
 	if (![NSThread isMainThread])
 		return SPUDRESULT_GENERAL_FAILURE;
@@ -628,7 +632,7 @@ SPUDRESULT spudinput_backend_poll(spudinput_instance instance) {
 	return SPUD_SUCCESS;
 }
 
-void spudinput_backend_release_gamepad(
+SPUDINPUT_BACKEND_FUNCTION void spudinput_gamecontroller_release_gamepad(
     spudinput_instance instance,
     spudinput_gamepad_record *record) {
 	(void)instance;
@@ -654,7 +658,7 @@ void spudinput_backend_release_gamepad(
 	record->native = NULL;
 }
 
-SPUDRESULT spudinput_backend_set_rumble(
+SPUDINPUT_BACKEND_FUNCTION SPUDRESULT spudinput_gamecontroller_set_rumble(
     spudinput_instance instance,
     spudinput_gamepad_record *record,
     const SPUDINPUT_GAMEPAD_RUMBLE *rumble) {
@@ -683,7 +687,7 @@ SPUDRESULT spudinput_backend_set_rumble(
 	return result;
 }
 
-SPUDRESULT spudinput_backend_set_motion_enabled(
+SPUDINPUT_BACKEND_FUNCTION SPUDRESULT spudinput_gamecontroller_set_motion_enabled(
     spudinput_instance instance,
     spudinput_gamepad_record *record,
     bool enabled) {
@@ -718,7 +722,7 @@ SPUDRESULT spudinput_backend_set_motion_enabled(
 	return SPUD_SUCCESS;
 }
 
-SPUDRESULT spudinput_backend_set_light_color(
+SPUDINPUT_BACKEND_FUNCTION SPUDRESULT spudinput_gamecontroller_set_light_color(
     spudinput_instance instance,
     spudinput_gamepad_record *record,
     float red,
@@ -735,7 +739,7 @@ SPUDRESULT spudinput_backend_set_light_color(
 	return SPUD_SUCCESS;
 }
 
-SPUDRESULT spudinput_backend_set_player_indicator(
+SPUDINPUT_BACKEND_FUNCTION SPUDRESULT spudinput_gamecontroller_set_player_indicator(
     spudinput_instance instance,
     spudinput_gamepad_record *record,
     uint32_t player) {
@@ -747,7 +751,7 @@ SPUDRESULT spudinput_backend_set_player_indicator(
 	return SPUD_SUCCESS;
 }
 
-void spudinput_backend_get_button_label(
+SPUDINPUT_BACKEND_FUNCTION void spudinput_gamecontroller_get_button_label(
     spudinput_instance instance,
     spudinput_gamepad_record *record,
     SPUDINPUT_GAMEPAD_BUTTONS button,
@@ -762,7 +766,7 @@ void spudinput_backend_get_button_label(
 	}
 }
 
-void spudinput_backend_get_axis_label(
+SPUDINPUT_BACKEND_FUNCTION void spudinput_gamecontroller_get_axis_label(
     spudinput_instance instance,
     spudinput_gamepad_record *record,
     SPUDINPUT_GAMEPAD_AXIS axis,

@@ -6,7 +6,9 @@ not a GPU library with utilities bolted on. See `../CLAUDE.md` (the `eqdev` work
 root) for how this repo fits into the workspace; this file covers
 conventions specific to working inside `spudlib` itself. `MATURITY_TODO.md`
 is the plan for bringing the parts written before these rules up to them
-(SpudInput's struct bases, a rework of SpudFiles; `bindings/` is removed).
+(SpudInput's struct bases; a version, result names, the caller's allocator
+and a stability policy for every module; a rework of SpudFiles; `bindings/`
+is removed).
 
 ## The one rule everything else follows
 
@@ -113,9 +115,22 @@ orientation worked out; labels are only the platform's own words, and no table
 of devices or button art lives here. The public API is one front end,
 `src/spudinput.c`: every argument check and the table of gamepads and ids are
 there, once, and a backend only finds devices and reads them into the front
-end's records through the `spudinput_backend_*` functions of
-`src/input/spudinputshared.h`. A new rule about a call goes in the front end,
-not in each backend.
+end's records through the verbs listed in `src/input/spudinputshared.h`. A
+new rule about a call goes in the front end, not in each backend. Any number
+of native APIs may be built into one build (GameInput and XInput on Windows,
+once XInput is written), and the caller's `native_api` chooses between them,
+so the front end dispatches on it with one `switch` per verb, never a
+function-pointer table. The backends are part of the front end's translation
+unit: `src/spudinput.c` includes each one built in (CMake compiles none of
+them alone, and the front end is compiled as Objective-C where GameController
+is in), and each defines its verbs as `spudinput_<api>_<verb>` with
+`SPUDINPUT_BACKEND_FUNCTION`, static and forced inline into its case. A
+dispatched call is then a compare and a branch, with no call. A function the
+compiler can't inline fails the build (always_inline on clang and GCC, C4714
+as an error on MSVC), except that MSVC inlines nothing at `/Ob0`, its Debug
+default. On 2026-10-20 the macOS Debug and Release objects held no
+`spudinput_gamecontroller_*` function, only the blocks inside them; the
+GameInput and evdev builds were not run.
 
 ## SpudGPU conventions
 

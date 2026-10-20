@@ -120,15 +120,19 @@ if(NOT TARGET spudlib)
         set(SPUDINPUT_APIS GAMEINPUT)
     endif()
     message(STATUS "SpudInput: native APIs: ${SPUDINPUT_APIS}")
+    # The backends are not compiled on their own: src/spudinput.c includes
+    # each one built in, so that the front end's switch on the instance's
+    # API inlines them (see src/input/spudinputshared.h).
     if("GAMECONTROLLER" IN_LIST SPUDINPUT_APIS)
-        # Objective-C; OBJC is already enabled for Apple above.
-        list(APPEND SPUDLIB_SOURCES src/input/backends/apple/spudinputgamecontroller.m)
+        # The GameController backend is Objective-C, so the front end that
+        # includes it is compiled as Objective-C (OBJC is already enabled
+        # for Apple above).
+        set_source_files_properties(src/spudinput.c PROPERTIES LANGUAGE OBJC)
     endif()
-    if("EVDEV" IN_LIST SPUDINPUT_APIS)
-        list(APPEND SPUDLIB_SOURCES src/input/backends/linux/spudinputevdev.c)
-    endif()
-    if("GAMEINPUT" IN_LIST SPUDINPUT_APIS)
-        list(APPEND SPUDLIB_SOURCES src/input/backends/windows/spudinputgameinput.c)
+    if(MSVC)
+        # A SPUDINPUT_BACKEND_FUNCTION MSVC didn't inline (C4714, level 4)
+        # fails the build instead of becoming a call.
+        set_source_files_properties(src/spudinput.c PROPERTIES COMPILE_OPTIONS "/w14714;/we4714")
     endif()
 
     # SpudAudio: the target platform and the native audio APIs built for it,

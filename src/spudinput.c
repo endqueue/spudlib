@@ -15,108 +15,275 @@
 /* Every button bit spudinput.h names. */
 #define SPUDINPUT_ALL_BUTTONS ((SPUDINPUT_GAMEPAD_BUTTONS)((SPUDINPUT_GAMEPAD_BUTTON_TOUCH_SURFACE_1 << 1) - 1))
 
-/* ---- With no native API built in ---- */
+/* ---- The backends ---- */
 
-#if !(SPUDINPUT_COMPILE_GAMECONTROLLER || SPUDINPUT_COMPILE_GAMEINPUT || SPUDINPUT_COMPILE_XINPUT || SPUDINPUT_COMPILE_EVDEV)
+/* Each native API built in is compiled here, in this translation unit, so
+ * that its functions are inlined into the switches below. See
+ * src/input/spudinputshared.h. */
+#define SPUDINPUT_FRONT_END 1
+#if SPUDINPUT_COMPILE_GAMECONTROLLER
+#include "input/backends/apple/spudinputgamecontroller.m"
+#endif
+#if SPUDINPUT_COMPILE_GAMEINPUT
+#include "input/backends/windows/spudinputgameinput.c"
+#endif
+#if SPUDINPUT_COMPILE_EVDEV
+#include "input/backends/linux/spudinputevdev.c"
+#endif
 
-/* There is no API to bind an instance to, so no instance is ever made and
- * none of the rest is ever reached. */
+/* ---- Dispatch ---- */
 
-bool spudinput_backend_has_api(SPUDINPUT_NATIVE_API api) {
-	(void)api;
-	return false;
+/* Whether this build can bind an instance to `api`. */
+static bool spudinput_has_api(SPUDINPUT_NATIVE_API api) {
+	switch (api) {
+#if SPUDINPUT_COMPILE_GAMECONTROLLER
+	case SPUDINPUT_NATIVE_API_GAMECONTROLLER:
+		return true;
+#endif
+#if SPUDINPUT_COMPILE_GAMEINPUT
+	case SPUDINPUT_NATIVE_API_GAMEINPUT:
+		return true;
+#endif
+#if SPUDINPUT_COMPILE_EVDEV
+	case SPUDINPUT_NATIVE_API_EVDEV:
+		return true;
+#endif
+	default:
+		return false;
+	}
 }
 
-SPUDRESULT spudinput_backend_create(spudinput_instance instance) {
-	(void)instance;
-	return SPUDRESULT_NOT_IMPLEMENTED_YET;
+/* One per verb of spudinputshared.h, each a switch on the instance's API.
+ * Only an instance of an API built in exists, so `default` is never
+ * reached; it returns what an unknown API would get. */
+
+static SPUDRESULT spudinput_backend_create(spudinput_instance instance) {
+	switch (instance->desc.native_api) {
+#if SPUDINPUT_COMPILE_GAMECONTROLLER
+	case SPUDINPUT_NATIVE_API_GAMECONTROLLER:
+		return spudinput_gamecontroller_create(instance);
+#endif
+#if SPUDINPUT_COMPILE_GAMEINPUT
+	case SPUDINPUT_NATIVE_API_GAMEINPUT:
+		return spudinput_gameinput_create(instance);
+#endif
+#if SPUDINPUT_COMPILE_EVDEV
+	case SPUDINPUT_NATIVE_API_EVDEV:
+		return spudinput_evdev_create(instance);
+#endif
+	default:
+		return SPUDRESULT_INVALID_API;
+	}
 }
 
-void spudinput_backend_destroy(spudinput_instance instance) { (void)instance; }
-
-SPUDRESULT spudinput_backend_poll(spudinput_instance instance) {
-	(void)instance;
-	return SPUDRESULT_NOT_IMPLEMENTED_YET;
+static void spudinput_backend_destroy(spudinput_instance instance) {
+	switch (instance->desc.native_api) {
+#if SPUDINPUT_COMPILE_GAMECONTROLLER
+	case SPUDINPUT_NATIVE_API_GAMECONTROLLER:
+		spudinput_gamecontroller_destroy(instance);
+		return;
+#endif
+#if SPUDINPUT_COMPILE_GAMEINPUT
+	case SPUDINPUT_NATIVE_API_GAMEINPUT:
+		spudinput_gameinput_destroy(instance);
+		return;
+#endif
+#if SPUDINPUT_COMPILE_EVDEV
+	case SPUDINPUT_NATIVE_API_EVDEV:
+		spudinput_evdev_destroy(instance);
+		return;
+#endif
+	default:
+		return;
+	}
 }
 
-void spudinput_backend_release_gamepad(
+static SPUDRESULT spudinput_backend_poll(spudinput_instance instance) {
+	switch (instance->desc.native_api) {
+#if SPUDINPUT_COMPILE_GAMECONTROLLER
+	case SPUDINPUT_NATIVE_API_GAMECONTROLLER:
+		return spudinput_gamecontroller_poll(instance);
+#endif
+#if SPUDINPUT_COMPILE_GAMEINPUT
+	case SPUDINPUT_NATIVE_API_GAMEINPUT:
+		return spudinput_gameinput_poll(instance);
+#endif
+#if SPUDINPUT_COMPILE_EVDEV
+	case SPUDINPUT_NATIVE_API_EVDEV:
+		return spudinput_evdev_poll(instance);
+#endif
+	default:
+		return SPUDRESULT_INVALID_API;
+	}
+}
+
+static void spudinput_backend_release_gamepad(
     spudinput_instance instance,
     spudinput_gamepad_record *record) {
-	(void)instance;
-	(void)record;
+	switch (instance->desc.native_api) {
+#if SPUDINPUT_COMPILE_GAMECONTROLLER
+	case SPUDINPUT_NATIVE_API_GAMECONTROLLER:
+		spudinput_gamecontroller_release_gamepad(instance, record);
+		return;
+#endif
+#if SPUDINPUT_COMPILE_GAMEINPUT
+	case SPUDINPUT_NATIVE_API_GAMEINPUT:
+		spudinput_gameinput_release_gamepad(instance, record);
+		return;
+#endif
+#if SPUDINPUT_COMPILE_EVDEV
+	case SPUDINPUT_NATIVE_API_EVDEV:
+		spudinput_evdev_release_gamepad(instance, record);
+		return;
+#endif
+	default:
+		return;
+	}
 }
 
-SPUDRESULT spudinput_backend_set_rumble(
+static SPUDRESULT spudinput_backend_set_rumble(
     spudinput_instance instance,
     spudinput_gamepad_record *record,
     const SPUDINPUT_GAMEPAD_RUMBLE *rumble) {
-	(void)instance;
-	(void)record;
-	(void)rumble;
-	return SPUDRESULT_NOT_IMPLEMENTED_YET;
+	switch (instance->desc.native_api) {
+#if SPUDINPUT_COMPILE_GAMECONTROLLER
+	case SPUDINPUT_NATIVE_API_GAMECONTROLLER:
+		return spudinput_gamecontroller_set_rumble(instance, record, rumble);
+#endif
+#if SPUDINPUT_COMPILE_GAMEINPUT
+	case SPUDINPUT_NATIVE_API_GAMEINPUT:
+		return spudinput_gameinput_set_rumble(instance, record, rumble);
+#endif
+#if SPUDINPUT_COMPILE_EVDEV
+	case SPUDINPUT_NATIVE_API_EVDEV:
+		return spudinput_evdev_set_rumble(instance, record, rumble);
+#endif
+	default:
+		return SPUDRESULT_INVALID_API;
+	}
 }
 
-SPUDRESULT spudinput_backend_set_motion_enabled(
+static SPUDRESULT spudinput_backend_set_motion_enabled(
     spudinput_instance instance,
     spudinput_gamepad_record *record,
     bool enabled) {
-	(void)instance;
-	(void)record;
-	(void)enabled;
-	return SPUDRESULT_NOT_IMPLEMENTED_YET;
+	switch (instance->desc.native_api) {
+#if SPUDINPUT_COMPILE_GAMECONTROLLER
+	case SPUDINPUT_NATIVE_API_GAMECONTROLLER:
+		return spudinput_gamecontroller_set_motion_enabled(instance, record, enabled);
+#endif
+#if SPUDINPUT_COMPILE_GAMEINPUT
+	case SPUDINPUT_NATIVE_API_GAMEINPUT:
+		return spudinput_gameinput_set_motion_enabled(instance, record, enabled);
+#endif
+#if SPUDINPUT_COMPILE_EVDEV
+	case SPUDINPUT_NATIVE_API_EVDEV:
+		return spudinput_evdev_set_motion_enabled(instance, record, enabled);
+#endif
+	default:
+		return SPUDRESULT_INVALID_API;
+	}
 }
 
-SPUDRESULT spudinput_backend_set_light_color(
+static SPUDRESULT spudinput_backend_set_light_color(
     spudinput_instance instance,
     spudinput_gamepad_record *record,
     float red,
     float green,
     float blue) {
-	(void)instance;
-	(void)record;
-	(void)red;
-	(void)green;
-	(void)blue;
-	return SPUDRESULT_NOT_IMPLEMENTED_YET;
+	switch (instance->desc.native_api) {
+#if SPUDINPUT_COMPILE_GAMECONTROLLER
+	case SPUDINPUT_NATIVE_API_GAMECONTROLLER:
+		return spudinput_gamecontroller_set_light_color(instance, record, red, green, blue);
+#endif
+#if SPUDINPUT_COMPILE_GAMEINPUT
+	case SPUDINPUT_NATIVE_API_GAMEINPUT:
+		return spudinput_gameinput_set_light_color(instance, record, red, green, blue);
+#endif
+#if SPUDINPUT_COMPILE_EVDEV
+	case SPUDINPUT_NATIVE_API_EVDEV:
+		return spudinput_evdev_set_light_color(instance, record, red, green, blue);
+#endif
+	default:
+		return SPUDRESULT_INVALID_API;
+	}
 }
 
-SPUDRESULT spudinput_backend_set_player_indicator(
+static SPUDRESULT spudinput_backend_set_player_indicator(
     spudinput_instance instance,
     spudinput_gamepad_record *record,
     uint32_t player) {
-	(void)instance;
-	(void)record;
-	(void)player;
-	return SPUDRESULT_NOT_IMPLEMENTED_YET;
+	switch (instance->desc.native_api) {
+#if SPUDINPUT_COMPILE_GAMECONTROLLER
+	case SPUDINPUT_NATIVE_API_GAMECONTROLLER:
+		return spudinput_gamecontroller_set_player_indicator(instance, record, player);
+#endif
+#if SPUDINPUT_COMPILE_GAMEINPUT
+	case SPUDINPUT_NATIVE_API_GAMEINPUT:
+		return spudinput_gameinput_set_player_indicator(instance, record, player);
+#endif
+#if SPUDINPUT_COMPILE_EVDEV
+	case SPUDINPUT_NATIVE_API_EVDEV:
+		return spudinput_evdev_set_player_indicator(instance, record, player);
+#endif
+	default:
+		return SPUDRESULT_INVALID_API;
+	}
 }
 
-void spudinput_backend_get_button_label(
+static void spudinput_backend_get_button_label(
     spudinput_instance instance,
     spudinput_gamepad_record *record,
     SPUDINPUT_GAMEPAD_BUTTONS button,
     char *out_label,
     uint32_t label_size) {
-	(void)instance;
-	(void)record;
-	(void)button;
-	(void)out_label;
-	(void)label_size;
+	switch (instance->desc.native_api) {
+#if SPUDINPUT_COMPILE_GAMECONTROLLER
+	case SPUDINPUT_NATIVE_API_GAMECONTROLLER:
+		spudinput_gamecontroller_get_button_label(instance, record, button, out_label, label_size);
+		return;
+#endif
+#if SPUDINPUT_COMPILE_GAMEINPUT
+	case SPUDINPUT_NATIVE_API_GAMEINPUT:
+		spudinput_gameinput_get_button_label(instance, record, button, out_label, label_size);
+		return;
+#endif
+#if SPUDINPUT_COMPILE_EVDEV
+	case SPUDINPUT_NATIVE_API_EVDEV:
+		spudinput_evdev_get_button_label(instance, record, button, out_label, label_size);
+		return;
+#endif
+	default:
+		return;
+	}
 }
 
-void spudinput_backend_get_axis_label(
+static void spudinput_backend_get_axis_label(
     spudinput_instance instance,
     spudinput_gamepad_record *record,
     SPUDINPUT_GAMEPAD_AXIS axis,
     char *out_label,
     uint32_t label_size) {
-	(void)instance;
-	(void)record;
-	(void)axis;
-	(void)out_label;
-	(void)label_size;
-}
-
+	switch (instance->desc.native_api) {
+#if SPUDINPUT_COMPILE_GAMECONTROLLER
+	case SPUDINPUT_NATIVE_API_GAMECONTROLLER:
+		spudinput_gamecontroller_get_axis_label(instance, record, axis, out_label, label_size);
+		return;
 #endif
+#if SPUDINPUT_COMPILE_GAMEINPUT
+	case SPUDINPUT_NATIVE_API_GAMEINPUT:
+		spudinput_gameinput_get_axis_label(instance, record, axis, out_label, label_size);
+		return;
+#endif
+#if SPUDINPUT_COMPILE_EVDEV
+	case SPUDINPUT_NATIVE_API_EVDEV:
+		spudinput_evdev_get_axis_label(instance, record, axis, out_label, label_size);
+		return;
+#endif
+	default:
+		return;
+	}
+}
 
 /* ---- Shared with the backends ---- */
 
@@ -213,7 +380,7 @@ SPUDRESULT spudinput_instance_create(
 	if (!out_instance)
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
 	*out_instance = NULL;
-	if (desc->native_api == SPUDINPUT_NATIVE_API_NONE || !spudinput_backend_has_api(desc->native_api))
+	if (!spudinput_has_api(desc->native_api))
 		return SPUDRESULT_INVALID_API;
 
 	spudinput_instance instance = (spudinput_instance)calloc(1, sizeof(struct spudinput_instance_t));
