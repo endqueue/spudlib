@@ -4,7 +4,9 @@ Hardware Abstraction Layer (HAL). This is a from-scratch
 translation layer over GPU, file system, memory, network, and audio primitives — a general HAL,
 not a GPU library with utilities bolted on. See `../CLAUDE.md` (the `eqdev` workspace
 root) for how this repo fits into the workspace; this file covers
-conventions specific to working inside `spudlib` itself.
+conventions specific to working inside `spudlib` itself. `MATURITY_TODO.md`
+is the plan for bringing the parts written before these rules up to them
+(SpudInput's struct bases, a rework of SpudFiles; `bindings/` is removed).
 
 ## The one rule everything else follows
 
@@ -338,7 +340,10 @@ not in each backend.
   A call checks a based argument with `spud_struct_check` /
   `spud_struct_out_check` (`src/spudstructbase.h`) right after its null
   check, in every backend. SpudGPU, SpudAudio and SpudNet are converted; the rest
-  of the plan, and the rules, are in `STRUCT_BASE_TODO.md`.
+  of the plan, and the rules, are in `STRUCT_BASE_TODO.md`. The workspace's
+  `check.sh struct-bases` checks the headers' side: based or frozen, base
+  first, no `#if` in a struct, no based struct held by value, and each type
+  registered in `SPUD_STRUCT_TYPE` as the right kind and used in `src/`.
 
 - **Argument checks are one `if` per distinct return.** They sit at the top of
   the function, in parameter order, before any allocation or platform call, and
@@ -657,19 +662,6 @@ printed its 6 warnings on each.
 - `.clang-format` is LLVM-based with tab indentation (`UseTab: ForIndentation`,
   `TabWidth`/`IndentWidth` 4), always-one-param-per-line, 160-column limit, and aligned
   consecutive assignments. Run it before committing.
-
-## Rust bindings (`bindings/rust/`)
-
-Independent Cargo workspace, **not** wired through CMake — `spudlib-sys`'s `build.rs`
-compiles the Vulkan backend's `.c` files directly via the `cc` crate. It currently only
-lists five of the ten Vulkan source files (context, swapchain, buffer, image, shader —
-missing command, descriptors, renderpass, native, sync), and the safe `spudlib` wrapper
-crate only covers `Instance`/`Device`/`Buffer`/`Image`/`ImageView`/`SwapChain`/
-`CommandList` — no shader pipelines, descriptor sets, or fences/semaphores yet. This gap
-is expected (built incrementally against what a minimal triangle-draw path needs), not
-a regression to fix reflexively — extend it deliberately when a real Rust consumer
-needs the next piece, matching the C API's existing shape rather than inventing a new
-one.
 
 ## Working with in-progress changes
 

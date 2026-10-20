@@ -429,7 +429,7 @@ not compiled.
    - run SpudNet's test (`tests/run_spudnet_test.sh`) after SpudNet;
    - flag Windows and Linux runs as needed for the SpudGPU change. It touches
      every backend, so it warrants them.
-5. Add the rule to the workspace's `check.sh` as a `struct-bases` check,
+5. **Done** (2026-10-20). Add the rule to the workspace's `check.sh` as a `struct-bases` check,
    covering rules 1, 3 and 4: every public `typedef struct` is based or
    marked frozen, nothing in a struct body sits under a build switch, and no
    based struct is held by value.

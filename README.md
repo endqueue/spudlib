@@ -61,14 +61,6 @@ cmake --build --preset <preset-name>
 > **Note:** `CMakePresets.json` currently has an unresolved merge conflict
 > in the tracked file — resolve that before relying on the presets above.
 
-## Bindings
-
-- **Rust** (`bindings/rust/`) — independent Cargo workspace; `spudlib-sys`
-  compiles the Vulkan backend's `.c` files directly. Coverage is partial,
-  built incrementally against a minimal triangle-draw path.
-- **Swift** (`bindings/swift/`) — Swift package wrapping the C headers for
-  the planned Apple/Metal host.
-
 ## Known gaps
 
 - No automated test suite/CTest target — verification has been manual

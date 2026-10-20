@@ -388,6 +388,7 @@ typedef enum SPUD_STRUCT_TYPE {
 
 /** @brief The first member, `base`, of every extensible struct the caller
  * fills in. */
+/* Frozen: the base every based struct starts with. It never changes; a new need gets a new type. */
 typedef struct SPUD_STRUCT_BASE {
 	/** This struct's own type. */
 	SPUD_STRUCT_TYPE type;
@@ -399,6 +400,7 @@ typedef struct SPUD_STRUCT_BASE {
  * fills in for the caller. The caller builds the chain and sets each
  * `type`; SpudLib writes the other fields and leaves `type` and `next` as
  * they are. */
+/* Frozen: the base every based struct starts with. It never changes; a new need gets a new type. */
 typedef struct SPUD_STRUCT_BASE_OUT {
 	/** This struct's own type. */
 	SPUD_STRUCT_TYPE type;
