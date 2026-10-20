@@ -348,6 +348,15 @@ GameInput and evdev builds were not run.
 
 ## Code conventions
 
+- **The version is written once, in `spudcore.h`** (`SPUDLIB_VERSION_MAJOR`/
+  `_MINOR`/`_PATCH`, since 2026-10-20, at 0.1.0). `CMakeLists.txt` reads
+  those three lines for `project(VERSION)`, and `spud_get_version()` returns
+  what the library was built with. One version for the whole library;
+  what each part promises is the table in the header's "Version" group.
+  Nothing is promised before 1.0.0, and "released" means a `vX.Y.Z` tag.
+  A chained struct's comment says "Since X.Y.Z". spudlib refuses no caller
+  for its version: comparing is the caller's.
+
 - **Every struct that may grow starts with a `base`** (`SPUD_STRUCT_BASE`,
   or `SPUD_STRUCT_BASE_OUT` for one SpudLib fills in; `spudcore.h`). Every
   other public struct has a `/* Frozen: ... */` line above its `typedef`.
@@ -902,7 +911,9 @@ printed its 6 warnings on each.
   (left) as `BTN_X`, which the kernel defines as `BTN_NORTH`, and Y (top) as
   `BTN_WEST`; SpudInput passes the kernel's code on, as it has no table of
   devices.
-- Two CTest targets exist: `spudinput_test` (above) and `spudperf_test` (the monotonic clocks,
+- Three CTest targets exist: `spudcore_test` (the version as the header,
+  CMake and the library each have it, and result names), `spudinput_test`
+  (above) and `spudperf_test` (the monotonic clocks,
   `spudperf_sleep_until_monotonic_ns` and `spudperf_sleep_until_monotonic_ms`),
   which needs nothing but the machine. It has run on macOS; the Windows and
   Linux halves of the nanosecond sleep, which the millisecond one waits

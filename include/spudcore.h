@@ -2,8 +2,8 @@
  * @file spudcore.h
  * @brief SpudCore: what every SpudLib module shares.
  *
- * The SPUDRESULT enum all modules return, the fixed-width integer limits, and
- * the debug-name functions. Platform-agnostic: nothing here calls a platform
+ * The SPUDRESULT enum all modules return, the library's version, the
+ * fixed-width integer limits, struct bases and the debug-name functions. Platform-agnostic: nothing here calls a platform
  * API.
  */
 
@@ -33,6 +33,71 @@ extern "C" {
 #define SPUD_UINT32_MAX 0xFFFFFFFFU
 /** @brief Largest value of a uint64_t. */
 #define SPUD_UINT64_MAX 0xFFFFFFFFFFFFFFFFULL
+/** @} */
+
+/**
+ * @defgroup spud_version Version
+ * @brief Which spudlib a caller was built against, and which it runs on.
+ *
+ * One version for the whole library: spudlib is built and linked as one
+ * archive, so its modules can't be mixed from different versions.
+ *
+ * What a version promises, from 1.0.0 on:
+ *
+ * | Change in | May add | May change or remove |
+ * |-----------|---------|----------------------|
+ * | patch     | nothing | nothing: fixes only, no header change but comments |
+ * | minor     | functions, SPUDRESULT values, SPUD_STRUCT_TYPE values, chained structs, enumerators | nothing |
+ * | major     | anything | anything |
+ *
+ * "Released" means a commit tagged vMAJOR.MINOR.PATCH. Before 1.0.0, a
+ * minor may change anything; nothing is promised.
+ *
+ * A struct that can be chained says in its comment which version first
+ * takes it ("Since 1.2.0"), so that a caller can ask spud_get_version()
+ * before chaining it. A caller that doesn't ask loses nothing but the
+ * question: a spudlib that doesn't take a struct refuses the chain with
+ * SPUDRESULT_STRUCT_UNKNOWN_IN_CHAIN.
+ * @{
+ */
+
+/** @brief Packs a version into one number that compares with < and >:
+ * 10 bits of major, 10 of minor, 12 of patch (Vulkan's layout, without its
+ * variant bits). */
+#define SPUDLIB_MAKE_VERSION(major, minor, patch) \
+	((((uint32_t)(major)) << 22U) | (((uint32_t)(minor)) << 12U) | ((uint32_t)(patch)))
+/** @brief The major part of a packed version. */
+#define SPUDLIB_VERSION_GET_MAJOR(version) ((uint32_t)(version) >> 22U)
+/** @brief The minor part of a packed version. */
+#define SPUDLIB_VERSION_GET_MINOR(version) (((uint32_t)(version) >> 12U) & 0x3FFU)
+/** @brief The patch part of a packed version. */
+#define SPUDLIB_VERSION_GET_PATCH(version) ((uint32_t)(version) & 0xFFFU)
+
+/* The one place the version is written. CMakeLists.txt reads these three
+ * lines, so each stays "#define NAME <number>" and nothing else. */
+/** @brief The major version of these headers. */
+#define SPUDLIB_VERSION_MAJOR 0
+/** @brief The minor version of these headers. */
+#define SPUDLIB_VERSION_MINOR 1
+/** @brief The patch version of these headers. */
+#define SPUDLIB_VERSION_PATCH 0
+
+/** @brief The version of the headers the caller is compiled against. */
+#define SPUDLIB_VERSION \
+	SPUDLIB_MAKE_VERSION(SPUDLIB_VERSION_MAJOR, SPUDLIB_VERSION_MINOR, SPUDLIB_VERSION_PATCH)
+
+/**
+ * @brief Returns the version of the spudlib the caller is running on: the
+ * SPUDLIB_VERSION it was compiled with.
+ *
+ * It can differ from the caller's own SPUDLIB_VERSION only when spudlib was
+ * built separately from the caller. Which one to accept is the caller's
+ * decision; spudlib refuses no caller for its version.
+ *
+ * @return The packed version (SPUDLIB_MAKE_VERSION). Never 0.
+ */
+uint32_t spud_get_version(void);
+
 /** @} */
 
 /**
@@ -426,7 +491,8 @@ typedef struct SPUD_STRUCT_BASE_OUT {
  *
  * @return A null-terminated string literal: valid for the life of the
  *         program, and not to be freed or modified. Never NULL.
- * @retval "SPUDRESULT_UNKNOWN" `r` is a value this function has no name for.
+ * @retval "SPUDRESULT_UNKNOWN" `r` is not one of SPUDRESULT's values. Every
+ *         value has its own name.
  */
 const char *spudresult_str(SPUDRESULT r);
 

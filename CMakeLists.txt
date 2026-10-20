@@ -1,5 +1,16 @@
 cmake_minimum_required(VERSION 3.30)
-project(spudlib)
+
+# The version is written once, in include/spudcore.h; read it from there.
+file(STRINGS "${CMAKE_CURRENT_LIST_DIR}/include/spudcore.h" _spud_version_lines
+     REGEX "^#define SPUDLIB_VERSION_(MAJOR|MINOR|PATCH) [0-9]+$")
+foreach(_part MAJOR MINOR PATCH)
+	string(REGEX REPLACE ".*SPUDLIB_VERSION_${_part} ([0-9]+).*" "\\1"
+	       SPUDLIB_VERSION_${_part} "${_spud_version_lines}")
+	if(NOT SPUDLIB_VERSION_${_part} MATCHES "^[0-9]+$")
+		message(FATAL_ERROR "spudlib: no SPUDLIB_VERSION_${_part} line in include/spudcore.h")
+	endif()
+endforeach()
+project(spudlib VERSION ${SPUDLIB_VERSION_MAJOR}.${SPUDLIB_VERSION_MINOR}.${SPUDLIB_VERSION_PATCH})
 
 
 # Define the allowed choices array
@@ -540,6 +551,14 @@ if(NOT TARGET spudlib)
         # SpudPerf's clocks and its wait. No hardware and nobody watching, so
         # this one is a ctest.
         enable_testing()
+        # SpudCore: the version, as the header, CMake and the library each
+        # have it, and every result's name. Needs nothing, so a ctest.
+        add_executable(spudcore_test tests/spudcore_test.c)
+        target_link_libraries(spudcore_test PRIVATE spudlib)
+        target_compile_definitions(spudcore_test PRIVATE
+            SPUDCORE_TEST_CMAKE_VERSION="${PROJECT_VERSION}")
+        add_test(NAME spudcore_test COMMAND spudcore_test)
+
         add_executable(spudperf_test tests/spudperf_test.c)
         target_link_libraries(spudperf_test PRIVATE spudlib)
         add_test(NAME spudperf_test COMMAND spudperf_test)
