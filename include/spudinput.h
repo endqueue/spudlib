@@ -166,9 +166,13 @@ enum {
 
 /**
  * @brief What the caller decides when creating an instance. No field has a
- * default: a zeroed desc is refused, for its `native_api`.
+ * default: a zeroed desc is refused, for its `base`, and one with only its
+ * `base` set is refused for its `native_api`.
  */
 typedef struct SPUDINPUT_INSTANCE_DESC {
+	/** `type` is SPUD_STRUCT_TYPE_INPUT_INSTANCE_DESC; `next` is NULL (nothing is chained onto
+	 * this struct yet). Set by the caller. See SPUD_STRUCT_BASE. */
+	SPUD_STRUCT_BASE base;
 	/** The native input API to bind to. One this build has
 	 * (@ref spudinput_config "Compile-time configuration"). */
 	SPUDINPUT_NATIVE_API native_api;
@@ -214,6 +218,9 @@ typedef struct SPUDINPUT_INSTANCE_DESC {
  *
  * @retval SPUD_SUCCESS The instance was created.
  * @retval SPUDRESULT_NULL_DESC `desc` is NULL.
+ * @retval SPUDRESULT_STRUCT_WRONG_TYPE `desc->base.type` is not
+ *         SPUD_STRUCT_TYPE_INPUT_INSTANCE_DESC.
+ * @retval SPUDRESULT_STRUCT_UNKNOWN_IN_CHAIN `desc->base.next` is not NULL.
  * @retval SPUDRESULT_NULL_OUTPUT_PARAMETER `out_instance` is NULL.
  * @retval SPUDRESULT_INVALID_API `desc->native_api` is not one this build
  *         has.
@@ -415,6 +422,7 @@ enum {
 #define SPUDINPUT_GAMEPAD_TOUCH_SURFACE_MAX 2
 
 /** @brief What one touch surface of a gamepad is. */
+/* Frozen: held by value in SPUDINPUT_GAMEPAD_PROPERTIES. It never changes; a new need gets a new type. */
 typedef struct SPUDINPUT_GAMEPAD_TOUCH_SURFACE {
 	/** How many fingers it follows at once; no more than
 	 * SPUDINPUT_GAMEPAD_TOUCH_CONTACT_MAX. */
@@ -433,6 +441,9 @@ typedef struct SPUDINPUT_GAMEPAD_TOUCH_SURFACE {
  * connected.
  */
 typedef struct SPUDINPUT_GAMEPAD_PROPERTIES {
+	/** `type` is SPUD_STRUCT_TYPE_INPUT_GAMEPAD_PROPERTIES; `next` is NULL (nothing is chained onto
+	 * this struct yet). The caller builds the chain and sets each type; SpudInput fills in the rest. See SPUD_STRUCT_BASE. */
+	SPUD_STRUCT_BASE_OUT base;
 	/** The platform's name for the device, UTF-8, null-terminated, cut
 	 * short at a whole character if it is longer than fits. Empty where
 	 * the platform has none (XInput, and GameInput for some devices). */
@@ -476,6 +487,10 @@ typedef struct SPUDINPUT_GAMEPAD_PROPERTIES {
  * @retval SPUDRESULT_SPUDINPUT_GAMEPAD_NOT_CONNECTED `gamepad` names
  *         nothing as of the last poll.
  * @retval SPUDRESULT_NULL_OUTPUT_PARAMETER `out_properties` is NULL.
+ * @retval SPUDRESULT_STRUCT_WRONG_TYPE `out_properties->base.type` is not
+ *         SPUD_STRUCT_TYPE_INPUT_GAMEPAD_PROPERTIES.
+ * @retval SPUDRESULT_STRUCT_UNKNOWN_IN_CHAIN `out_properties->base.next` is
+ *         not NULL.
  */
 SPUDRESULT spudinput_gamepad_get_properties(
     spudinput_instance instance,
@@ -485,6 +500,7 @@ SPUDRESULT spudinput_gamepad_get_properties(
 /**
  * @brief The state of a gamepad as of the last poll.
  */
+/* Frozen: read every frame; a new button is a free bit of SPUDINPUT_GAMEPAD_BUTTONS. It never changes; a new need gets a new type. */
 typedef struct SPUDINPUT_GAMEPAD_STATE {
 	/** The buttons that are down. */
 	SPUDINPUT_GAMEPAD_BUTTONS buttons;
@@ -558,6 +574,7 @@ SPUDRESULT spudinput_gamepad_get_state(
  * @brief A level for each motor a gamepad can have: 0 is stopped, 1 is as
  * hard as it goes. What a level in between feels like is the device's.
  */
+/* Frozen: a value; a new kind of motor is a new feature bit and a new call. It never changes; a new need gets a new type. */
 typedef struct SPUDINPUT_GAMEPAD_RUMBLE {
 	/** The motor for slow, heavy shaking, usually in the left grip. */
 	float low_frequency;
@@ -630,6 +647,7 @@ enum {
 };
 
 /** @brief A gamepad's power as of the last poll. */
+/* Frozen: a value, read as of the last poll. It never changes; a new need gets a new type. */
 typedef struct SPUDINPUT_GAMEPAD_BATTERY {
 	/** How it is powered. */
 	SPUDINPUT_BATTERY_STATE state;
@@ -697,6 +715,7 @@ SPUDRESULT spudinput_gamepad_get_battery(
  */
 
 /** @brief One reading of a gamepad's motion sensors. */
+/* Frozen: an element of an array SpudInput owns and hands out, read every frame. It never changes; a new need gets a new type. */
 typedef struct SPUDINPUT_GAMEPAD_MOTION_SAMPLE {
 	/**
 	 * When the reading was taken, in nanoseconds. Only the difference
@@ -808,6 +827,7 @@ SPUDRESULT spudinput_gamepad_get_motion(
 #define SPUDINPUT_GAMEPAD_TOUCH_CONTACT_MAX 4
 
 /** @brief One finger on a touch surface. */
+/* Frozen: held by value in SPUDINPUT_GAMEPAD_TOUCH_STATE. It never changes; a new need gets a new type. */
 typedef struct SPUDINPUT_GAMEPAD_TOUCH_CONTACT {
 	/**
 	 * Tells this finger from the others on the same surface, and stays the
@@ -825,6 +845,7 @@ typedef struct SPUDINPUT_GAMEPAD_TOUCH_CONTACT {
 } SPUDINPUT_GAMEPAD_TOUCH_CONTACT;
 
 /** @brief The fingers on one touch surface as of the last poll. */
+/* Frozen: read every frame. It never changes; a new need gets a new type. */
 typedef struct SPUDINPUT_GAMEPAD_TOUCH_STATE {
 	/** How many fingers are down; no more than the surface's
 	 * `contact_max`. */

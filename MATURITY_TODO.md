@@ -3,8 +3,8 @@
 Written on 2026-10-20. Four pieces of work that bring the parts of spudlib
 written before its current rules up to them, and give it what C APIs that
 stay stable for decades have and it lacks. Each is meant for a session of
-its own, in the order below. Item 1 is done (2026-10-20); 2, 3 and 4 have
-not started. Item 3 was added the same day, from a comparison with Vulkan,
+its own, in the order below. Items 1 and 2 are done (2026-10-20); 3 and 4
+have not started. Item 3 was added the same day, from a comparison with Vulkan,
 Win32, POSIX, SQLite, zlib, libcurl and Lua; it goes before SpudFiles so
 that the new `spudfiles.h` is written to its rules.
 
@@ -13,10 +13,10 @@ What "done" means here is measured by the workspace's `check.sh`: when items
 `struct-bases|spudlib` entries left, and nothing under `bindings/`. Item 3
 adds to `spudcore.h` and removes no entry.
 
-**Pending from item 1:** `febed1c` is pushed, but trellis's and latran's
-`deps.lock` still name `29a8b01`, so `./check.sh`'s `dep-locks` fails.
+**Pending from item 1:** `febed1c` is pushed, but the callers' dependency
+locks still name `29a8b01`, so `./check.sh`'s `dep-locks` fails.
 `./check.sh --update-locks` writes no lock while spudlib has uncommitted
-changes: commit and push the SpudInput dispatch below first, then run it.
+changes: commit and push the SpudInput dispatch and item 2 first, then run it.
 
 Every item ends the same way:
 
@@ -77,56 +77,19 @@ and each verb is `spudinput_<api>_<verb>`, forced inline into its case with
 `src/input/spudinputshared.h` have the rule.
 
 Built and tested on macOS only (Debug, Release, `-asan`, the Xcode
-generator; latran and trellislib against it). **Still to do:** build
+generator; every caller in the workspace against it). **Still to do:** build
 `windows-d3d12` (the GameInput backend, and the `/w14714 /we4714` flags) and
 `linux-vulkan` (evdev), and run `spudinput_test` on each.
 
-## 2. Convert SpudInput to struct bases
+## 2. Convert SpudInput to struct bases (done 2026-10-20)
 
-Step 3 of `STRUCT_BASE_TODO.md`, for SpudInput. That file's "spudinput.h"
-section classifies every struct; this is how to apply it.
+Done as `STRUCT_BASE_TODO.md` classifies it; that file's "SpudInput,
+converted" is the record of what changed and what was run. The nine
+`spudinput.h` entries are out of `check.baseline`. **Still to do:** run
+`spudinput_test` once with a gamepad connected, which is when
+`spudinput_gamepad_get_properties`' three struct-base refusals run.
 
-- `spudcore.h`: `SPUD_STRUCT_TYPE_INPUT_INSTANCE_DESC` = 4000 and
-  `SPUD_STRUCT_TYPE_INPUT_GAMEPAD_PROPERTIES` = 4001, each documented with its
-  struct and base kind, as the other types are.
-- `spudinput.h`: `SPUDINPUT_INSTANCE_DESC` starts with a `SPUD_STRUCT_BASE`,
-  `SPUDINPUT_GAMEPAD_PROPERTIES` with a `SPUD_STRUCT_BASE_OUT`; the base
-  comment names the type, as SpudGPU's do. The other seven structs (state,
-  motion sample, touch state, touch contact, touch surface, rumble, battery)
-  get a `/* Frozen: <why> ... */` line. Each of the two functions documents
-  the two results for a wrong base.
-- **Checks go in the front end, `src/spudinput.c`, only.** `CLAUDE.md`
-  says every argument check is there, and the backends only fill the front
-  end's records, so no backend changes. (Since the dispatch above, the
-  backends are in the same translation unit, but they still read and write
-  only the records.)
-  - `spudinput_instance_create`: `spud_struct_check` right after
-    `if (!desc)`, before the `out_instance` check. `instance->desc = *desc`
-    would keep the caller's `base.next`, which needn't outlive the call: keep
-    the copy with `next` set to NULL.
-  - `spudinput_gamepad_get_properties`: `spud_struct_out_check` right after
-    the `!out_properties` check. `*out_properties = record->properties`
-    overwrites the caller's base, so write it back after the copy with
-    `spud_struct_base_out(SPUD_STRUCT_TYPE_INPUT_GAMEPAD_PROPERTIES)`, as
-    SpudAudio's backends do (`next` is NULL, or the check refused it).
-- `tests/spudinput_test.c`: set the bases, and add a part that refuses a
-  zeroed base, another struct's type and a chained struct for both calls,
-  as `spudnet_test`'s "Struct bases" does. With no gamepad connected,
-  `spudinput_gamepad_get_properties` returns
-  `SPUDRESULT_SPUDINPUT_GAMEPAD_NOT_CONNECTED` before it reaches the base
-  (its checks are in parameter order), so its three refusals run only when a
-  gamepad is connected: write them to run then and to say they were skipped
-  otherwise, and run the test once with a gamepad.
-- `check.baseline`: remove the nine `spudinput.h` entries.
-
-**Breaks:** every caller that fills an instance desc or queries gamepad
-properties. Find them with `grep -rn "SPUDINPUT_INSTANCE_DESC\|SPUDINPUT_GAMEPAD_PROPERTIES"`
-over the workspace's other repositories, and change them in the same change.
-As of 2026-10-20 that is latran's player alone
-(`latran/player/src/latranplayer.c`: the desc at line 287, the properties at
-425); trellis has none.
-
-**Also worth adding here, or as its own change:** a query of whether a
+**Proposed alongside it, as its own change:** a query of whether a
 native API built in will start on this machine (GameInput's runtime may be
 missing), such as `spudinput_native_api_is_available(api)`, so the caller can
 choose before `spudinput_instance_create` fails with

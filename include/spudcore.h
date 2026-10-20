@@ -382,6 +382,12 @@ typedef enum SPUD_STRUCT_TYPE {
 	/** spudnet_websocket_connect_desc (SPUD_STRUCT_BASE). */
 	SPUD_STRUCT_TYPE_NET_WEBSOCKET_CONNECT_DESC     = 3005,
 
+	/* SpudInput */
+	/** SPUDINPUT_INSTANCE_DESC (SPUD_STRUCT_BASE). */
+	SPUD_STRUCT_TYPE_INPUT_INSTANCE_DESC            = 4000,
+	/** SPUDINPUT_GAMEPAD_PROPERTIES (SPUD_STRUCT_BASE_OUT). */
+	SPUD_STRUCT_TYPE_INPUT_GAMEPAD_PROPERTIES       = 4001,
+
 	/** Keeps the enum 32 bits wide on every compiler. Never a valid type. */
 	SPUD_STRUCT_TYPE_MAX_ENUM = 0x7FFFFFFF
 } SPUD_STRUCT_TYPE;

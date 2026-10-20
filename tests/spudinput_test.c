@@ -101,9 +101,24 @@ static void test_create_arguments(void) {
 	spudinput_instance instance = (spudinput_instance)(uintptr_t)1;
 
 	CHECK(spudinput_instance_create(NULL, &instance) == SPUDRESULT_NULL_DESC);
+
+	/* Struct bases: a zeroed base, another struct's type and a chained
+	 * struct are each refused, before anything after the desc is looked at. */
+	CHECK(spudinput_instance_create(&desc, &instance) == SPUDRESULT_STRUCT_WRONG_TYPE);
+	CHECK(spudinput_instance_create(&desc, NULL) == SPUDRESULT_STRUCT_WRONG_TYPE);
+	desc.base.type = SPUD_STRUCT_TYPE_INPUT_GAMEPAD_PROPERTIES;
+	CHECK(spudinput_instance_create(&desc, &instance) == SPUDRESULT_STRUCT_WRONG_TYPE);
+	SPUDINPUT_INSTANCE_DESC chained;
+	memset(&chained, 0, sizeof(chained));
+	chained.base.type = SPUD_STRUCT_TYPE_INPUT_INSTANCE_DESC;
+	desc.base.type    = SPUD_STRUCT_TYPE_INPUT_INSTANCE_DESC;
+	desc.base.next    = &chained.base;
+	CHECK(spudinput_instance_create(&desc, &instance) == SPUDRESULT_STRUCT_UNKNOWN_IN_CHAIN);
+	desc.base.next = NULL;
+
 	CHECK(spudinput_instance_create(&desc, NULL) == SPUDRESULT_NULL_OUTPUT_PARAMETER);
 
-	/* A zeroed desc has not chosen an API. */
+	/* A desc with only its base set has not chosen an API. */
 	CHECK(spudinput_instance_create(&desc, &instance) == SPUDRESULT_INVALID_API);
 	CHECK(instance == NULL);
 
@@ -194,8 +209,30 @@ static void test_connected_gamepad(
     spudinput_gamepad_id gamepad) {
 	SPUDINPUT_GAMEPAD_PROPERTIES properties;
 	memset(&properties, 0xff, sizeof(properties));
+	properties.base.type = SPUD_STRUCT_TYPE_INPUT_GAMEPAD_PROPERTIES;
+	properties.base.next = NULL;
 	CHECK(spudinput_gamepad_get_properties(instance, gamepad, &properties) == SPUD_SUCCESS);
 	CHECK(spudinput_gamepad_get_properties(instance, gamepad, NULL) == SPUDRESULT_NULL_OUTPUT_PARAMETER);
+	/* The caller's base is left as it was. */
+	CHECK(properties.base.type == SPUD_STRUCT_TYPE_INPUT_GAMEPAD_PROPERTIES);
+	CHECK(properties.base.next == NULL);
+
+	/* Struct bases: a zeroed base, another struct's type and a chained
+	 * struct are each refused, and nothing is written. */
+	SPUDINPUT_GAMEPAD_PROPERTIES refused;
+	memset(&refused, 0, sizeof(refused));
+	CHECK(spudinput_gamepad_get_properties(instance, gamepad, &refused) == SPUDRESULT_STRUCT_WRONG_TYPE);
+	refused.base.type = SPUD_STRUCT_TYPE_INPUT_INSTANCE_DESC;
+	CHECK(spudinput_gamepad_get_properties(instance, gamepad, &refused) == SPUDRESULT_STRUCT_WRONG_TYPE);
+	SPUDINPUT_GAMEPAD_PROPERTIES chained;
+	memset(&chained, 0, sizeof(chained));
+	chained.base.type = SPUD_STRUCT_TYPE_INPUT_GAMEPAD_PROPERTIES;
+	refused.base.type = SPUD_STRUCT_TYPE_INPUT_GAMEPAD_PROPERTIES;
+	refused.base.next = &chained.base;
+	CHECK(spudinput_gamepad_get_properties(instance, gamepad, &refused) == SPUDRESULT_STRUCT_UNKNOWN_IN_CHAIN);
+	CHECK(refused.name[0] == '\0');
+	CHECK(refused.buttons == 0);
+	CHECK(refused.base.next == &chained.base);
 
 	/* The name is terminated inside its array. */
 	CHECK(memchr(properties.name, '\0', SPUDINPUT_GAMEPAD_NAME_SIZE) != NULL);
@@ -360,6 +397,7 @@ static void test_connected_gamepad(
 static void test_instance(void) {
 	SPUDINPUT_INSTANCE_DESC desc;
 	memset(&desc, 0, sizeof(desc));
+	desc.base.type  = SPUD_STRUCT_TYPE_INPUT_INSTANCE_DESC;
 	desc.native_api = native_api();
 	/* Only while this process is the one in use, and keeping no motion
 	 * samples: the test switches no sensor on. */
@@ -397,6 +435,8 @@ static void test_instance(void) {
 	CHECK(spudinput_instance_get_gamepads(instance, &ids, &count) == SPUD_SUCCESS);
 	CHECK((ids == NULL) == (count == 0));
 	printf("spudinput_test: %u gamepad(s) connected\n", count);
+	if (count == 0)
+		printf("spudinput_test: no gamepad, so spudinput_gamepad_get_properties' struct-base refusals are skipped\n");
 
 	/* Ids are given out from 1, each once, in the order first seen. */
 	spudinput_gamepad_id highest = SPUDINPUT_GAMEPAD_ID_NONE;

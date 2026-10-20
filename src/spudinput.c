@@ -1,4 +1,5 @@
 #include "input/spudinputshared.h"
+#include "spudstructbase.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -377,6 +378,9 @@ SPUDRESULT spudinput_instance_create(
     spudinput_instance *out_instance) {
 	if (!desc)
 		return SPUDRESULT_NULL_DESC;
+	const SPUDRESULT base_result = spud_struct_check(&desc->base, SPUD_STRUCT_TYPE_INPUT_INSTANCE_DESC);
+	if (base_result != SPUD_SUCCESS)
+		return base_result;
 	if (!out_instance)
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
 	*out_instance = NULL;
@@ -386,8 +390,10 @@ SPUDRESULT spudinput_instance_create(
 	spudinput_instance instance = (spudinput_instance)calloc(1, sizeof(struct spudinput_instance_t));
 	if (!instance)
 		return SPUDRESULT_OUT_OF_MEMORY;
-	instance->desc    = *desc;
-	instance->next_id = 1;
+	instance->desc = *desc;
+	/* The caller's chain needn't outlive this call; nothing is chained yet. */
+	instance->desc.base.next = NULL;
+	instance->next_id        = 1;
 
 	const SPUDRESULT result = spudinput_backend_create(instance);
 	if (result != SPUD_SUCCESS) {
@@ -485,8 +491,14 @@ SPUDRESULT spudinput_gamepad_get_properties(
 		return SPUDRESULT_SPUDINPUT_GAMEPAD_NOT_CONNECTED;
 	if (!out_properties)
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
+	const SPUDRESULT base_result = spud_struct_out_check(&out_properties->base, SPUD_STRUCT_TYPE_INPUT_GAMEPAD_PROPERTIES);
+	if (base_result != SPUD_SUCCESS)
+		return base_result;
 
 	*out_properties = record->properties;
+	/* The record's copy has no base of its own; the check above leaves the
+	 * caller's as this one. */
+	out_properties->base = spud_struct_base_out(SPUD_STRUCT_TYPE_INPUT_GAMEPAD_PROPERTIES);
 	return SPUD_SUCCESS;
 }
 

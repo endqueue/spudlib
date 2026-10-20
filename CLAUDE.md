@@ -6,9 +6,9 @@ not a GPU library with utilities bolted on. See `../CLAUDE.md` (the `eqdev` work
 root) for how this repo fits into the workspace; this file covers
 conventions specific to working inside `spudlib` itself. `MATURITY_TODO.md`
 is the plan for bringing the parts written before these rules up to them
-(SpudInput's struct bases; a version, result names, the caller's allocator
-and a stability policy for every module; a rework of SpudFiles; `bindings/`
-is removed).
+(a version, result names, the caller's allocator and a stability policy
+for every module; a rework of SpudFiles; `bindings/` is removed and
+SpudInput's struct bases are in).
 
 ## The one rule everything else follows
 
@@ -354,7 +354,7 @@ GameInput and evdev builds were not run.
   A released layout never changes: a new field is a new struct chained on.
   A call checks a based argument with `spud_struct_check` /
   `spud_struct_out_check` (`src/spudstructbase.h`) right after its null
-  check, in every backend. SpudGPU, SpudAudio and SpudNet are converted; the rest
+  check, in every backend. SpudGPU, SpudAudio, SpudNet and SpudInput are converted; the rest
   of the plan, and the rules, are in `STRUCT_BASE_TODO.md`. The workspace's
   `check.sh struct-bases` checks the headers' side: based or frozen, base
   first, no `#if` in a struct, no based struct held by value, and each type

@@ -3,7 +3,8 @@
 Planned on 2026-10-18. Steps 1 and 2 of "Order of work" are done (the
 `spudcore.h` pieces, and the three ABI bugs), and step 3 is done for
 SpudGPU, SpudAudio and SpudNet (2026-10-19, "SpudGPU, converted" and the
-sections after it); SpudInput and SpudFiles are next. Every extensible struct in
+sections after it), and for SpudInput (2026-10-20, "SpudInput, converted");
+SpudFiles is next. Every extensible struct in
 spudlib's public headers starts with a `SPUD_STRUCT_BASE`: a type tag and a
 pointer to a chain of further structs. A struct's layout is frozen once it is
 released. A new field never goes into a released struct; it comes as a new
@@ -236,7 +237,7 @@ All frozen: `SPUDGPU_D3D12_BUFFER_VIEW`, `SPUDGPU_D3D12_IMAGE_VIEW` and
   `spudnet_header`, `spudnet_tls_certificate`, `spudnet_tls_pin` (array
   elements); `spudnet_wait_event` (an array spudlib fills on each wait).
 
-### spudinput.h
+### spudinput.h (converted 2026-10-20, as listed here)
 
 - **`SPUD_STRUCT_BASE`:** `SPUDINPUT_INSTANCE_DESC`.
 - **`SPUD_STRUCT_BASE_OUT`:** `SPUDINPUT_GAMEPAD_PROPERTIES`.
@@ -245,6 +246,12 @@ All frozen: `SPUDGPU_D3D12_BUFFER_VIEW`, `SPUDGPU_D3D12_IMAGE_VIEW` and
   `SPUDINPUT_GAMEPAD_TOUCH_CONTACT` (held by value);
   `SPUDINPUT_GAMEPAD_TOUCH_SURFACE`, `SPUDINPUT_GAMEPAD_RUMBLE`,
   `SPUDINPUT_GAMEPAD_BATTERY`.
+- Rumble and state stay frozen on purpose (confirmed 2026-10-20). Rumble has
+  grown elsewhere (XInput's two motors, GameInput's four), and the answer
+  there was a new struct and call, as here: a chained motor struct left out
+  would need a meaning, unchanged or stopped, which is a default. A new
+  button needs no new struct: bits 17-31 of `SPUDINPUT_GAMEPAD_BUTTONS` are
+  free, and a new reading is a new getter.
 
 ### spudfiles.h
 
@@ -413,6 +420,30 @@ plain, under ASan+UBSan and under TSan; every caller in the workspace
 builds and passes its tests. Winsock, libcurl and WinHTTP are written,
 not compiled.
 
+## SpudInput, converted (2026-10-20)
+
+- `spudcore.h`: `SPUD_STRUCT_TYPE_INPUT_INSTANCE_DESC` = 4000 and
+  `SPUD_STRUCT_TYPE_INPUT_GAMEPAD_PROPERTIES` = 4001.
+- `spudinput.h`: `SPUDINPUT_INSTANCE_DESC` has a `SPUD_STRUCT_BASE base`,
+  `SPUDINPUT_GAMEPAD_PROPERTIES` a `SPUD_STRUCT_BASE_OUT base`, and the
+  other seven are marked frozen. Both functions document the two results.
+- Both checks are in the front end, `src/spudinput.c`, once: every argument
+  check is there and the backends only fill its records, so no backend
+  changed. `spudinput_instance_create` checks right after `if (!desc)` and
+  keeps its copy of the desc with `next` cleared;
+  `spudinput_gamepad_get_properties` checks right after its null check
+  (so after the gamepad's), and puts the base back after copying the record.
+- `tests/spudinput_test.c` sets every base, and refuses a zeroed base,
+  another struct's type and a chained struct for both calls. Properties
+  come after the gamepad in the order of checks, so their refusals run only
+  with a gamepad connected; the test says when they are skipped.
+
+Run on macOS, 2026-10-20, with no gamepad connected: spudlib Debug,
+Release and ASan+UBSan with its ctest suites; every caller in the workspace
+builds and passes its tests; `check.sh struct-bases` has no SpudInput entry
+left. Not run: the properties refusals (no gamepad here), and the GameInput
+and evdev builds, which needed no change but have not been compiled.
+
 ## Order of work
 
 1. **Done.** Write the `spudcore.h` pieces and the three result codes, with
@@ -420,7 +451,7 @@ not compiled.
    each is added with its struct.
 2. **Done.** Fix the three ABI bugs first, in their own change. Each is a fix on its
    own and makes the conversion smaller.
-3. **SpudGPU, SpudAudio and SpudNet done.** Convert one module at a time, header and every backend together:
+3. **SpudGPU, SpudAudio, SpudNet and SpudInput done.** Convert one module at a time, header and every backend together:
    SpudGPU, then SpudAudio, SpudNet, SpudInput, SpudFiles. Bring
    `spudgpusamples`, the tests and every caller along in the same change.
    This is a source break for every caller.
