@@ -665,13 +665,16 @@ SPUDRESULT spudgpu_get_command_queue(
  * spudgpu_submit_command_lists_synced() when rendering to one, or
  * spudgpu_queue_submit() to name the semaphores and fence yourself.
  *
- * Any thread may submit to a queue, and several threads may submit to one
- * queue at once: this, spudgpu_submit_command_lists_synced(),
+ * A queue is the caller's to synchronize, on every backend: any thread may
+ * use it, but no two at once. This, spudgpu_submit_command_lists_synced(),
  * spudgpu_queue_submit(), spudgpu_queue_wait_idle() and
- * spudgpu_swap_chain_present() reach a queue one at a time (Vulkan's queue
- * is externally synchronized, and SpudGPU keeps a lock per queue for it;
- * D3D12's and Metal's queues need none). The order two threads' submissions
- * reach the queue in is the order they get there.
+ * spudgpu_swap_chain_present() on the swap chain's queue are each a use of
+ * the queue, and so is any use of its native queue. Vulkan requires this
+ * (its queue is externally synchronized) and SpudGPU takes no lock for it;
+ * D3D12 and Metal would allow more, but the rule is the same everywhere so
+ * that code written on one runs on all. Two different queues may be used
+ * at once. A debug build asserts on every backend when two threads use one
+ * queue at once.
  *
  * @param[in] queue          Queue to submit to.
  * @param[in] cmd_lists      Array of command lists, each closed with
@@ -801,8 +804,8 @@ SPUDRESULT spudgpu_queue_submit(
  * Equivalent to vkQueueWaitIdle. Prefer fence-based synchronization in hot
  * paths.
  *
- * May be called from any thread. On Vulkan, a submit to the same queue from
- * another thread waits until this returns.
+ * A use of the queue: no other thread may use it until this returns (see
+ * spudgpu_submit_command_lists()).
  *
  * @param[in] queue Queue to wait on.
  */
@@ -3011,9 +3014,9 @@ uint32_t spudgpu_swap_chain_acquire_next_image(spudgpu_swap_chain swap_chain);
  * as spudgpu_swap_chain_desc::queue. Presentation is ordered against that
  * queue's work, not against whichever queue was submitted on.
  *
- * The present reaches that queue the way a submit does (see
- * spudgpu_submit_command_lists()), so other threads may submit to the queue
- * meanwhile. The swap chain itself is used from one thread at a time.
+ * A use of that queue like a submit, under the same rule (see
+ * spudgpu_submit_command_lists()). The swap chain itself is used from one
+ * thread at a time.
  *
  * @param[in] swap_chain Swap chain holding the image to display.
  */

@@ -139,7 +139,8 @@ typedef struct spudgpu_descriptor_set_layout_t spudgpu_descriptor_set_layout_d3d
 // a device. Safe to lazy-init here (unlike the Vulkan backend): every D3D12
 // struct above stores spudgpu_device_d3d12* by pointer, never by value, so
 // there is no stale-snapshot risk from initializing this after other objects
-// already exist.
+// already exist. Two threads making the first call at once make one: see
+// spudgpu_device_d3d12::_bindless.
 
 // One unused range of a spudgpu_d3d12_shader_heap: descriptors
 // [offset, offset + count).
@@ -213,6 +214,13 @@ typedef struct spudgpu_bindless_state_d3d12 {
 	std::vector<uint32_t> sampled_image_free_stack;
 	std::vector<uint32_t> storage_image_free_stack;
 	std::vector<uint32_t> storage_buffer_free_stack;
+
+	// Guards the counters and stacks above: registering and unregistering
+	// may be done from any thread, and the bindless table is SpudGPU's, not
+	// the caller's, to keep. The descriptor writes themselves are made
+	// outside it: D3D12's Create*View calls may be made from any thread, and
+	// no two threads hold the same slot.
+	std::mutex lock;
 } spudgpu_bindless_state_d3d12;
 
 typedef struct spudgpu_device_t {
@@ -230,10 +238,13 @@ typedef struct spudgpu_device_t {
 
 	// Lazily allocated by the first spudgpu_get_bindless_capabilities /
 	// spudgpu_bindless_register_* / spudgpu_get_bindless_descriptor_set_layout
-	// call. nullptr until then; this device struct is value-initialised
-	// when it is constructed in place (see spudgpud3d12context.cpp), so it
-	// starts nullptr for free. Released with the device.
-	spudgpu_bindless_state_d3d12 *_bindless;
+	// / spudgpu_cmd_bind_bindless_resources* call, and never replaced after.
+	// nullptr until then. Made under _bindless_create_mutex and published
+	// with a release store, so the bind calls, which run while lists are
+	// recorded on any thread, only take an acquire load once it is made
+	// (spudgpud3d12___ensure_bindless_state). Released with the device.
+	std::atomic<spudgpu_bindless_state_d3d12 *> _bindless{nullptr};
+	std::mutex _bindless_create_mutex;
 	// Whether the device has resource binding tier 3, which bindless needs.
 	// Without it _bindless is never made and every bindless call reports
 	// SPUDRESULT_GPU_EXT_BINDLESS_DESCRIPTOR_INDEXING_NOT_SUPPORTED (or
@@ -271,7 +282,29 @@ typedef struct spudgpu_command_queue_t {
 	spud_object_head head;
 	spudgpu_device_d3d12 *_device;
 	Microsoft::WRL::ComPtr<ID3D12CommandQueue> _d3d_cmd_queue;
+#if _DEBUG
+	// How many threads are in a call that uses the queue: a debug build
+	// asserts it is never more than one (spudgpu_d3d12___queue_enter).
+	std::atomic<int> _debug_users{0};
+#endif
 } spudgpu_command_queue_d3d12;
+
+// Brackets every SpudGPU call that uses a queue (a submit, a present, a
+// wait-idle). D3D12 itself would allow two threads at once, but spudgpu.h
+// makes a queue the caller's to synchronize on every backend, since Vulkan
+// requires it; a debug build asserts here so that code that breaks the rule
+// is caught on D3D12 too. Nothing in a release build.
+#if _DEBUG
+inline void spudgpu_d3d12___queue_enter(spudgpu_command_queue_d3d12 *queue) {
+	const int others = queue->_debug_users.fetch_add(1);
+	assert(others == 0 && "spudgpu: two threads used one command queue at once; the caller synchronizes a queue");
+	(void)others;
+}
+inline void spudgpu_d3d12___queue_leave(spudgpu_command_queue_d3d12 *queue) { queue->_debug_users.fetch_sub(1); }
+#else
+inline void spudgpu_d3d12___queue_enter(spudgpu_command_queue_d3d12 *) {}
+inline void spudgpu_d3d12___queue_leave(spudgpu_command_queue_d3d12 *) {}
+#endif
 
 typedef struct spudgpu_command_allocator_t {
 	spud_object_head head;

@@ -677,11 +677,10 @@ void spudgpu_swap_chain_present(spudgpu_swap_chain swap_chain) {
 	// Present against the queue given as spudgpu_swap_chain_desc::queue at
 	// creation, not a freshly re-derived "the graphics queue" guess - the
 	// caller is required to have submitted this frame's rendering there too.
-	// The present is a use of the VkQueue like a submit, so it holds the
-	// queue's lock: a submit to the same queue on another thread waits.
-	spud_mutex_lock(&swap_chain->_present_queue->_lock);
+	// A use of the queue like a submit: the caller's to synchronize.
+	spudgpuvulkan___queue_enter(swap_chain->_present_queue);
 	vkQueuePresentKHR(swap_chain->_present_queue->_queue_vk, &presentInfo);
-	spud_mutex_unlock(&swap_chain->_present_queue->_lock);
+	spudgpuvulkan___queue_leave(swap_chain->_present_queue);
 
 	// Advance the frame-in-flight cursor
 	swap_chain->_current_frame = (swap_chain->_current_frame + 1) % swap_chain->_max_frames_in_flight;

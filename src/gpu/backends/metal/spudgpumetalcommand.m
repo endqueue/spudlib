@@ -89,12 +89,14 @@ SPUDRESULT spudgpu_submit_command_lists(
 	// (see spudgpu_create_command_list) rather than submitted to an arbitrary
 	// queue at commit time the way Vulkan/D3D12 command lists are - there is
 	// no per-submit queue selection to make here beyond committing each buffer.
+	spudgpumetal___queue_enter((spudgpu_command_queue_metal *)queue);
 	for (uint32_t i = 0; i < cmd_list_count; i++) {
 		spudgpu_command_list_metal *cmd_list_metal = (spudgpu_command_list_metal *)cmd_lists[i];
 		if (cmd_list_metal && cmd_list_metal->_command_buffer_mtl) {
 			[cmd_list_metal->_command_buffer_mtl commit];
 		}
 	}
+	spudgpumetal___queue_leave((spudgpu_command_queue_metal *)queue);
 
 	return SPUD_SUCCESS;
 }
@@ -1059,6 +1061,10 @@ SPUDRESULT spudgpu_queue_submit(
 	// every buffer in the batch has run, since a queue executes committed
 	// buffers in commit order) to match Vulkan/D3D12's single-submit
 	// semantics.
+	//
+	// The batch's commits, and the semaphore counts it bumps, are one use of
+	// the queue (spudgpu.h).
+	spudgpumetal___queue_enter((spudgpu_command_queue_metal *)queue);
 	for (uint32_t i = 0; i < desc->cmd_list_count; i++) {
 		spudgpu_command_list_metal *cmd_list_metal = (spudgpu_command_list_metal *)desc->cmd_lists[i];
 		if (!cmd_list_metal || !cmd_list_metal->_command_buffer_mtl)
@@ -1104,6 +1110,7 @@ SPUDRESULT spudgpu_queue_submit(
 
 		[cmd_buffer commit];
 	}
+	spudgpumetal___queue_leave((spudgpu_command_queue_metal *)queue);
 
 	return SPUD_SUCCESS;
 }
@@ -1119,9 +1126,11 @@ void spudgpu_queue_wait_idle(spudgpu_command_queue queue) {
 	// empty buffer and block on it. Buffers committed to one queue execute in
 	// commit order, so this buffer's completion implies every buffer
 	// committed before it on this queue has also completed.
+	spudgpumetal___queue_enter(queue_metal);
 	id<MTLCommandBuffer> idle_buffer = [queue_metal->_command_queue_mtl commandBuffer];
 	[idle_buffer commit];
 	[idle_buffer waitUntilCompleted];
+	spudgpumetal___queue_leave(queue_metal);
 }
 
 #endif // SPUDGPU_COMPILE_METAL_API

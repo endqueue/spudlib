@@ -130,12 +130,13 @@ static void ___internal_spudgpu_d3d12_destroy_device(spudgpu_device device) {
 	    device->_cmd_queues_copy);
 	___internal_spudgpu_d3d12_destroy_command_queues_per_family(
 	    device->_cmd_queues_compute);
-	if (device->_bindless) {
-		if (device->_bindless->layout)
-			spud_string_free(&allocator, device->_bindless->layout->head.debug_name);
-		SPUD_DELETE(&allocator, spudgpu_descriptor_set_layout_d3d12, device->_bindless->layout);
-		device->_bindless->~spudgpu_bindless_state_d3d12();
-		SPUD_DELETE(&allocator, spudgpu_bindless_state_d3d12, device->_bindless);
+	if (spudgpu_bindless_state_d3d12 *bindless = device->_bindless.load()) {
+		if (bindless->layout)
+			spud_string_free(&allocator, bindless->layout->head.debug_name);
+		SPUD_DELETE(&allocator, spudgpu_descriptor_set_layout_d3d12, bindless->layout);
+		bindless->~spudgpu_bindless_state_d3d12();
+		SPUD_DELETE(&allocator, spudgpu_bindless_state_d3d12, bindless);
+		device->_bindless.store(nullptr);
 	}
 	// Freed here, with the capacities they were made with, rather than in
 	// their structs' destructors, which have no allocator.

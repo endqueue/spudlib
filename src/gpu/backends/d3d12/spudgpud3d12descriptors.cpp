@@ -739,11 +739,21 @@ void spudgpu_cmd_bind_descriptor_sets_compute(
 // Lazy-init is safe here (unlike Vulkan): every D3D12 struct stores
 // spudgpu_device_d3d12* by pointer, so there is no stale-snapshot risk from
 // initializing this after other device-owned objects already exist.
+//
+// Once made, the state is only read through an acquire load, so the bind
+// calls, made while lists are recorded on any thread, take no lock. The
+// first calls take _bindless_create_mutex and look again under it, so two
+// threads making the first call at once make one state, not two (which
+// would each take a range of the heap, and leave one leaked and some
+// registrations in a table no longer set).
 static SPUDRESULT spudgpud3d12___ensure_bindless_state(spudgpu_device_d3d12 *device) {
-	if (device->_bindless)
+	if (device->_bindless.load(std::memory_order_acquire))
 		return SPUD_SUCCESS;
 	if (!device->_bindless_supported)
 		return SPUDRESULT_GPU_EXT_BINDLESS_DESCRIPTOR_INDEXING_NOT_SUPPORTED;
+	std::lock_guard<std::mutex> create_lock(device->_bindless_create_mutex);
+	if (device->_bindless.load(std::memory_order_relaxed))
+		return SPUD_SUCCESS;
 
 	// A range of the device's shader-visible CBV/SRV/UAV heap, which the
 	// descriptor pools share, so bindless and pool sets bind together. Kept
@@ -809,10 +819,11 @@ static SPUDRESULT spudgpud3d12___ensure_bindless_state(spudgpu_device_d3d12 *dev
 	state->offset = offset;
 	state->layout = layout;
 
-	device->_bindless = state;
+	device->_bindless.store(state, std::memory_order_release);
 	return SPUD_SUCCESS;
 }
 
+// Called with the state's lock held.
 static SPUDRESULT spudgpud3d12___bindless_alloc_index(
     uint32_t *next_unused,
     std::vector<uint32_t> &free_stack,
@@ -859,7 +870,7 @@ spudgpu_descriptor_set_layout spudgpu_get_bindless_descriptor_set_layout(spudgpu
 		return nullptr;
 	if (spudgpud3d12___ensure_bindless_state(device) != SPUD_SUCCESS)
 		return nullptr;
-	return (spudgpu_descriptor_set_layout)device->_bindless->layout;
+	return (spudgpu_descriptor_set_layout)device->_bindless.load(std::memory_order_acquire)->layout;
 }
 
 SPUDRESULT spudgpu_bindless_register_sampled_image(
@@ -875,9 +886,13 @@ SPUDRESULT spudgpu_bindless_register_sampled_image(
 	if (spudgpud3d12___ensure_bindless_state(device) != SPUD_SUCCESS)
 		return SPUDRESULT_GPU_EXT_BINDLESS_DESCRIPTOR_INDEXING_NOT_SUPPORTED;
 
-	spudgpu_bindless_state_d3d12 *state = device->_bindless;
-	SPUDRESULT sr = spudgpud3d12___bindless_alloc_index(
-	    &state->sampled_image_next_unused, state->sampled_image_free_stack, out_index);
+	spudgpu_bindless_state_d3d12 *state = device->_bindless.load(std::memory_order_acquire);
+	SPUDRESULT sr;
+	{
+		std::lock_guard<std::mutex> slots_lock(state->lock);
+		sr = spudgpud3d12___bindless_alloc_index(
+		    &state->sampled_image_next_unused, state->sampled_image_free_stack, out_index);
+	}
 	if (sr != SPUD_SUCCESS)
 		return sr;
 
@@ -892,11 +907,15 @@ SPUDRESULT spudgpu_bindless_register_sampled_image(
 }
 
 void spudgpu_bindless_unregister_sampled_image(spudgpu_device device, uint32_t index) {
-	if (!device || !device->_bindless)
+	if (!device)
+		return;
+	spudgpu_bindless_state_d3d12 *state = device->_bindless.load(std::memory_order_acquire);
+	if (!state)
 		return;
 	if (index == SPUDGPU_BINDLESS_INVALID_INDEX)
 		return;
-	device->_bindless->sampled_image_free_stack.push_back(index);
+	std::lock_guard<std::mutex> slots_lock(state->lock);
+	state->sampled_image_free_stack.push_back(index);
 }
 
 SPUDRESULT spudgpu_bindless_register_storage_image(
@@ -912,9 +931,13 @@ SPUDRESULT spudgpu_bindless_register_storage_image(
 	if (spudgpud3d12___ensure_bindless_state(device) != SPUD_SUCCESS)
 		return SPUDRESULT_GPU_EXT_BINDLESS_DESCRIPTOR_INDEXING_NOT_SUPPORTED;
 
-	spudgpu_bindless_state_d3d12 *state = device->_bindless;
-	SPUDRESULT sr = spudgpud3d12___bindless_alloc_index(
-	    &state->storage_image_next_unused, state->storage_image_free_stack, out_index);
+	spudgpu_bindless_state_d3d12 *state = device->_bindless.load(std::memory_order_acquire);
+	SPUDRESULT sr;
+	{
+		std::lock_guard<std::mutex> slots_lock(state->lock);
+		sr = spudgpud3d12___bindless_alloc_index(
+		    &state->storage_image_next_unused, state->storage_image_free_stack, out_index);
+	}
 	if (sr != SPUD_SUCCESS)
 		return sr;
 
@@ -929,11 +952,15 @@ SPUDRESULT spudgpu_bindless_register_storage_image(
 }
 
 void spudgpu_bindless_unregister_storage_image(spudgpu_device device, uint32_t index) {
-	if (!device || !device->_bindless)
+	if (!device)
+		return;
+	spudgpu_bindless_state_d3d12 *state = device->_bindless.load(std::memory_order_acquire);
+	if (!state)
 		return;
 	if (index == SPUDGPU_BINDLESS_INVALID_INDEX)
 		return;
-	device->_bindless->storage_image_free_stack.push_back(index);
+	std::lock_guard<std::mutex> slots_lock(state->lock);
+	state->storage_image_free_stack.push_back(index);
 }
 
 SPUDRESULT spudgpu_bindless_register_storage_buffer(
@@ -949,9 +976,13 @@ SPUDRESULT spudgpu_bindless_register_storage_buffer(
 	if (spudgpud3d12___ensure_bindless_state(device) != SPUD_SUCCESS)
 		return SPUDRESULT_GPU_EXT_BINDLESS_DESCRIPTOR_INDEXING_NOT_SUPPORTED;
 
-	spudgpu_bindless_state_d3d12 *state = device->_bindless;
-	SPUDRESULT sr = spudgpud3d12___bindless_alloc_index(
-	    &state->storage_buffer_next_unused, state->storage_buffer_free_stack, out_index);
+	spudgpu_bindless_state_d3d12 *state = device->_bindless.load(std::memory_order_acquire);
+	SPUDRESULT sr;
+	{
+		std::lock_guard<std::mutex> slots_lock(state->lock);
+		sr = spudgpud3d12___bindless_alloc_index(
+		    &state->storage_buffer_next_unused, state->storage_buffer_free_stack, out_index);
+	}
 	if (sr != SPUD_SUCCESS)
 		return sr;
 
@@ -981,11 +1012,15 @@ SPUDRESULT spudgpu_bindless_register_storage_buffer(
 }
 
 void spudgpu_bindless_unregister_storage_buffer(spudgpu_device device, uint32_t index) {
-	if (!device || !device->_bindless)
+	if (!device)
+		return;
+	spudgpu_bindless_state_d3d12 *state = device->_bindless.load(std::memory_order_acquire);
+	if (!state)
 		return;
 	if (index == SPUDGPU_BINDLESS_INVALID_INDEX)
 		return;
-	device->_bindless->storage_buffer_free_stack.push_back(index);
+	std::lock_guard<std::mutex> slots_lock(state->lock);
+	state->storage_buffer_free_stack.push_back(index);
 }
 
 void spudgpu_cmd_bind_bindless_resources(
@@ -1002,7 +1037,7 @@ void spudgpu_cmd_bind_bindless_resources(
 	spudgpu_device_d3d12 *device = cmd->_allocator->_device;
 	if (spudgpud3d12___ensure_bindless_state(device) != SPUD_SUCCESS)
 		return;
-	spudgpu_bindless_state_d3d12 *state = device->_bindless;
+	spudgpu_bindless_state_d3d12 *state = device->_bindless.load(std::memory_order_acquire);
 
 	ID3D12GraphicsCommandList *cmdList = cmd->_d3d_cmd_list.Get();
 
@@ -1028,7 +1063,7 @@ void spudgpu_cmd_bind_bindless_resources_compute(
 	spudgpu_device_d3d12 *device = cmd->_allocator->_device;
 	if (spudgpud3d12___ensure_bindless_state(device) != SPUD_SUCCESS)
 		return;
-	spudgpu_bindless_state_d3d12 *state = device->_bindless;
+	spudgpu_bindless_state_d3d12 *state = device->_bindless.load(std::memory_order_acquire);
 
 	ID3D12GraphicsCommandList *cmdList = cmd->_d3d_cmd_list.Get();
 

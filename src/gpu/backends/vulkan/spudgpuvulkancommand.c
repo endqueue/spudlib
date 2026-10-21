@@ -15,8 +15,8 @@ extern "C" {
 #endif
 
 // The device's own queue, made with it (spudgpu_enumerate_devices): every
-// call hands out the same one, so that the lock in it is the one lock for
-// its VkQueue.
+// call hands out the same one, as D3D12 and Metal do, so the caller can tell
+// two uses of one VkQueue apart from uses of two.
 spudgpu_command_queue spudgpu_get_graphics_queue(spudgpu_device device) {
     if (!device) return NULL;
     return device->_graphics_queue;
@@ -43,9 +43,9 @@ SPUDRESULT spudgpu_submit_command_lists(
     submit.commandBufferCount = cmd_list_count;
     submit.pCommandBuffers = buffers;
 
-    spud_mutex_lock(&queue->_lock);
+    spudgpuvulkan___queue_enter(queue);
     VkResult r = vkQueueSubmit(queue->_queue_vk, 1, &submit, VK_NULL_HANDLE);
-    spud_mutex_unlock(&queue->_lock);
+    spudgpuvulkan___queue_leave(queue);
     if (r != VK_SUCCESS) {
         printf("spudgpu: vkQueueSubmit failed (%d)\n", r);
         SPUD_DELETE_ARRAY(allocator, VkCommandBuffer, buffers, cmd_list_count);
@@ -513,9 +513,9 @@ SPUDRESULT spudgpu_queue_submit(spudgpu_command_queue queue, const spudgpu_submi
     submit.signalSemaphoreCount = signal_count;
     submit.pSignalSemaphores    = signal_sems;
 
-    spud_mutex_lock(&queue->_lock);
+    spudgpuvulkan___queue_enter(queue);
     VkResult r = vkQueueSubmit(queue->_queue_vk, 1, &submit, in_flight_fence);
-    spud_mutex_unlock(&queue->_lock);
+    spudgpuvulkan___queue_leave(queue);
     if (r != VK_SUCCESS) {
         printf("spudgpu: vkQueueSubmit failed (%d)\n", r);
     }
@@ -531,11 +531,9 @@ SPUDRESULT spudgpu_queue_submit(spudgpu_command_queue queue, const spudgpu_submi
 
 void spudgpu_queue_wait_idle(spudgpu_command_queue queue) {
     if (!queue) return;
-    // Held for the whole wait, as Vulkan requires: a submit to this queue on
-    // another thread waits until the queue is idle.
-    spud_mutex_lock(&queue->_lock);
+    spudgpuvulkan___queue_enter(queue);
     vkQueueWaitIdle(queue->_queue_vk);
-    spud_mutex_unlock(&queue->_lock);
+    spudgpuvulkan___queue_leave(queue);
 }
 
 void spudgpu_cmd_push_constants(

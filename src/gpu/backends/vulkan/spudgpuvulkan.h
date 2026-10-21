@@ -105,16 +105,38 @@ typedef struct spudgpu_device_t {
     struct spudgpu_command_queue_t *_graphics_queue;
 } spudgpu_device_vulkan;
 
-// One per VkQueue, owned by the device. vkQueueSubmit, vkQueuePresentKHR and
-// vkQueueWaitIdle all need the VkQueue externally synchronized, and D3D12's
-// and Metal's queues may be submitted to from any thread, so every call that
-// reaches _queue_vk holds _lock. Never copied: a swap chain keeps a pointer.
+// One per VkQueue, owned by the device. Never copied: a swap chain keeps a
+// pointer. A queue is the caller's to synchronize (spudgpu.h,
+// spudgpu_submit_command_lists), as Vulkan's own vkQueueSubmit,
+// vkQueuePresentKHR and vkQueueWaitIdle require; nothing here locks it.
 typedef struct spudgpu_command_queue_t {
     spud_object_head head;
     VkQueue _queue_vk;
     uint32_t _queue_family_index;
-    spud_mutex _lock;
+#if _DEBUG
+    // How many threads are in a call that uses the queue: a debug build
+    // asserts it is never more than one (spudgpuvulkan___queue_enter).
+    atomic_int _debug_users;
+#endif
 } spudgpu_command_queue_vulkan;
+
+// Brackets every SpudGPU call that uses a queue (a submit, a present, a
+// wait-idle). A debug build asserts that no other thread is in one on the
+// same queue: the caller broke the rule spudgpu.h states, and on Vulkan that
+// is undefined behaviour. Nothing in a release build.
+#if _DEBUG
+static inline void spudgpuvulkan___queue_enter(spudgpu_command_queue_vulkan *queue) {
+    const int others = atomic_fetch_add(&queue->_debug_users, 1);
+    assert(others == 0 && "spudgpu: two threads used one command queue at once; the caller synchronizes a queue");
+    (void) others;
+}
+static inline void spudgpuvulkan___queue_leave(spudgpu_command_queue_vulkan *queue) {
+    atomic_fetch_sub(&queue->_debug_users, 1);
+}
+#else
+static inline void spudgpuvulkan___queue_enter(spudgpu_command_queue_vulkan *queue) { (void) queue; }
+static inline void spudgpuvulkan___queue_leave(spudgpu_command_queue_vulkan *queue) { (void) queue; }
+#endif
 
 typedef struct spudgpu_command_allocator_t {
     spud_object_head head;
@@ -269,8 +291,7 @@ typedef struct spudgpu_swap_chain_t {
     VkSwapchainKHR _swapchain_vk;
     spudgpu_swap_chain_desc _desc;
     spudgpu_device_vulkan _device;
-    // desc.queue, set at creation - see spudgpu_swap_chain_desc::queue. Its
-    // _lock is held across vkQueuePresentKHR.
+    // desc.queue, set at creation - see spudgpu_swap_chain_desc::queue.
     spudgpu_command_queue_vulkan *_present_queue;
     VkSurfaceKHR _surface_vk;
     VkFormat _format_vk;

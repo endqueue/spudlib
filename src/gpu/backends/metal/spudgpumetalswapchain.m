@@ -364,10 +364,13 @@ void spudgpu_swap_chain_present(spudgpu_swap_chain swap_chain) {
 	// cannot begin executing until the caller's rendering has completed.
 	// Mirrors the D3D12 backend, which also does zero explicit
 	// synchronization in its own present() for the same reason.
+	// A use of the swap chain's queue (spudgpu.h).
+	spudgpumetal___queue_enter(swap_chain_metal->_present_queue);
 	id<MTLCommandBuffer> present_buffer =
 	    [swap_chain_metal->_present_queue->_command_queue_mtl commandBuffer];
 	[present_buffer presentDrawable:swap_chain_metal->_current_drawable];
 	[present_buffer commit];
+	spudgpumetal___queue_leave(swap_chain_metal->_present_queue);
 }
 
 spudgpu_image_view spudgpu_get_swap_chain_image_view(

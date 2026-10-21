@@ -722,24 +722,51 @@ printed its 6 warnings on each.
 
 ## Known gaps (don't re-flag as surprises)
 
-- Threads and SpudGPU's queues and bindless table, as of 2026-10-21. Vulkan:
-  the device makes its graphics queue once (`_graphics_queue`, so
-  `spudgpu_get_graphics_queue` hands out the same one every call, as D3D12
-  and Metal do), and every submit, present and wait-idle holds the queue's
-  `spud_mutex` (`src/spudthread.h`), since a `VkQueue` is externally
-  synchronized; a caller using the raw `VkQueue` brackets it with
-  `spudgpu_vk_queue_lock`/`_unlock`. Bindless registering and unregistering
-  hold a lock in the bindless state, across the `vkUpdateDescriptorSets` too,
-  and the bindless state is made only with the device, never retried later.
-  A first `spudgpu_enumerate_devices` on each of two threads makes one set of
-  devices (`_devices_lock`). A threaded test on a fake driver showed each
-  race on the old code (8 logical devices, 8 threads in `vkQueueSubmit` at
-  once, a slot handed out twice, TSan reports) and none on the new, TSan,
-  ASan and UBSan clean. Not yet done: D3D12's bindless state is still made
-  lazily and its slot free lists are unguarded (the same two races), and
-  the Metal and D3D12 `spudgpu_enumerate_devices` first call is not locked.
-  `spudgpu.h` promises any-thread queue use on every backend; it promises
-  nothing yet for bindless.
+- **Threads in SpudGPU (2026-10-21): SpudLib locks what it hides; the
+  caller synchronizes the handles it holds.** State the caller can't see is
+  SpudGPU's to guard, on every backend: the bindless slot table, a lazily
+  made device array or bindless state, D3D12's shared descriptor heaps and
+  indirect signatures. Handles the caller holds are the caller's: a queue,
+  like a command list, allocator or swap chain, is used by one thread at a
+  time, on every backend, and SpudGPU takes no lock for it (`spudgpu.h`,
+  `spudgpu_submit_command_lists`). A lock there would be a decision made for
+  the caller, and a hidden stall: a present or wait-idle holding it blocks
+  every other thread's submit. Done so far:
+  - Every backend: submit, `spudgpu_queue_submit` (which the synced submit
+    goes through), wait-idle and present bracket their use of the queue with
+    a debug-build counter (`spudgpuvulkan___queue_enter`,
+    `spudgpu_d3d12___queue_enter`, `spudgpumetal___queue_enter`) that
+    asserts when two threads are in one queue at once; nothing in release.
+    D3D12's `spudgpu_queue_submit` queues its waits, lists and signals by
+    separate calls and bumps semaphore counts, so it was never safe from two
+    threads at once either. Metal also uses its queue on its own when a
+    swap chain is made and when a list takes its command buffer; Metal's
+    queue allows that from any thread, and it has no Vulkan or D3D12
+    counterpart.
+  - Vulkan: the device makes its graphics queue once (`_graphics_queue`), so
+    `spudgpu_get_graphics_queue` hands out the same one every call, as D3D12
+    and Metal do (it made, and leaked, a new one on each call). Bindless
+    registering and unregistering hold the bindless state's `spud_mutex`
+    (`src/spudthread.h`) across the `vkUpdateDescriptorSets` too, since the
+    set is externally synchronized; the state is made only with the device,
+    never retried later. A first `spudgpu_enumerate_devices` on each of two
+    threads makes one set of devices (`_devices_lock`). A threaded test on a
+    fake driver found each race on the old code (8 logical devices, a slot
+    handed out twice, TSan reports) and none on the new, TSan, ASan and UBSan
+    clean; the debug assert fired on unsynchronized submits and not on
+    synchronized ones.
+  - D3D12: the bindless state is still made on first use, now under
+    `_bindless_create_mutex` with a second look inside it, and published
+    through an atomic pointer, so the bind calls (made while lists record on
+    any thread) take only an acquire load. Its slot stacks are guarded by
+    the state's `lock`; the `Create*View` writes are outside it, as D3D12
+    allows. Type-checked on Linux against DirectX-Headers (command and
+    descriptors clean; context and swap chain no new errors over the
+    original against a stub DXGI); not run.
+  - Metal's debug check was written on Linux and not compiled.
+  Not done: the Metal and D3D12 `spudgpu_enumerate_devices` first call is not
+  locked; `spudgpu.h` states the queue rule, and nothing yet about bindless
+  or the other calls.
 - An indirect draw's `stride` is a multiple of 4 and at least the size of
   its args struct, on every backend (Vulkan's rule); otherwise nothing is
   recorded. A larger stride skips the caller's data between entries. Until
@@ -821,10 +848,10 @@ printed its 6 warnings on each.
   and Metal). A larger count records nothing, on every backend.
 
 - The debug name rule (see "A debug name is copied") was
-  applied to every module on 2026-10-09. One kind of Vulkan handle has no
-  release path at all, so it and a name given to it are never freed: the queue
-  `spudgpu_get_graphics_queue` returns, a new one on each call. Descriptor sets
-  had none either until 2026-10-21; a Vulkan pool now keeps its sets in a list
+  applied to every module on 2026-10-09. The queue
+  `spudgpu_get_graphics_queue` returns on Vulkan had no release path, a new
+  one on each call, until 2026-10-21: it is the device's now, freed with it,
+  name and all. Descriptor sets had none either until 2026-10-21; a Vulkan pool now keeps its sets in a list
   and frees them on reset and destroy, as D3D12's does.
 - Cross-backend return values (see "A function returns the same value for the
   same condition in every backend") were aligned across SpudGPU and SpudAudio on

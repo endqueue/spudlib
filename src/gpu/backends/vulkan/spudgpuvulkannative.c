@@ -24,14 +24,6 @@ VkQueue spudgpu_get_vk_queue(spudgpu_command_queue queue) {
     return queue ? queue->_queue_vk : NULL;
 }
 
-void spudgpu_vk_queue_lock(spudgpu_command_queue queue) {
-    if (queue) spud_mutex_lock(&queue->_lock);
-}
-
-void spudgpu_vk_queue_unlock(spudgpu_command_queue queue) {
-    if (queue) spud_mutex_unlock(&queue->_lock);
-}
-
 uint32_t spudgpu_get_vk_queue_family_index(spudgpu_command_queue queue) {
     return queue ? queue->_queue_family_index : UINT32_MAX;
 }

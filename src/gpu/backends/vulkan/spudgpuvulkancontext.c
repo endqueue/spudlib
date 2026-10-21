@@ -554,10 +554,6 @@ static SPUDRESULT spudgpuvulkan___create_graphics_queue(spudgpu_device_vulkan *d
     const SPUD_ALLOCATOR *allocator = &dev->head.allocator;
     spudgpu_command_queue_vulkan *queue = SPUD_NEW_ZEROED(allocator, spudgpu_command_queue_vulkan);
     if (!queue) return SPUDRESULT_OUT_OF_MEMORY;
-    if (!spud_mutex_init(&queue->_lock)) {
-        SPUD_DELETE(allocator, spudgpu_command_queue_vulkan, queue);
-        return SPUDRESULT_GENERAL_FAILURE;
-    }
     queue->head.allocator = dev->head.allocator;
     queue->_queue_family_index = dev->_graphics_queue_family_index;
     vkGetDeviceQueue(dev->_logical_device_vk, dev->_graphics_queue_family_index, 0, &queue->_queue_vk);
@@ -572,7 +568,6 @@ static void spudgpuvulkan___destroy_device(spudgpu_device_vulkan *dev) {
     const SPUD_ALLOCATOR allocator = dev->head.allocator;
     if (dev->_graphics_queue) {
         spudgpu_command_queue_vulkan *queue = dev->_graphics_queue;
-        spud_mutex_destroy(&queue->_lock);
         spud_string_free(&allocator, queue->head.debug_name);
         SPUD_DELETE(&allocator, spudgpu_command_queue_vulkan, queue);
         dev->_graphics_queue = NULL;

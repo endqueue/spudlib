@@ -232,7 +232,10 @@ void spudgpu_swap_chain_present(spudgpu_swap_chain swap_chain) {
 	UINT syncInterval =
 	    (swap_chain->_desc.present_mode == SPUDGPU_PRESENT_MODE_IMMEDIATE) ? 0
 	                                                                       : 1;
+	// Present queues work on the swap chain's queue: a use of it (spudgpu.h).
+	spudgpu_d3d12___queue_enter(swap_chain->_desc.queue);
 	swap_chain->_dxgi_swap_chain->Present(syncInterval, 0);
+	spudgpu_d3d12___queue_leave(swap_chain->_desc.queue);
 }
 
 spudgpu_image_view spudgpu_get_swap_chain_image_view(

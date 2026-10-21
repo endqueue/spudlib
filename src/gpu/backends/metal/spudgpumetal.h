@@ -166,7 +166,29 @@ typedef struct spudgpu_command_queue_t {
 	spud_object_head head;
 	id<MTLCommandQueue> _command_queue_mtl;
 	spudgpu_device_metal *_parent_device;
+#if _DEBUG
+	// How many threads are in a call that uses the queue: a debug build
+	// asserts it is never more than one (spudgpumetal___queue_enter).
+	atomic_int _debug_users;
+#endif
 } spudgpu_command_queue_metal;
+
+// Brackets every SpudGPU call that uses a queue (a submit, a present, a
+// wait-idle). Metal itself would allow two threads at once, but spudgpu.h
+// makes a queue the caller's to synchronize on every backend, since Vulkan
+// requires it; a debug build asserts here so that code that breaks the rule
+// is caught on Metal too. Nothing in a release build.
+#if _DEBUG
+static inline void spudgpumetal___queue_enter(spudgpu_command_queue_metal *queue) {
+	const int others = atomic_fetch_add(&queue->_debug_users, 1);
+	assert(others == 0 && "spudgpu: two threads used one command queue at once; the caller synchronizes a queue");
+	(void)others;
+}
+static inline void spudgpumetal___queue_leave(spudgpu_command_queue_metal *queue) { atomic_fetch_sub(&queue->_debug_users, 1); }
+#else
+static inline void spudgpumetal___queue_enter(spudgpu_command_queue_metal *queue) { (void)queue; }
+static inline void spudgpumetal___queue_leave(spudgpu_command_queue_metal *queue) { (void)queue; }
+#endif
 
 typedef struct spudgpu_command_allocator_t {
 	spud_object_head head;

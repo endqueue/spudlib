@@ -71,8 +71,10 @@ SPUDRESULT spudgpu_submit_command_lists(
 		return SPUDRESULT_OUT_OF_MEMORY;
 	for (uint32_t i = 0; i < cmd_list_count; ++i)
 		d3dLists[i] = cmd_lists[i]->_d3d_cmd_list.Get();
+	spudgpu_d3d12___queue_enter(queue);
 	queue->_d3d_cmd_queue->ExecuteCommandLists(
 	    static_cast<UINT>(cmd_list_count), d3dLists);
+	spudgpu_d3d12___queue_leave(queue);
 	SPUD_DELETE_ARRAY(&queue->head.allocator, ID3D12CommandList *, d3dLists, cmd_list_count);
 	return SPUD_SUCCESS;
 }
@@ -607,6 +609,9 @@ SPUDRESULT spudgpu_queue_submit(
 	    SPUD_NEW_ARRAY(&queue->head.allocator, ID3D12CommandList *, desc->cmd_list_count);
 	if (!d3dLists)
 		return SPUDRESULT_OUT_OF_MEMORY;
+	// The waits, the lists and the signals are queued by separate calls, so
+	// the whole of this is one use of the queue (spudgpu.h).
+	spudgpu_d3d12___queue_enter(queue);
 	for (uint32_t i = 0; i < desc->wait_semaphore_count; ++i) {
 		spudgpu_semaphore sem = desc->wait_semaphores[i];
 		queue->_d3d_cmd_queue->Wait(sem->_d3d_fence.Get(), sem->_signal_value);
@@ -640,6 +645,7 @@ SPUDRESULT spudgpu_queue_submit(
 		        desc->signal_fence->_d3d_fence.Get(), desc->signal_fence_value)))
 			result = SPUDRESULT_API_SPECIFIC_FAILURE;
 	}
+	spudgpu_d3d12___queue_leave(queue);
 	return result;
 }
 void spudgpu_queue_wait_idle(spudgpu_command_queue queue) {
@@ -649,6 +655,8 @@ void spudgpu_queue_wait_idle(spudgpu_command_queue queue) {
 	if (FAILED(queue->_device->_d3d_device->CreateFence(
 	        0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence))))
 		return;
+	// The whole wait is a use of the queue (spudgpu.h).
+	spudgpu_d3d12___queue_enter(queue);
 	queue->_d3d_cmd_queue->Signal(fence.Get(), 1);
 	if (fence->GetCompletedValue() < 1) {
 		HANDLE event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
@@ -656,6 +664,7 @@ void spudgpu_queue_wait_idle(spudgpu_command_queue queue) {
 		WaitForSingleObject(event, INFINITE);
 		CloseHandle(event);
 	}
+	spudgpu_d3d12___queue_leave(queue);
 }
 
 #if SPUDGPU_EXT_BUNDLES
