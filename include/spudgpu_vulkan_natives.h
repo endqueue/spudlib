@@ -26,7 +26,21 @@ VkPhysicalDevice spudgpu_get_vk_physical_device(spudgpu_device device);
 
 VkDevice spudgpu_get_vk_device(spudgpu_device device);
 
+/* A VkQueue is externally synchronized, and SpudGPU's own submits, presents
+ * and waits on it hold the queue's lock. A caller that submits, presents or
+ * waits on the VkQueue itself (an ImGui or OpenXR backend, say) does it
+ * between spudgpu_vk_queue_lock() and spudgpu_vk_queue_unlock() on the same
+ * spudgpu_command_queue, and calls no SpudGPU function on that queue in
+ * between: the lock is not recursive. */
 VkQueue spudgpu_get_vk_queue(spudgpu_command_queue queue);
+
+/* Takes the queue's lock, waiting while another thread holds it. NULL does
+ * nothing. */
+void spudgpu_vk_queue_lock(spudgpu_command_queue queue);
+
+/* Releases the lock spudgpu_vk_queue_lock() took, on the same thread. NULL
+ * does nothing. */
+void spudgpu_vk_queue_unlock(spudgpu_command_queue queue);
 
 uint32_t spudgpu_get_vk_queue_family_index(spudgpu_command_queue queue);
 

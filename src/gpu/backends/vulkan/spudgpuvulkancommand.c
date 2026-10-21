@@ -14,38 +14,12 @@ extern "C" {
 
 #endif
 
+// The device's own queue, made with it (spudgpu_enumerate_devices): every
+// call hands out the same one, so that the lock in it is the one lock for
+// its VkQueue.
 spudgpu_command_queue spudgpu_get_graphics_queue(spudgpu_device device) {
     if (!device) return NULL;
-
-    // Find graphics queue family
-    const SPUD_ALLOCATOR *allocator = &device->head.allocator;
-    uint32_t family_count = 0;
-    vkGetPhysicalDeviceQueueFamilyProperties(device->_physical_device_vk, &family_count, NULL);
-    const uint32_t family_capacity = family_count;
-    VkQueueFamilyProperties  *families = SPUD_NEW_ARRAY_ZEROED(allocator, VkQueueFamilyProperties, family_capacity);
-    if (!families) return NULL;
-    vkGetPhysicalDeviceQueueFamilyProperties(device->_physical_device_vk, &family_count, families);
-
-    uint32_t graphics_family = UINT32_MAX;
-    for (uint32_t i = 0; i < family_count; i++) {
-        if (families[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) {
-            graphics_family = i;
-            break;
-        }
-    }
-    if (graphics_family == UINT32_MAX) {
-        printf("spudgpu: no graphics queue family found\n");
-        SPUD_DELETE_ARRAY(allocator, VkQueueFamilyProperties, families, family_capacity);
-        return NULL;
-    }
-    SPUD_DELETE_ARRAY(allocator, VkQueueFamilyProperties, families, family_capacity);
-
-    spudgpu_command_queue_vulkan *q = SPUD_NEW_ZEROED(allocator, spudgpu_command_queue_vulkan);
-    if (!q) return NULL;
-    q->head.allocator = device->head.allocator;
-    vkGetDeviceQueue(device->_logical_device_vk, graphics_family, 0, &q->_queue_vk);
-    q->_queue_family_index = graphics_family;
-    return q;
+    return device->_graphics_queue;
 }
 
 SPUDRESULT spudgpu_submit_command_lists(
@@ -69,7 +43,9 @@ SPUDRESULT spudgpu_submit_command_lists(
     submit.commandBufferCount = cmd_list_count;
     submit.pCommandBuffers = buffers;
 
+    spud_mutex_lock(&queue->_lock);
     VkResult r = vkQueueSubmit(queue->_queue_vk, 1, &submit, VK_NULL_HANDLE);
+    spud_mutex_unlock(&queue->_lock);
     if (r != VK_SUCCESS) {
         printf("spudgpu: vkQueueSubmit failed (%d)\n", r);
         SPUD_DELETE_ARRAY(allocator, VkCommandBuffer, buffers, cmd_list_count);
@@ -537,7 +513,9 @@ SPUDRESULT spudgpu_queue_submit(spudgpu_command_queue queue, const spudgpu_submi
     submit.signalSemaphoreCount = signal_count;
     submit.pSignalSemaphores    = signal_sems;
 
+    spud_mutex_lock(&queue->_lock);
     VkResult r = vkQueueSubmit(queue->_queue_vk, 1, &submit, in_flight_fence);
+    spud_mutex_unlock(&queue->_lock);
     if (r != VK_SUCCESS) {
         printf("spudgpu: vkQueueSubmit failed (%d)\n", r);
     }
@@ -553,7 +531,11 @@ SPUDRESULT spudgpu_queue_submit(spudgpu_command_queue queue, const spudgpu_submi
 
 void spudgpu_queue_wait_idle(spudgpu_command_queue queue) {
     if (!queue) return;
+    // Held for the whole wait, as Vulkan requires: a submit to this queue on
+    // another thread waits until the queue is idle.
+    spud_mutex_lock(&queue->_lock);
     vkQueueWaitIdle(queue->_queue_vk);
+    spud_mutex_unlock(&queue->_lock);
 }
 
 void spudgpu_cmd_push_constants(

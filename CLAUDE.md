@@ -722,6 +722,24 @@ printed its 6 warnings on each.
 
 ## Known gaps (don't re-flag as surprises)
 
+- Threads and SpudGPU's queues and bindless table, as of 2026-10-21. Vulkan:
+  the device makes its graphics queue once (`_graphics_queue`, so
+  `spudgpu_get_graphics_queue` hands out the same one every call, as D3D12
+  and Metal do), and every submit, present and wait-idle holds the queue's
+  `spud_mutex` (`src/spudthread.h`), since a `VkQueue` is externally
+  synchronized; a caller using the raw `VkQueue` brackets it with
+  `spudgpu_vk_queue_lock`/`_unlock`. Bindless registering and unregistering
+  hold a lock in the bindless state, across the `vkUpdateDescriptorSets` too,
+  and the bindless state is made only with the device, never retried later.
+  A first `spudgpu_enumerate_devices` on each of two threads makes one set of
+  devices (`_devices_lock`). A threaded test on a fake driver showed each
+  race on the old code (8 logical devices, 8 threads in `vkQueueSubmit` at
+  once, a slot handed out twice, TSan reports) and none on the new, TSan,
+  ASan and UBSan clean. Not yet done: D3D12's bindless state is still made
+  lazily and its slot free lists are unguarded (the same two races), and
+  the Metal and D3D12 `spudgpu_enumerate_devices` first call is not locked.
+  `spudgpu.h` promises any-thread queue use on every backend; it promises
+  nothing yet for bindless.
 - An indirect draw's `stride` is a multiple of 4 and at least the size of
   its args struct, on every backend (Vulkan's rule); otherwise nothing is
   recorded. A larger stride skips the caller's data between entries. Until

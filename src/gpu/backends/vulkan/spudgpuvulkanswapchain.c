@@ -566,7 +566,7 @@ SPUDRESULT spudgpu_create_swap_chain(
 	result.head.allocator = device->head.allocator;
 	result._device = *((spudgpu_device_vulkan *) device);
 	memcpy(&result._desc, desc, sizeof(spudgpu_swap_chain_desc));
-	result._present_queue_vk = ((spudgpu_command_queue_vulkan *) desc->queue)->_queue_vk;
+	result._present_queue = (spudgpu_command_queue_vulkan *) desc->queue;
 
 	if (desc->surface) {
 		result._surface_vk = desc->surface->_surface_vk;
@@ -677,7 +677,11 @@ void spudgpu_swap_chain_present(spudgpu_swap_chain swap_chain) {
 	// Present against the queue given as spudgpu_swap_chain_desc::queue at
 	// creation, not a freshly re-derived "the graphics queue" guess - the
 	// caller is required to have submitted this frame's rendering there too.
-	vkQueuePresentKHR(swap_chain->_present_queue_vk, &presentInfo);
+	// The present is a use of the VkQueue like a submit, so it holds the
+	// queue's lock: a submit to the same queue on another thread waits.
+	spud_mutex_lock(&swap_chain->_present_queue->_lock);
+	vkQueuePresentKHR(swap_chain->_present_queue->_queue_vk, &presentInfo);
+	spud_mutex_unlock(&swap_chain->_present_queue->_lock);
 
 	// Advance the frame-in-flight cursor
 	swap_chain->_current_frame = (swap_chain->_current_frame + 1) % swap_chain->_max_frames_in_flight;

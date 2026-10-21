@@ -9,6 +9,7 @@
 
 #include "spudgpu.h"
 #include "../../../spudallocator.h"
+#include "../../../spudthread.h"
 #include <vulkan/vulkan.h>
 #include <stdatomic.h>
 
@@ -19,16 +20,27 @@ typedef struct spudgpu_instance_t {
     // and freed with the instance, devices and all.
     spudgpu_device *_devices;
     uint32_t _devices_count;
+    // Held for the whole of spudgpu_enumerate_devices, so that two first
+    // calls on two threads make one set of devices, not two. A pointer
+    // because each device keeps a copy of this struct (_instance), and a
+    // mutex is never copied.
+    spud_mutex *_devices_lock;
 } spudgpu_instance_vulkan;
 
 #define SPUDGPU_BINDLESS_MAX_SLOTS_PER_CLASS 4096
 
-// Lazily created the first time bindless capabilities/registration is used on
-// a device — most devices that never touch the bindless API pay nothing.
+// Made once, with the device (spudgpu_enumerate_devices); NULL if that failed,
+// and then every bindless call reports bindless unsupported. Only ever reached
+// through the device's pointer, never copied.
 typedef struct spudgpu_bindless_state_vulkan {
     spudgpu_descriptor_set_layout layout; // Wraps the single global layout.
     VkDescriptorPool pool_vk;
     VkDescriptorSet set_vk;
+
+    // Guards everything below, and every vkUpdateDescriptorSets of set_vk
+    // (the set is externally synchronized in Vulkan): registering and
+    // unregistering may be done from any thread.
+    spud_mutex lock;
 
     uint32_t sampled_image_next_unused;
     uint32_t storage_image_next_unused;
@@ -83,19 +95,25 @@ typedef struct spudgpu_device_t {
     PFN_vkCmdBeginDebugUtilsLabelEXT _vkCmdBeginDebugUtilsLabelEXT;
     PFN_vkCmdEndDebugUtilsLabelEXT _vkCmdEndDebugUtilsLabelEXT;
 
-    // Lazily allocated by the first spudgpu_get_bindless_capabilities /
-    // spudgpu_bindless_register_* / spudgpu_get_bindless_descriptor_set_layout
-    // call. NULL until then. Owned by this device; never copied by value —
-    // every struct above embeds spudgpu_device_vulkan by value, so mutating
-    // bindless state must go through the live spudgpu_device pointer, not a
-    // snapshot copy.
+    // Made with the device, before it is first copied (every struct above
+    // embeds spudgpu_device_vulkan by value), and never replaced, so every
+    // copy holds the same pointer. NULL if bindless could not be made.
     spudgpu_bindless_state_vulkan *_bindless;
+    // The queue spudgpu_get_graphics_queue hands out: made with the device,
+    // before it is first copied, and freed with it. NULL if the logical
+    // device could not be made.
+    struct spudgpu_command_queue_t *_graphics_queue;
 } spudgpu_device_vulkan;
 
+// One per VkQueue, owned by the device. vkQueueSubmit, vkQueuePresentKHR and
+// vkQueueWaitIdle all need the VkQueue externally synchronized, and D3D12's
+// and Metal's queues may be submitted to from any thread, so every call that
+// reaches _queue_vk holds _lock. Never copied: a swap chain keeps a pointer.
 typedef struct spudgpu_command_queue_t {
     spud_object_head head;
     VkQueue _queue_vk;
     uint32_t _queue_family_index;
+    spud_mutex _lock;
 } spudgpu_command_queue_vulkan;
 
 typedef struct spudgpu_command_allocator_t {
@@ -251,7 +269,9 @@ typedef struct spudgpu_swap_chain_t {
     VkSwapchainKHR _swapchain_vk;
     spudgpu_swap_chain_desc _desc;
     spudgpu_device_vulkan _device;
-    VkQueue _present_queue_vk; // From desc.queue, set at creation - see spudgpu_swap_chain_desc::queue.
+    // desc.queue, set at creation - see spudgpu_swap_chain_desc::queue. Its
+    // _lock is held across vkQueuePresentKHR.
+    spudgpu_command_queue_vulkan *_present_queue;
     VkSurfaceKHR _surface_vk;
     VkFormat _format_vk;
     VkExtent2D _extent_vk;
@@ -370,12 +390,13 @@ void spudgpuvulkan___image_create_info(
     const spudgpu_image_desc *desc,
     VkImageCreateInfo *out_info);
 
-// Defined in spudgpuvulkandescriptors.c. Idempotent — safe to call more than
-// once, but must be called at least once before the device's first
-// by-value copy (command allocator/buffer/image/pipeline creation, ...) so
-// every later snapshot observes a populated _bindless pointer rather than a
-// stale NULL from before lazy initialization.
-SPUDRESULT spudgpuvulkan___ensure_bindless_state(spudgpu_device device);
+// Defined in spudgpuvulkandescriptors.c. Called once, by
+// spudgpu_enumerate_devices, before the device's first by-value copy
+// (command allocator/buffer/image/pipeline creation, ...), so every copy
+// holds the same _bindless. Nothing makes it later: a device whose bindless
+// state could not be made then has none, and a later attempt would be one
+// the copies already taken never see.
+SPUDRESULT spudgpuvulkan___create_bindless_state(spudgpu_device device);
 void spudgpuvulkan___destroy_bindless_state(spudgpu_device device);
 
 #if _DEBUG

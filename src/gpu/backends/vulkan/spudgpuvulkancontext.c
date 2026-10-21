@@ -528,9 +528,18 @@ SPUDRESULT spudgpu_create_instance(
 
     // If successful, return a memcpy'ed heap pointer of the result
     spudgpu_instance_vulkan *pResult = SPUD_NEW(allocator, spudgpu_instance_vulkan);
-    if (!pResult) {
+    result._devices_lock = SPUD_NEW(allocator, spud_mutex);
+    if (!pResult || !result._devices_lock) {
+        SPUD_DELETE(allocator, spudgpu_instance_vulkan, pResult);
+        SPUD_DELETE(allocator, spud_mutex, result._devices_lock);
         vkDestroyInstance(result._instance_vk, NULL);
         return SPUDRESULT_OUT_OF_MEMORY;
+    }
+    if (!spud_mutex_init(result._devices_lock)) {
+        SPUD_DELETE(allocator, spudgpu_instance_vulkan, pResult);
+        SPUD_DELETE(allocator, spud_mutex, result._devices_lock);
+        vkDestroyInstance(result._instance_vk, NULL);
+        return SPUDRESULT_GENERAL_FAILURE;
     }
     result.head.allocator = *desc->allocator;
     memcpy(pResult, &result, sizeof(spudgpu_instance_vulkan));
@@ -538,11 +547,36 @@ SPUDRESULT spudgpu_create_instance(
     return SPUD_SUCCESS;
 }
 
-// Frees a device spudgpu_enumerate_devices made, its name and its bindless
-// state included. NULL is nothing to free.
+// Makes the device's graphics queue (_graphics_queue): the one queue its
+// logical device was made with, of _graphics_queue_family_index. Called by
+// spudgpu_enumerate_devices before the device is first copied.
+static SPUDRESULT spudgpuvulkan___create_graphics_queue(spudgpu_device_vulkan *dev) {
+    const SPUD_ALLOCATOR *allocator = &dev->head.allocator;
+    spudgpu_command_queue_vulkan *queue = SPUD_NEW_ZEROED(allocator, spudgpu_command_queue_vulkan);
+    if (!queue) return SPUDRESULT_OUT_OF_MEMORY;
+    if (!spud_mutex_init(&queue->_lock)) {
+        SPUD_DELETE(allocator, spudgpu_command_queue_vulkan, queue);
+        return SPUDRESULT_GENERAL_FAILURE;
+    }
+    queue->head.allocator = dev->head.allocator;
+    queue->_queue_family_index = dev->_graphics_queue_family_index;
+    vkGetDeviceQueue(dev->_logical_device_vk, dev->_graphics_queue_family_index, 0, &queue->_queue_vk);
+    dev->_graphics_queue = queue;
+    return SPUD_SUCCESS;
+}
+
+// Frees a device spudgpu_enumerate_devices made, its name, its graphics
+// queue and its bindless state included. NULL is nothing to free.
 static void spudgpuvulkan___destroy_device(spudgpu_device_vulkan *dev) {
     if (!dev) return;
     const SPUD_ALLOCATOR allocator = dev->head.allocator;
+    if (dev->_graphics_queue) {
+        spudgpu_command_queue_vulkan *queue = dev->_graphics_queue;
+        spud_mutex_destroy(&queue->_lock);
+        spud_string_free(&allocator, queue->head.debug_name);
+        SPUD_DELETE(&allocator, spudgpu_command_queue_vulkan, queue);
+        dev->_graphics_queue = NULL;
+    }
     spudgpuvulkan___destroy_bindless_state((spudgpu_device) dev);
     if (dev->_logical_device_vk)
         vkDestroyDevice(dev->_logical_device_vk, NULL);
@@ -561,6 +595,8 @@ SPUDRESULT spudgpu_destroy_instance(spudgpu_instance instance) {
     SPUD_DELETE_ARRAY(&allocator, spudgpu_device, instance->_devices, instance->_devices_count);
 
     vkDestroyInstance(instance->_instance_vk, NULL);
+    spud_mutex_destroy(instance->_devices_lock);
+    SPUD_DELETE(&allocator, spud_mutex, instance->_devices_lock);
     spud_string_free(&allocator, instance->head.debug_name);
     SPUD_DELETE(&allocator, spudgpu_instance_vulkan, instance);
     return SPUD_SUCCESS;
@@ -658,13 +694,11 @@ static void spudgpuvulkan___internal_make_device_properties(
     }
 }
 
-SPUDRESULT spudgpu_enumerate_devices(
+// spudgpu_enumerate_devices, with the instance's _devices_lock held.
+static SPUDRESULT spudgpuvulkan___enumerate_devices_locked(
     spudgpu_instance instance,
     spudgpu_device **ppOutputDevices,
     uint32_t *pOutputDevicesCount) {
-    if (!instance) return SPUDRESULT_GPU_INVALID_INSTANCE;
-    if (!ppOutputDevices) return SPUDRESULT_NULL_OUTPUT_PARAMETER;
-    if (!pOutputDevicesCount) return SPUDRESULT_NULL_OUTPUT_PARAMETER;
     // The devices are made once; a later call hands out the same array.
     if (instance->_devices) {
         *ppOutputDevices = instance->_devices;
@@ -720,10 +754,23 @@ SPUDRESULT spudgpu_enumerate_devices(
         vkGetPhysicalDeviceFeatures(pDeviceVulkan->_physical_device_vk, &pDeviceVulkan->_features_vk);
         spudgpuvulkan___internal_make_device_properties(pDeviceVulkan);
 
-        // Must happen before this device is ever copied by value (every
+        // Both must happen before this device is ever copied by value (every
         // other Vulkan-backend struct embeds spudgpu_device_vulkan as a
         // snapshot) — see spudgpuvulkandescriptors.c's bindless section.
-        spudgpuvulkan___ensure_bindless_state(pDeviceVulkan);
+        // A device without bindless is still a device; one whose logical
+        // device was made has a queue, or the enumeration fails, all or none.
+        spudgpuvulkan___create_bindless_state(pDeviceVulkan);
+        if (pDeviceVulkan->_logical_device_vk) {
+            const SPUDRESULT queue_sr = spudgpuvulkan___create_graphics_queue(pDeviceVulkan);
+            if (queue_sr != SPUD_SUCCESS) {
+                spudgpuvulkan___destroy_device(pDeviceVulkan);
+                for (size_t j = 0; j < i; j++)
+                    spudgpuvulkan___destroy_device((spudgpu_device_vulkan *) devices[j]);
+                SPUD_DELETE_ARRAY(allocator, spudgpu_device, devices, deviceCount);
+                SPUD_DELETE_ARRAY(allocator, VkPhysicalDevice, physicalDevices, physicalDeviceCapacity);
+                return queue_sr;
+            }
+        }
 
         devices[i] = (spudgpu_device) pDeviceVulkan;
     }
@@ -735,6 +782,22 @@ SPUDRESULT spudgpu_enumerate_devices(
 
     SPUD_DELETE_ARRAY(allocator, VkPhysicalDevice, physicalDevices, physicalDeviceCapacity);
     return SPUD_SUCCESS;
+}
+
+// The first call makes the devices, under the instance's lock, so that a
+// first call on each of two threads makes one set of devices: the second
+// waits for the first and is handed the same array.
+SPUDRESULT spudgpu_enumerate_devices(
+    spudgpu_instance instance,
+    spudgpu_device **ppOutputDevices,
+    uint32_t *pOutputDevicesCount) {
+    if (!instance) return SPUDRESULT_GPU_INVALID_INSTANCE;
+    if (!ppOutputDevices) return SPUDRESULT_NULL_OUTPUT_PARAMETER;
+    if (!pOutputDevicesCount) return SPUDRESULT_NULL_OUTPUT_PARAMETER;
+    spud_mutex_lock(instance->_devices_lock);
+    const SPUDRESULT sr = spudgpuvulkan___enumerate_devices_locked(instance, ppOutputDevices, pOutputDevicesCount);
+    spud_mutex_unlock(instance->_devices_lock);
+    return sr;
 }
 
 SPUDRESULT spudgpu_get_device_properties(

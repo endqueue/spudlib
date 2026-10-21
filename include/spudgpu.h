@@ -589,7 +589,8 @@ SPUDGPU_NATIVE_API spudgpu_get_native_gpu_api(spudgpu_instance instance);
 /**
  * @brief Returns a device's first graphics (direct) command queue.
  *
- * The device owns the queue; it is not destroyed by the caller.
+ * The device owns the queue; it is not destroyed by the caller. Every call
+ * for one device returns the same queue.
  *
  * @param[in] device Device to get the queue from.
  *
@@ -663,6 +664,14 @@ SPUDRESULT spudgpu_get_command_queue(
  * Performs no synchronization with a swap chain; use
  * spudgpu_submit_command_lists_synced() when rendering to one, or
  * spudgpu_queue_submit() to name the semaphores and fence yourself.
+ *
+ * Any thread may submit to a queue, and several threads may submit to one
+ * queue at once: this, spudgpu_submit_command_lists_synced(),
+ * spudgpu_queue_submit(), spudgpu_queue_wait_idle() and
+ * spudgpu_swap_chain_present() reach a queue one at a time (Vulkan's queue
+ * is externally synchronized, and SpudGPU keeps a lock per queue for it;
+ * D3D12's and Metal's queues need none). The order two threads' submissions
+ * reach the queue in is the order they get there.
  *
  * @param[in] queue          Queue to submit to.
  * @param[in] cmd_lists      Array of command lists, each closed with
@@ -791,6 +800,9 @@ SPUDRESULT spudgpu_queue_submit(
  *
  * Equivalent to vkQueueWaitIdle. Prefer fence-based synchronization in hot
  * paths.
+ *
+ * May be called from any thread. On Vulkan, a submit to the same queue from
+ * another thread waits until this returns.
  *
  * @param[in] queue Queue to wait on.
  */
@@ -2998,6 +3010,10 @@ uint32_t spudgpu_swap_chain_acquire_next_image(spudgpu_swap_chain swap_chain);
  * Call after recording and submitting the frame's commands to the queue given
  * as spudgpu_swap_chain_desc::queue. Presentation is ordered against that
  * queue's work, not against whichever queue was submitted on.
+ *
+ * The present reaches that queue the way a submit does (see
+ * spudgpu_submit_command_lists()), so other threads may submit to the queue
+ * meanwhile. The swap chain itself is used from one thread at a time.
  *
  * @param[in] swap_chain Swap chain holding the image to display.
  */
