@@ -24,8 +24,9 @@ SPUDRESULT spudgpu_create_timestamp_set(
     if (!out_set) return SPUDRESULT_NULL_OUTPUT_PARAMETER;
     if (!device->_properties.pass_timestamps) return SPUDRESULT_GPU_TIMESTAMPS_NOT_SUPPORTED;
 
-    spudgpu_timestamp_set_vulkan *set = calloc(1, sizeof(spudgpu_timestamp_set_vulkan));
+    spudgpu_timestamp_set_vulkan *set = SPUD_NEW_ZEROED(&device->head.allocator, spudgpu_timestamp_set_vulkan);
     if (!set) return SPUDRESULT_OUT_OF_MEMORY;
+    set->head.allocator = device->head.allocator;
 
     VkQueryPoolCreateInfo info = {0};
     info.sType      = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
@@ -34,7 +35,7 @@ SPUDRESULT spudgpu_create_timestamp_set(
     VkResult r = vkCreateQueryPool(device->_logical_device_vk, &info, NULL, &set->_query_pool_vk);
     if (r != VK_SUCCESS) {
         printf("spudgpu: vkCreateQueryPool failed (%d)\n", r);
-        free(set);
+        SPUD_DELETE(&device->head.allocator, spudgpu_timestamp_set_vulkan, set);
         return SPUDRESULT_API_SPECIFIC_FAILURE;
     }
     set->_logical_device_vk = device->_logical_device_vk;
@@ -47,8 +48,9 @@ SPUDRESULT spudgpu_create_timestamp_set(
 void spudgpu_destroy_timestamp_set(spudgpu_timestamp_set set) {
     if (!set) return;
     vkDestroyQueryPool(set->_logical_device_vk, set->_query_pool_vk, NULL);
-    free((void *)set->_debug_name);
-    free(set);
+    const SPUD_ALLOCATOR allocator = set->head.allocator;
+    spud_string_free(&allocator, set->head.debug_name);
+    SPUD_DELETE(&allocator, spudgpu_timestamp_set_vulkan, set);
 }
 
 void spudgpu_cmd_reset_timestamps(

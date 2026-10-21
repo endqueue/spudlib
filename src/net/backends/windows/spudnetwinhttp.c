@@ -101,59 +101,74 @@ static SPUDRESULT spudnet_win_failed(spudnet_error *record, DWORD error, SPUDRES
 	return spudnet_error_record(record, spudnet_win_result(error, otherwise), SPUDNET_ERROR_SOURCE_WIN32, error, NULL);
 }
 
-/* UTF-8 to a malloc'd, NUL-terminated wide string. NULL when the bytes
- * aren't UTF-8 or memory ran out. */
-static wchar_t *spudnet_win_wide(const char *text) {
-	int count = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text, -1, NULL, 0);
+/* UTF-8 to a NUL-terminated wide string made through `allocator`, of
+ * `*out_count` wchar_ts (the terminator included), which the caller frees
+ * with spudnet_win_wide_free and that count. NULL, and a count of 0, when
+ * the bytes aren't UTF-8 or memory ran out. */
+static wchar_t *spudnet_win_wide(const SPUD_ALLOCATOR *allocator, const char *text, size_t *out_count) {
+	*out_count = 0;
+	int count  = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text, -1, NULL, 0);
 	if (count <= 0)
 		return NULL;
-	wchar_t *wide = (wchar_t *)malloc((size_t)count * sizeof(wchar_t));
+	wchar_t *wide = SPUD_NEW_ARRAY(allocator, wchar_t, (size_t)count);
 	if (!wide)
 		return NULL;
 	if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text, -1, wide, count) <= 0) {
-		free(wide);
+		SPUD_DELETE_ARRAY(allocator, wchar_t, wide, (size_t)count);
 		return NULL;
 	}
+	*out_count = (size_t)count;
 	return wide;
+}
+
+static void spudnet_win_wide_free(const SPUD_ALLOCATOR *allocator, wchar_t *wide, size_t count) {
+	SPUD_DELETE_ARRAY(allocator, wchar_t, wide, count);
 }
 
 struct spudnet_win_url {
 	wchar_t      *host;
-	wchar_t      *path; // path and query, never empty
+	size_t        host_count; // the wchar_ts `host` was allocated with
+	wchar_t      *path;       // path and query, never empty
+	size_t        path_count; // the wchar_ts `path` was allocated with
 	INTERNET_PORT port;
 	bool          secure;
 };
 
-static void spudnet_win_url_free(struct spudnet_win_url *url) {
-	free(url->host);
-	free(url->path);
-	url->host = NULL;
-	url->path = NULL;
+static void spudnet_win_url_free(const SPUD_ALLOCATOR *allocator, struct spudnet_win_url *url) {
+	SPUD_DELETE_ARRAY(allocator, wchar_t, url->host, url->host_count);
+	SPUD_DELETE_ARRAY(allocator, wchar_t, url->path, url->path_count);
+	url->host       = NULL;
+	url->host_count = 0;
+	url->path       = NULL;
+	url->path_count = 0;
 }
 
-/* Splits `url` into what WinHttpConnect and WinHttpOpenRequest each take.
- * WinHttpCrackUrl only knows http and https, so a ws/wss URL is cracked as
- * the http/https one it rides on. */
-static SPUDRESULT spudnet_win_crack(const char *url, bool websocket, struct spudnet_win_url *out_url) {
-	out_url->host = NULL;
-	out_url->path = NULL;
+/* Splits `url` into what WinHttpConnect and WinHttpOpenRequest each take,
+ * made through `allocator`; the caller frees `out_url` with
+ * spudnet_win_url_free whatever this returned. WinHttpCrackUrl only knows
+ * http and https, so a ws/wss URL is cracked as the http/https one it rides
+ * on. */
+static SPUDRESULT spudnet_win_crack(const SPUD_ALLOCATOR *allocator, const char *url, bool websocket, struct spudnet_win_url *out_url) {
+	memset(out_url, 0, sizeof(*out_url));
 
-	wchar_t *wide = NULL;
+	wchar_t *wide       = NULL;
+	size_t   wide_count = 0;
 	if (websocket) {
 		bool        secure        = spudnet_url_has_scheme(url, "wss");
 		const char *scheme        = secure ? "https" : "http";
 		size_t      scheme_length = strlen(scheme);
 		const char *rest          = url + (secure ? 3 : 2); // from "://" on
 		size_t      rest_length   = strlen(rest);
-		char       *as_http       = (char *)malloc(scheme_length + rest_length + 1);
+		size_t      as_http_size  = scheme_length + rest_length + 1;
+		char       *as_http       = (char *)spud_allocate(allocator, as_http_size, 1);
 		if (!as_http)
 			return SPUDRESULT_OUT_OF_MEMORY;
 		memcpy(as_http, scheme, scheme_length);
 		memcpy(as_http + scheme_length, rest, rest_length + 1);
-		wide = spudnet_win_wide(as_http);
-		free(as_http);
+		wide = spudnet_win_wide(allocator, as_http, &wide_count);
+		spud_free(allocator, as_http, as_http_size, 1);
 	} else {
-		wide = spudnet_win_wide(url);
+		wide = spudnet_win_wide(allocator, url, &wide_count);
 	}
 	if (!wide)
 		return SPUDRESULT_SPUDNET_INVALID_URL;
@@ -168,7 +183,7 @@ static SPUDRESULT spudnet_win_crack(const char *url, bool websocket, struct spud
 	parts.dwUrlPathLength   = (DWORD)-1;
 	parts.dwExtraInfoLength = (DWORD)-1;
 	if (!WinHttpCrackUrl(wide, 0, 0, &parts) || parts.dwHostNameLength == 0) {
-		free(wide);
+		spudnet_win_wide_free(allocator, wide, wide_count);
 		return SPUDRESULT_SPUDNET_INVALID_URL;
 	}
 
@@ -178,11 +193,15 @@ static SPUDRESULT spudnet_win_crack(const char *url, bool websocket, struct spud
 		extra_length++;
 
 	size_t path_length = (size_t)parts.dwUrlPathLength + extra_length;
-	out_url->host      = (wchar_t *)malloc(((size_t)parts.dwHostNameLength + 1) * sizeof(wchar_t));
-	out_url->path      = (wchar_t *)malloc((path_length + 2) * sizeof(wchar_t));
+	out_url->host      = SPUD_NEW_ARRAY(allocator, wchar_t, (size_t)parts.dwHostNameLength + 1);
+	if (out_url->host)
+		out_url->host_count = (size_t)parts.dwHostNameLength + 1;
+	out_url->path = SPUD_NEW_ARRAY(allocator, wchar_t, path_length + 2);
+	if (out_url->path)
+		out_url->path_count = path_length + 2;
 	if (!out_url->host || !out_url->path) {
-		spudnet_win_url_free(out_url);
-		free(wide);
+		spudnet_win_url_free(allocator, out_url);
+		spudnet_win_wide_free(allocator, wide, wide_count);
 		return SPUDRESULT_OUT_OF_MEMORY;
 	}
 	memcpy(out_url->host, parts.lpszHostName, parts.dwHostNameLength * sizeof(wchar_t));
@@ -203,12 +222,13 @@ static SPUDRESULT spudnet_win_crack(const char *url, bool websocket, struct spud
 
 	out_url->port   = parts.nPort;
 	out_url->secure = parts.nScheme == INTERNET_SCHEME_HTTPS;
-	free(wide);
+	spudnet_win_wide_free(allocator, wide, wide_count);
 	return SPUD_SUCCESS;
 }
 
-/* Adds the caller's headers to a request. */
-static SPUDRESULT spudnet_win_add_headers(HINTERNET request, const spudnet_header *headers, uint32_t header_count) {
+/* Adds the caller's headers to a request. What is put together on the way
+ * is made and freed through `allocator`. */
+static SPUDRESULT spudnet_win_add_headers(const SPUD_ALLOCATOR *allocator, HINTERNET request, const spudnet_header *headers, uint32_t header_count) {
 	if (header_count == 0)
 		return SPUD_SUCCESS;
 
@@ -218,7 +238,7 @@ static SPUDRESULT spudnet_win_add_headers(HINTERNET request, const spudnet_heade
 			return SPUDRESULT_DESC_INVALID_PARAMETERS;
 		length += strlen(headers[i].name) + 2 + strlen(headers[i].value) + 2;
 	}
-	char *block = (char *)malloc(length + 1);
+	char *block = (char *)spud_allocate(allocator, length + 1, 1);
 	if (!block)
 		return SPUDRESULT_OUT_OF_MEMORY;
 	size_t at = 0;
@@ -234,20 +254,21 @@ static SPUDRESULT spudnet_win_add_headers(HINTERNET request, const spudnet_heade
 		memcpy(block + at, "\r\n", 2);
 		at += 2;
 	}
-	block[at] = '\0';
-	wchar_t *wide = spudnet_win_wide(block);
-	free(block);
+	block[at]         = '\0';
+	size_t   wide_count = 0;
+	wchar_t *wide       = spudnet_win_wide(allocator, block, &wide_count);
+	spud_free(allocator, block, length + 1, 1);
 	if (!wide)
 		return SPUDRESULT_DESC_INVALID_PARAMETERS;
 
 	BOOL added = WinHttpAddRequestHeaders(request, wide, (DWORD)-1, WINHTTP_ADDREQ_FLAG_ADD);
-	free(wide);
+	spudnet_win_wide_free(allocator, wide, wide_count);
 	return added ? SPUD_SUCCESS : SPUDRESULT_DESC_INVALID_PARAMETERS;
 }
 
 /* Opens a session that reaches servers the way `proxy` says. NULL on
- * failure. */
-static HINTERNET spudnet_win_open_session(const struct spudnet_proxy *proxy) {
+ * failure. The proxy's name is put together through `allocator`. */
+static HINTERNET spudnet_win_open_session(const SPUD_ALLOCATOR *allocator, const struct spudnet_proxy *proxy) {
 	// No agent string: User-Agent is the caller's header to send or not.
 	if (proxy->mode == SPUDNET_PROXY_NONE)
 		return WinHttpOpen(NULL, WINHTTP_ACCESS_TYPE_NO_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, WINHTTP_FLAG_ASYNC);
@@ -256,16 +277,17 @@ static HINTERNET spudnet_win_open_session(const struct spudnet_proxy *proxy) {
 
 	// WinHTTP takes a named proxy as "host:port", an IPv6 host in brackets.
 	size_t size = strlen(proxy->host) + 16;
-	char  *name = (char *)malloc(size);
+	char  *name = (char *)spud_allocate(allocator, size, 1);
 	if (!name)
 		return NULL;
 	snprintf(name, size, proxy->host_is_ipv6 ? "[%s]:%u" : "%s:%u", proxy->host, (unsigned)proxy->port);
-	wchar_t *wide = spudnet_win_wide(name);
-	free(name);
+	size_t   wide_count = 0;
+	wchar_t *wide       = spudnet_win_wide(allocator, name, &wide_count);
+	spud_free(allocator, name, size, 1);
 	if (!wide)
 		return NULL;
 	HINTERNET session = WinHttpOpen(NULL, WINHTTP_ACCESS_TYPE_NAMED_PROXY, wide, WINHTTP_NO_PROXY_BYPASS, WINHTTP_FLAG_ASYNC);
-	free(wide);
+	spudnet_win_wide_free(allocator, wide, wide_count);
 	return session;
 }
 
@@ -292,17 +314,20 @@ struct spudnet_win_tls {
 	uint32_t          pin_count;
 };
 
-static void spudnet_win_tls_free(struct spudnet_win_tls *tls) {
+/* `pins` was allocated with `pin_count` entries, through the allocator both
+ * of these are given. */
+static void spudnet_win_tls_free(const SPUD_ALLOCATOR *allocator, struct spudnet_win_tls *tls) {
 	if (tls->engine)
 		CertFreeCertificateChainEngine(tls->engine);
 	if (tls->roots)
 		CertCloseStore(tls->roots, 0);
-	free(tls->pins);
+	SPUD_DELETE_ARRAY(allocator, spudnet_tls_pin, tls->pins, tls->pin_count);
 	memset(tls, 0, sizeof(*tls));
 }
 
-/* Fills `out_tls`, which the caller frees with spudnet_win_tls_free. */
-static SPUDRESULT spudnet_win_tls_create(const spudnet_tls_desc *desc, struct spudnet_win_tls *out_tls) {
+/* Fills `out_tls`, which the caller frees with spudnet_win_tls_free and the
+ * same allocator. */
+static SPUDRESULT spudnet_win_tls_create(const SPUD_ALLOCATOR *allocator, const spudnet_tls_desc *desc, struct spudnet_win_tls *out_tls) {
 	memset(out_tls, 0, sizeof(*out_tls));
 	SPUDRESULT result = spudnet_tls_desc_check(desc);
 	if (SPUDFAIL(result))
@@ -320,7 +345,7 @@ static SPUDRESULT spudnet_win_tls_create(const spudnet_tls_desc *desc, struct sp
 			uint64_t    der_size = desc->roots[i].size;
 			if (der_size > MAXDWORD ||
 			    !CertAddEncodedCertificateToStore(out_tls->roots, X509_ASN_ENCODING, der, (DWORD)der_size, CERT_STORE_ADD_USE_EXISTING, NULL)) {
-				spudnet_win_tls_free(out_tls);
+				spudnet_win_tls_free(allocator, out_tls);
 				return SPUDRESULT_DESC_INVALID_PARAMETERS;
 			}
 		}
@@ -329,19 +354,19 @@ static SPUDRESULT spudnet_win_tls_create(const spudnet_tls_desc *desc, struct sp
 		config.cbSize         = sizeof(config);
 		config.hExclusiveRoot = out_tls->roots;
 		if (!CertCreateCertificateChainEngine(&config, &out_tls->engine)) {
-			spudnet_win_tls_free(out_tls);
+			spudnet_win_tls_free(allocator, out_tls);
 			return SPUDRESULT_GENERAL_FAILURE;
 		}
 	}
 
 	if (desc->pin_count > 0) {
-		out_tls->pins = (spudnet_tls_pin *)malloc((size_t)desc->pin_count * sizeof(spudnet_tls_pin));
+		out_tls->pins = SPUD_NEW_ARRAY(allocator, spudnet_tls_pin, desc->pin_count);
 		if (!out_tls->pins) {
-			spudnet_win_tls_free(out_tls);
+			spudnet_win_tls_free(allocator, out_tls);
 			return SPUDRESULT_OUT_OF_MEMORY;
 		}
+		out_tls->pin_count = desc->pin_count; // also the count it is freed with
 		memcpy(out_tls->pins, desc->pins, (size_t)desc->pin_count * sizeof(spudnet_tls_pin));
-		out_tls->pin_count = desc->pin_count;
 	}
 	return SPUD_SUCCESS;
 }
@@ -483,7 +508,7 @@ static bool spudnet_win_tls_accepts(HINTERNET request, const struct spudnet_win_
 #define SPUDNET_WIN_HTTP_CHUNK_FRAME 32
 
 struct spudnet_http_client_t {
-	const char *debug_name;
+	spud_object_head head; // first: spudnethttp.c reaches the allocator through it
 	// Holds the connections. Its proxy was settled when it was opened.
 	HINTERNET              session;
 	struct spudnet_win_tls tls;
@@ -598,9 +623,10 @@ void spudnet_http_client_destroy(spudnet_http_client client) {
 		return;
 	if (client->session)
 		WinHttpCloseHandle(client->session);
-	spudnet_win_tls_free(&client->tls);
-	free((void *)client->debug_name);
-	free(client);
+	const SPUD_ALLOCATOR allocator = client->head.allocator;
+	spudnet_win_tls_free(&allocator, &client->tls);
+	spud_string_free(&allocator, client->head.debug_name);
+	SPUD_DELETE(&allocator, struct spudnet_http_client_t, client);
 }
 
 SPUDRESULT spudnet_http_client_create(
@@ -618,20 +644,22 @@ SPUDRESULT spudnet_http_client_create(
 	if (base_sr != SPUD_SUCCESS)
 		return base_sr;
 
-	struct spudnet_proxy proxy;
-	SPUDRESULT           result = spudnet_proxy_parse(&desc->proxy, &proxy);
+	const SPUD_ALLOCATOR *allocator = &instance->head.allocator;
+	struct spudnet_proxy  proxy;
+	SPUDRESULT            result = spudnet_proxy_parse(allocator, &desc->proxy, &proxy);
 	if (SPUDFAIL(result)) {
-		spudnet_proxy_free(&proxy);
+		spudnet_proxy_free(allocator, &proxy);
 		return result;
 	}
-	struct spudnet_http_client_t *client = (struct spudnet_http_client_t *)calloc(1, sizeof(struct spudnet_http_client_t));
+	struct spudnet_http_client_t *client = SPUD_NEW_ZEROED(allocator, struct spudnet_http_client_t);
 	if (!client) {
-		spudnet_proxy_free(&proxy);
+		spudnet_proxy_free(allocator, &proxy);
 		return SPUDRESULT_OUT_OF_MEMORY;
 	}
-	result = spudnet_win_tls_create(&desc->tls, &client->tls);
+	client->head.allocator = *allocator;
+	result                 = spudnet_win_tls_create(allocator, &desc->tls, &client->tls);
 	if (!SPUDFAIL(result)) {
-		client->session = spudnet_win_open_session(&proxy);
+		client->session = spudnet_win_open_session(allocator, &proxy);
 		// Set on the session before any other handle exists, so each
 		// inherits it.
 		if (!client->session ||
@@ -640,7 +668,7 @@ SPUDRESULT spudnet_http_client_create(
 		        WINHTTP_INVALID_STATUS_CALLBACK)
 			result = SPUDRESULT_GENERAL_FAILURE;
 	}
-	spudnet_proxy_free(&proxy);
+	spudnet_proxy_free(allocator, &proxy);
 	if (SPUDFAIL(result)) {
 		spudnet_http_client_destroy(client);
 		return result;
@@ -717,8 +745,10 @@ static SPUDRESULT spudnet_win_http_wait_sent(struct spudnet_win_http *http, ULON
 }
 
 /* Status and headers of a request whose response has started arriving.
- * These are already in WinHTTP's hands, so nothing here waits. */
-static SPUDRESULT spudnet_win_read_headers(HINTERNET request, struct spudnet_http_head *head) {
+ * These are already in WinHTTP's hands, so nothing here waits. Called on
+ * the caller's thread, from receive_response; everything is made and freed
+ * through `allocator`, the transfer's. */
+static SPUDRESULT spudnet_win_read_headers(const SPUD_ALLOCATOR *allocator, HINTERNET request, struct spudnet_http_head *head) {
 	DWORD status      = 0;
 	DWORD status_size = sizeof(status);
 	if (!WinHttpQueryHeaders(request, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, WINHTTP_HEADER_NAME_BY_INDEX, &status, &status_size,
@@ -731,22 +761,26 @@ static SPUDRESULT spudnet_win_read_headers(HINTERNET request, struct spudnet_htt
 	WinHttpQueryHeaders(request, WINHTTP_QUERY_RAW_HEADERS_CRLF, WINHTTP_HEADER_NAME_BY_INDEX, WINHTTP_NO_OUTPUT_BUFFER, &raw_size, WINHTTP_NO_HEADER_INDEX);
 	if (GetLastError() != ERROR_INSUFFICIENT_BUFFER || raw_size == 0)
 		return SPUDRESULT_SPUDNET_HTTP_FAILED;
-	wchar_t *raw = (wchar_t *)malloc(raw_size);
+	// The query below rewrites `raw_size` with what it copied, so the size
+	// the block is freed with is kept apart.
+	const DWORD raw_capacity = raw_size;
+	wchar_t    *raw          = (wchar_t *)spud_allocate(allocator, raw_capacity, SPUD_ALIGNOF(wchar_t));
 	if (!raw)
 		return SPUDRESULT_OUT_OF_MEMORY;
 	if (!WinHttpQueryHeaders(request, WINHTTP_QUERY_RAW_HEADERS_CRLF, WINHTTP_HEADER_NAME_BY_INDEX, raw, &raw_size, WINHTTP_NO_HEADER_INDEX)) {
-		free(raw);
+		spud_free(allocator, raw, raw_capacity, SPUD_ALIGNOF(wchar_t));
 		return SPUDRESULT_SPUDNET_HTTP_FAILED;
 	}
 	int   wide_count = (int)(raw_size / sizeof(wchar_t));
 	int   utf8_size  = WideCharToMultiByte(CP_UTF8, 0, raw, wide_count, NULL, 0, NULL, NULL);
-	char *utf8       = utf8_size > 0 ? (char *)malloc((size_t)utf8_size) : NULL;
+	char *utf8       = utf8_size > 0 ? (char *)spud_allocate(allocator, (size_t)utf8_size, 1) : NULL;
 	if (!utf8 || WideCharToMultiByte(CP_UTF8, 0, raw, wide_count, utf8, utf8_size, NULL, NULL) <= 0) {
-		free(utf8);
-		free(raw);
+		if (utf8)
+			spud_free(allocator, utf8, (size_t)utf8_size, 1);
+		spud_free(allocator, raw, raw_capacity, SPUD_ALIGNOF(wchar_t));
 		return SPUDRESULT_OUT_OF_MEMORY;
 	}
-	free(raw);
+	spud_free(allocator, raw, raw_capacity, SPUD_ALIGNOF(wchar_t));
 
 	// Line by line, in the order sent; a name that repeats is joined onto
 	// its first value as each line is added.
@@ -755,10 +789,10 @@ static SPUDRESULT spudnet_win_read_headers(HINTERNET request, struct spudnet_htt
 	for (int i = 0; i < utf8_size && stored; ++i) {
 		if (utf8[i] != '\n')
 			continue;
-		stored = spudnet_head_add_header_line(head, utf8 + start, (size_t)(i - start));
+		stored = spudnet_head_add_header_line(allocator, head, utf8 + start, (size_t)(i - start));
 		start  = i + 1;
 	}
-	free(utf8);
+	spud_free(allocator, utf8, (size_t)utf8_size, 1);
 	return stored ? SPUD_SUCCESS : SPUDRESULT_OUT_OF_MEMORY;
 }
 
@@ -770,7 +804,8 @@ static void spudnet_win_http_close_request(struct spudnet_win_http *http) {
 }
 
 SPUDRESULT spudnet_http_backend_create(struct spudnet_http_transfer_t *transfer) {
-	struct spudnet_win_http *http = (struct spudnet_win_http *)calloc(1, sizeof(struct spudnet_win_http));
+	const SPUD_ALLOCATOR    *allocator = &transfer->head.allocator;
+	struct spudnet_win_http *http      = SPUD_NEW_ZEROED(allocator, struct spudnet_win_http);
 	if (!http)
 		return SPUDRESULT_OUT_OF_MEMORY;
 	http->owner        = transfer;
@@ -779,8 +814,8 @@ SPUDRESULT spudnet_http_backend_create(struct spudnet_http_transfer_t *transfer)
 	http->closed_event = CreateEventW(NULL, TRUE, FALSE, NULL);
 	http->step_event   = CreateEventW(NULL, FALSE, FALSE, NULL);
 	http->sent_event   = CreateEventW(NULL, TRUE, FALSE, NULL);
-	http->write_buffer = (uint8_t *)malloc(SPUDNET_WIN_HTTP_BUFFER_SIZE + SPUDNET_WIN_HTTP_CHUNK_FRAME);
-	http->read_buffer  = (uint8_t *)malloc(SPUDNET_WIN_HTTP_BUFFER_SIZE);
+	http->write_buffer = (uint8_t *)spud_allocate(allocator, SPUDNET_WIN_HTTP_BUFFER_SIZE + SPUDNET_WIN_HTTP_CHUNK_FRAME, 1);
+	http->read_buffer  = (uint8_t *)spud_allocate(allocator, SPUDNET_WIN_HTTP_BUFFER_SIZE, 1);
 	transfer->backend  = http;
 	if (!http->abort_event || !http->closed_event || !http->step_event || !http->sent_event || !http->write_buffer || !http->read_buffer) {
 		spudnet_http_backend_destroy(transfer);
@@ -811,9 +846,12 @@ void spudnet_http_backend_destroy(struct spudnet_http_transfer_t *transfer) {
 		CloseHandle(http->step_event);
 	if (http->sent_event)
 		CloseHandle(http->sent_event);
-	free(http->write_buffer);
-	free(http->read_buffer);
-	free(http);
+	// After the request handle has closed: the callback no longer reaches
+	// this. Both buffers are of fixed sizes.
+	const SPUD_ALLOCATOR *allocator = &transfer->head.allocator;
+	spud_free(allocator, http->write_buffer, SPUDNET_WIN_HTTP_BUFFER_SIZE + SPUDNET_WIN_HTTP_CHUNK_FRAME, 1);
+	spud_free(allocator, http->read_buffer, SPUDNET_WIN_HTTP_BUFFER_SIZE, 1);
+	SPUD_DELETE(allocator, struct spudnet_win_http, http);
 	transfer->backend = NULL;
 }
 
@@ -842,12 +880,16 @@ SPUDRESULT spudnet_http_backend_start(
 	struct spudnet_win_http *http  = (struct spudnet_win_http *)transfer->backend;
 	ULONGLONG                start = GetTickCount64();
 
+	const SPUD_ALLOCATOR  *allocator = &transfer->head.allocator;
 	struct spudnet_win_url url;
-	SPUDRESULT             result = spudnet_win_crack(desc->url, false, &url);
-	if (SPUDFAIL(result))
+	SPUDRESULT             result = spudnet_win_crack(allocator, desc->url, false, &url);
+	if (SPUDFAIL(result)) {
+		spudnet_win_url_free(allocator, &url);
 		return result;
-	wchar_t  *method  = spudnet_win_wide(desc->method);
-	DWORD_PTR context = (DWORD_PTR)http;
+	}
+	size_t    method_count = 0;
+	wchar_t  *method       = spudnet_win_wide(allocator, desc->method, &method_count);
+	DWORD_PTR context      = (DWORD_PTR)http;
 
 	result = SPUDRESULT_SPUDNET_HTTP_FAILED;
 	if (!method) {
@@ -898,7 +940,7 @@ SPUDRESULT spudnet_http_backend_start(
 	(void)encoding;
 #endif
 
-	result = spudnet_win_add_headers(http->request, desc->headers, desc->header_count);
+	result = spudnet_win_add_headers(allocator, http->request, desc->headers, desc->header_count);
 	if (SPUDFAIL(result))
 		goto done;
 
@@ -933,8 +975,8 @@ SPUDRESULT spudnet_http_backend_start(
 	result = spudnet_win_http_wait_sent(http, start, desc->timeout_ms);
 
 done:
-	free(method);
-	spudnet_win_url_free(&url);
+	spudnet_win_wide_free(allocator, method, method_count);
+	spudnet_win_url_free(allocator, &url);
 	return result;
 }
 
@@ -1019,7 +1061,7 @@ SPUDRESULT spudnet_http_backend_receive_response(
 			return result;
 	}
 
-	return spudnet_win_read_headers(http->request, &transfer->head);
+	return spudnet_win_read_headers(&transfer->head.allocator, http->request, &transfer->response);
 }
 
 SPUDRESULT spudnet_http_backend_recv(
@@ -1079,7 +1121,7 @@ SPUDRESULT spudnet_http_backend_recv(
 #define SPUDNET_WIN_RECEIVE_BUFFER_SIZE (16 * 1024)
 
 struct spudnet_websocket_t {
-	const char *debug_name;
+	spud_object_head head;
 	// Set by create and only read after.
 	spudnet_instance instance;
 	// Guards everything below that more than one thread touches, and every
@@ -1288,10 +1330,13 @@ void spudnet_websocket_destroy(spudnet_websocket socket) {
 		CloseHandle(socket->receive_event);
 	if (socket->send_event)
 		CloseHandle(socket->send_event);
-	spudnet_win_tls_free(&socket->tls);
+	// After every handle with this as its context has closed: no callback
+	// reaches it now.
+	const SPUD_ALLOCATOR allocator = socket->head.allocator;
+	spudnet_win_tls_free(&allocator, &socket->tls);
 	DeleteCriticalSection(&socket->lock);
-	free((void *)socket->debug_name);
-	free(socket);
+	spud_string_free(&allocator, socket->head.debug_name);
+	SPUD_DELETE(&allocator, struct spudnet_websocket_t, socket);
 }
 
 spudnet_instance spudnet_websocket_instance(spudnet_websocket socket) { return socket ? socket->instance : NULL; }
@@ -1305,10 +1350,11 @@ SPUDRESULT spudnet_websocket_create(
 	if (!instance)
 		return SPUDRESULT_SPUDNET_INVALID_INSTANCE;
 
-	struct spudnet_websocket_t *socket = (struct spudnet_websocket_t *)calloc(1, sizeof(struct spudnet_websocket_t));
+	struct spudnet_websocket_t *socket = SPUD_NEW_ZEROED(&instance->head.allocator, struct spudnet_websocket_t);
 	if (!socket)
 		return SPUDRESULT_OUT_OF_MEMORY;
-	socket->instance = instance;
+	socket->head.allocator = instance->head.allocator;
+	socket->instance       = instance;
 	InitializeCriticalSection(&socket->lock);
 	socket->handles_closed_event = CreateEventW(NULL, TRUE, FALSE, NULL);
 	socket->abort_event          = CreateEventW(NULL, TRUE, FALSE, NULL);
@@ -1373,24 +1419,27 @@ SPUDRESULT spudnet_websocket_connect(
 	if (!spudnet_url_has_scheme(desc->url, "ws") && !spudnet_url_has_scheme(desc->url, "wss"))
 		return SPUDRESULT_SPUDNET_INVALID_URL;
 
-	ULONGLONG              start = GetTickCount64();
+	const SPUD_ALLOCATOR  *allocator = &socket->head.allocator;
+	ULONGLONG              start     = GetTickCount64();
 	struct spudnet_win_url url;
-	SPUDRESULT             result = spudnet_win_crack(desc->url, true, &url);
-	if (SPUDFAIL(result))
-		return result;
-	struct spudnet_win_tls tls;
-	result = spudnet_win_tls_create(&desc->tls, &tls);
+	SPUDRESULT             result = spudnet_win_crack(allocator, desc->url, true, &url);
 	if (SPUDFAIL(result)) {
-		spudnet_win_url_free(&url);
+		spudnet_win_url_free(allocator, &url);
+		return result;
+	}
+	struct spudnet_win_tls tls;
+	result = spudnet_win_tls_create(allocator, &desc->tls, &tls);
+	if (SPUDFAIL(result)) {
+		spudnet_win_url_free(allocator, &url);
 		return result;
 	}
 	// Only needed until the session has been opened with it.
 	struct spudnet_proxy proxy;
-	result = spudnet_proxy_parse(&desc->proxy, &proxy);
+	result = spudnet_proxy_parse(allocator, &desc->proxy, &proxy);
 	if (SPUDFAIL(result)) {
-		spudnet_proxy_free(&proxy);
-		spudnet_win_tls_free(&tls);
-		spudnet_win_url_free(&url);
+		spudnet_proxy_free(allocator, &proxy);
+		spudnet_win_tls_free(allocator, &tls);
+		spudnet_win_url_free(allocator, &url);
 		return result;
 	}
 
@@ -1405,9 +1454,9 @@ SPUDRESULT spudnet_websocket_connect(
 		socket->connect_called = true;
 	LeaveCriticalSection(&socket->lock);
 	if (SPUDFAIL(result)) {
-		spudnet_proxy_free(&proxy);
-		spudnet_win_tls_free(&tls);
-		spudnet_win_url_free(&url);
+		spudnet_proxy_free(allocator, &proxy);
+		spudnet_win_tls_free(allocator, &tls);
+		spudnet_win_url_free(allocator, &url);
 		return result;
 	}
 	socket->tls              = tls; // the socket's from here
@@ -1421,8 +1470,8 @@ SPUDRESULT spudnet_websocket_connect(
 	// came before it (seen above) or finds a request handle to close.
 	EnterCriticalSection(&socket->lock);
 	result          = SPUDRESULT_SPUDNET_CONNECT_FAILED;
-	socket->session = spudnet_win_open_session(&proxy);
-	spudnet_proxy_free(&proxy);
+	socket->session = spudnet_win_open_session(allocator, &proxy);
+	spudnet_proxy_free(allocator, &proxy);
 	// Set on the session before any other handle exists, so each inherits it.
 	if (!socket->session ||
 	    WinHttpSetStatusCallback(socket->session, spudnet_win_websocket_callback, WINHTTP_CALLBACK_FLAG_ALL_COMPLETIONS | WINHTTP_CALLBACK_FLAG_HANDLES | WINHTTP_CALLBACK_FLAG_SEND_REQUEST, 0) ==
@@ -1473,7 +1522,7 @@ SPUDRESULT spudnet_websocket_connect(
 		error = GetLastError();
 		goto failed_locked;
 	}
-	result = spudnet_win_add_headers(socket->request, desc->headers, desc->header_count);
+	result = spudnet_win_add_headers(allocator, socket->request, desc->headers, desc->header_count);
 	if (SPUDFAIL(result))
 		goto failed_locked;
 	result = SPUDRESULT_SPUDNET_CONNECT_FAILED;
@@ -1527,7 +1576,7 @@ SPUDRESULT spudnet_websocket_connect(
 	socket->open = true;
 	LeaveCriticalSection(&socket->lock);
 
-	spudnet_win_url_free(&url);
+	spudnet_win_url_free(allocator, &url);
 	return SPUD_SUCCESS;
 
 failed_locked:
@@ -1544,7 +1593,7 @@ failed_locked:
 	}
 	LeaveCriticalSection(&socket->lock);
 	spudnet_win_websocket_kill(socket);
-	spudnet_win_url_free(&url);
+	spudnet_win_url_free(allocator, &url);
 	return result;
 }
 

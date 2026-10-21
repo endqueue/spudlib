@@ -394,6 +394,25 @@ typedef enum SPUDNET_ERROR_SIDE {
 typedef struct spudnet_instance_t *spudnet_instance;
 
 /**
+ * @brief What the caller decides when creating an instance. No field has a
+ * default: a zeroed desc is refused, for its `base`, and one with only its
+ * `base` set is refused for its `allocator`.
+ */
+typedef struct spudnet_instance_desc {
+	/** `type` is SPUD_STRUCT_TYPE_NET_INSTANCE_DESC; `next` is NULL (nothing
+	 * is chained onto this struct yet). Set by the caller. See
+	 * SPUD_STRUCT_BASE. */
+	SPUD_STRUCT_BASE base;
+	/** Where the memory of the instance, and of every object made with it,
+	 * comes from (SPUD_ALLOCATOR). Copied, so the struct need not outlive
+	 * the call. Its functions and `user_data` must outlive the instance and
+	 * every object made with it, and a resolver until spudnet_resolver_run()
+	 * has returned for it as well, which may be after the instance has
+	 * gone. */
+	const SPUD_ALLOCATOR *allocator;
+} spudnet_instance_desc;
+
+/**
  * @brief Starts the platform's networking for this instance. Known problem:
  * on Linux it fails with SPUDRESULT_SPUDNET_UNSUPPORTED on a libcurl that
  * isn't thread-safe, which takes the TCP sockets with it although they need
@@ -401,6 +420,7 @@ typedef struct spudnet_instance_t *spudnet_instance;
  *
  * May be called from any thread, at any time.
  *
+ * @param[in]  desc         What the caller decides.
  * @param[out] out_instance Receives the new instance, the caller's to
  *                          destroy with spudnet_instance_destroy().
  * @param[out] out_error    Receives the platform's reason when it refuses.
@@ -408,7 +428,13 @@ typedef struct spudnet_instance_t *spudnet_instance;
  *                          @ref spudnet_error_detail "Error detail".
  *
  * @retval SPUD_SUCCESS The instance was made.
+ * @retval SPUDRESULT_NULL_DESC `desc` is NULL.
+ * @retval SPUDRESULT_STRUCT_WRONG_TYPE `desc->base.type` is not
+ *         SPUD_STRUCT_TYPE_NET_INSTANCE_DESC.
+ * @retval SPUDRESULT_STRUCT_UNKNOWN_IN_CHAIN `desc->base.next` is not NULL.
  * @retval SPUDRESULT_NULL_OUTPUT_PARAMETER `out_instance` is NULL.
+ * @retval SPUDRESULT_NULL_ALLOCATOR `desc->allocator` is NULL.
+ * @retval SPUDRESULT_INVALID_ALLOCATOR `desc->allocator` lacks a function.
  * @retval SPUDRESULT_OUT_OF_MEMORY The instance could not be allocated.
  * @retval SPUDRESULT_SPUDNET_UNSUPPORTED Linux: the libcurl found at run
  *         time isn't thread-safe. Nothing is recorded in `out_error`.
@@ -416,6 +442,7 @@ typedef struct spudnet_instance_t *spudnet_instance;
  *         wouldn't start; `out_error` has its reason.
  */
 SPUDRESULT spudnet_instance_create(
+    const spudnet_instance_desc *desc,
     spudnet_instance *out_instance,
     spudnet_error *out_error);
 

@@ -1,6 +1,7 @@
 
 #include "spudnet.h"
 #include "net/spudnetshared.h"
+#include "spudstructbase.h"
 
 /* gethostname/getaddrinfo/inet_ntop are all standard sockets API present
  * identically on Winsock2 and BSD sockets, unlike everything in
@@ -27,6 +28,24 @@
 #if __cplusplus
 extern "C" {
 #endif
+
+// --------------------------------------------------------------------------
+// Instance (see net/spudnetshared.h)
+// --------------------------------------------------------------------------
+
+SPUDRESULT spudnet_instance_desc_check(
+    const spudnet_instance_desc *desc,
+    spudnet_instance *out_instance) {
+	if (!desc)
+		return SPUDRESULT_NULL_DESC;
+	const SPUDRESULT base_result = spud_struct_check(&desc->base, SPUD_STRUCT_TYPE_NET_INSTANCE_DESC);
+	if (base_result != SPUD_SUCCESS)
+		return base_result;
+	if (!out_instance)
+		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
+	*out_instance = NULL;
+	return spud_allocator_check(desc->allocator);
+}
 
 // --------------------------------------------------------------------------
 // Error records (see net/spudnetshared.h)
@@ -340,15 +359,18 @@ bool spudnet_certificate_public_key_info(
 // Proxy desc - what is the same on every backend (see net/spudnetshared.h)
 // --------------------------------------------------------------------------
 
-void spudnet_proxy_free(struct spudnet_proxy *proxy) {
-	free(proxy->url);
-	free(proxy->host);
+void spudnet_proxy_free(const SPUD_ALLOCATOR *allocator, struct spudnet_proxy *proxy) {
+	// Both were copied with their terminator and hold no other, so
+	// spud_string_free finds the size each was allocated with.
+	spud_string_free(allocator, proxy->url);
+	spud_string_free(allocator, proxy->host);
 	memset(proxy, 0, sizeof(*proxy));
 }
 
-/* A malloc'd copy of `length` bytes of `text` with a terminator. */
-static char *spudnet_copy_text(const char *text, size_t length) {
-	char *copy = (char *)malloc(length + 1);
+/* A copy of `length` bytes of `text` with a terminator, made through
+ * `allocator`. `text` holds no '\0' in those bytes. */
+static char *spudnet_copy_text(const SPUD_ALLOCATOR *allocator, const char *text, size_t length) {
+	char *copy = (char *)spud_allocate(allocator, length + 1, 1);
 	if (!copy)
 		return NULL;
 	memcpy(copy, text, length);
@@ -356,7 +378,7 @@ static char *spudnet_copy_text(const char *text, size_t length) {
 	return copy;
 }
 
-SPUDRESULT spudnet_proxy_parse(const spudnet_proxy_desc *desc, struct spudnet_proxy *out_proxy) {
+SPUDRESULT spudnet_proxy_parse(const SPUD_ALLOCATOR *allocator, const spudnet_proxy_desc *desc, struct spudnet_proxy *out_proxy) {
 	memset(out_proxy, 0, sizeof(*out_proxy));
 	out_proxy->mode = desc->mode;
 	switch (desc->mode) {
@@ -413,10 +435,10 @@ SPUDRESULT spudnet_proxy_parse(const spudnet_proxy_desc *desc, struct spudnet_pr
 		return SPUDRESULT_DESC_INVALID_PARAMETERS;
 
 	out_proxy->port = (uint16_t)port;
-	out_proxy->url  = spudnet_copy_text(desc->url, strlen(desc->url));
-	out_proxy->host = spudnet_copy_text(host, host_length);
+	out_proxy->url  = spud_string_copy(allocator, desc->url);
+	out_proxy->host = spudnet_copy_text(allocator, host, host_length);
 	if (!out_proxy->url || !out_proxy->host) {
-		spudnet_proxy_free(out_proxy);
+		spudnet_proxy_free(allocator, out_proxy);
 		out_proxy->mode = desc->mode;
 		return SPUDRESULT_OUT_OF_MEMORY;
 	}

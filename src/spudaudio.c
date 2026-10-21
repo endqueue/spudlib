@@ -1,6 +1,7 @@
 
 #include "audio/spudaudiointernal.h"
 #include <stddef.h>
+#include "spudallocator.h"
 #include "spudstructbase.h"
 
 /* Platform-independent SpudAudio helpers. Everything that touches a native
@@ -51,6 +52,18 @@ bool spudaudio_validate_positions(const SPUDAUDIO_FORMAT *format) {
 		seen[p] = true;
 	}
 	return true;
+}
+
+SPUDRESULT spudaudio_validate_instance_desc(const SPUDAUDIO_INSTANCE_DESC *desc, spudaudio_instance *out_instance) {
+	if (!desc)
+		return SPUDRESULT_NULL_DESC;
+	const SPUDRESULT base_sr = spud_struct_check(&desc->base, SPUD_STRUCT_TYPE_AUDIO_INSTANCE_DESC);
+	if (base_sr != SPUD_SUCCESS)
+		return base_sr;
+	if (!out_instance)
+		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
+	*out_instance = NULL;
+	return spud_allocator_check(desc->allocator);
 }
 
 SPUDRESULT spudaudio_validate_stream_desc(const SPUDAUDIO_STREAM_DESC *desc) {

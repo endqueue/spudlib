@@ -187,6 +187,7 @@ SPUDRESULT spudgpu_create_buffer(
 
     // Create the result struct
     spudgpu_buffer_vulkan result = {0};
+    result.head.allocator = device->head.allocator;
     result._device = *device;
     result._desc = *desc;
 
@@ -256,13 +257,18 @@ SPUDRESULT spudgpu_create_buffer(
     }
 
     // If all successful, return a memcpy'ed heap pointer
-    spudgpu_buffer_vulkan *pResult = malloc(sizeof(spudgpu_buffer_vulkan));
+    spudgpu_buffer_vulkan *pResult = SPUD_NEW(&result.head.allocator, spudgpu_buffer_vulkan);
+    if (!pResult) {
+        vkDestroyBuffer(vk_device, result._buffer_vk, NULL);
+        vkFreeMemory(vk_device, result._memory_vk, NULL);
+        return SPUDRESULT_OUT_OF_MEMORY;
+    }
     memcpy(pResult, &result, sizeof(spudgpu_buffer_vulkan));
     if (spud_debug_name_set(pResult, desc->debug_name) != SPUD_SUCCESS) {
         spudgpu_destroy_buffer(pResult);
         return SPUDRESULT_OUT_OF_MEMORY;
     }
-    pResult->_desc.debug_name = pResult->_debug_name;
+    pResult->_desc.debug_name = pResult->head.debug_name;
 
     *out_buffer = pResult;
     return SPUD_SUCCESS;
@@ -297,8 +303,9 @@ void spudgpu_destroy_buffer(spudgpu_buffer buffer) {
     if (buffer->_heap)
         buffer->_heap->_placed_count--;
 #endif
-    free((void *)buffer->_debug_name);
-    free(buffer);
+    const SPUD_ALLOCATOR allocator = buffer->head.allocator;
+    spud_string_free(&allocator, buffer->head.debug_name);
+    SPUD_DELETE(&allocator, spudgpu_buffer_vulkan, buffer);
 }
 
 SPUDRESULT spudgpu_create_buffer_view(
@@ -320,6 +327,7 @@ SPUDRESULT spudgpu_create_buffer_view(
 		return SPUDRESULT_GPU_BUFFER_OR_IMAGE_VIEW_RANGE_OUT_OF_SCOPE;
 
 	spudgpu_buffer_view_vulkan result = {0};
+    result.head.allocator = buffer->head.allocator;
     result._desc = *desc;
     result._desc.parent_buffer = buffer;
     result._buffer_view_vk = VK_NULL_HANDLE; // Only needed for texel buffers
@@ -331,7 +339,8 @@ SPUDRESULT spudgpu_create_buffer_view(
      */
 
     // If all successful, return a memcpy'ed heap pointer
-    spudgpu_buffer_view pResult = malloc(sizeof(spudgpu_buffer_view_vulkan));
+    spudgpu_buffer_view pResult = SPUD_NEW(&result.head.allocator, spudgpu_buffer_view_vulkan);
+    if (!pResult) return SPUDRESULT_OUT_OF_MEMORY;
     memcpy(pResult, &result, sizeof(spudgpu_buffer_view_vulkan));
     *out_view = pResult;
     return SPUD_SUCCESS;
@@ -352,8 +361,9 @@ void spudgpu_destroy_buffer_view(spudgpu_buffer_view buffer_view) {
 	vkDestroyBufferView(
 	    buffer_view->_desc.parent_buffer->_device._logical_device_vk,
 	    buffer_view->_buffer_view_vk, NULL);
-	free((void *)buffer_view->_debug_name);
-	free(buffer_view);
+	const SPUD_ALLOCATOR allocator = buffer_view->head.allocator;
+	spud_string_free(&allocator, buffer_view->head.debug_name);
+	SPUD_DELETE(&allocator, spudgpu_buffer_view_vulkan, buffer_view);
 }
 
 SPUDRESULT spudgpu_map_buffer(

@@ -5,6 +5,7 @@
 #include <vector>
 #include <string>
 #include "../../../spudstructbase.h"
+#include "../../spudgpushared.h"
 
 static SPUDRESULT ___internal_spudgpu_d3d12_create_command_queues_per_family(
     spudgpu_device device,
@@ -15,16 +16,16 @@ static SPUDRESULT ___internal_spudgpu_d3d12_create_command_queues_per_family(
 	// released with the device (___internal_spudgpu_d3d12_destroy_device).
 	for (size_t i = 0; i < arr.size(); ++i) {
 		spudgpu_command_queue_d3d12 *queue =
-		    (spudgpu_command_queue_d3d12 *)malloc(
-		        sizeof(spudgpu_command_queue_d3d12));
+		    SPUD_NEW(&device->head.allocator, spudgpu_command_queue_d3d12);
 		if (!queue)
 			return SPUDRESULT_OUT_OF_MEMORY;
-		queue          = new (queue) spudgpu_command_queue_d3d12();
-		queue->_device = device;
+		queue                 = new (queue) spudgpu_command_queue_d3d12();
+		queue->head.allocator = device->head.allocator;
+		queue->_device        = device;
 		if (FAILED(device->_d3d_device->CreateCommandQueue(
 		        desc, IID_PPV_ARGS(&queue->_d3d_cmd_queue)))) {
 			queue->~spudgpu_command_queue_d3d12();
-			free(queue);
+			SPUD_DELETE(&device->head.allocator, spudgpu_command_queue_d3d12, queue);
 			return SPUDRESULT_API_SPECIFIC_FAILURE;
 		}
 		arr[i] = queue;
@@ -38,9 +39,11 @@ static void ___internal_spudgpu_d3d12_destroy_command_queues_per_family(
 	for (size_t i = 0; i < arr.size(); ++i) {
 		if (!arr[i])
 			continue;
-		free((void *)arr[i]->_debug_name);
-		arr[i]->~spudgpu_command_queue_d3d12();
-		free(arr[i]);
+		spudgpu_command_queue_d3d12 *queue = arr[i];
+		const SPUD_ALLOCATOR allocator     = queue->head.allocator;
+		spud_string_free(&allocator, queue->head.debug_name);
+		queue->~spudgpu_command_queue_d3d12();
+		SPUD_DELETE(&allocator, spudgpu_command_queue_d3d12, queue);
 		arr[i] = nullptr;
 	}
 }
@@ -76,7 +79,7 @@ static void CALLBACK spudgpu_d3d12_debug_message(
 	if (severity == D3D12_MESSAGE_SEVERITY_INFO || severity == D3D12_MESSAGE_SEVERITY_MESSAGE)
 		return;
 	const spudgpu_device_d3d12 *device = (const spudgpu_device_d3d12 *)context;
-	const char *name                   = device->_debug_name ? device->_debug_name : "";
+	const char *name                   = device->head.debug_name ? device->head.debug_name : "";
 	printf("D3D12 %s: [ %u ] %s%s%s\n",
 	    spudgpu_d3d12_severity_name(severity),
 	    (unsigned)id,
@@ -110,8 +113,9 @@ static void spudgpu_d3d12_unregister_debug_callback(spudgpu_device_d3d12 *device
 }
 #endif
 
-// Releases a device and everything it owns: its command queues and, if one
-// was ever created, its bindless state.
+// Releases a device and everything it owns: its command queues, if one was
+// ever created its bindless state, the free lists of its shader-visible heaps
+// and its indirect draw signatures.
 static void ___internal_spudgpu_d3d12_destroy_device(spudgpu_device device) {
 	if (!device)
 		return;
@@ -119,6 +123,7 @@ static void ___internal_spudgpu_d3d12_destroy_device(spudgpu_device device) {
 	// First: the callback's context is this device.
 	spudgpu_d3d12_unregister_debug_callback(device);
 #endif
+	const SPUD_ALLOCATOR allocator = device->head.allocator;
 	___internal_spudgpu_d3d12_destroy_command_queues_per_family(
 	    device->_cmd_queues_direct);
 	___internal_spudgpu_d3d12_destroy_command_queues_per_family(
@@ -127,14 +132,21 @@ static void ___internal_spudgpu_d3d12_destroy_device(spudgpu_device device) {
 	    device->_cmd_queues_compute);
 	if (device->_bindless) {
 		if (device->_bindless->layout)
-			free((void *)device->_bindless->layout->_debug_name);
-		free(device->_bindless->layout);
+			spud_string_free(&allocator, device->_bindless->layout->head.debug_name);
+		SPUD_DELETE(&allocator, spudgpu_descriptor_set_layout_d3d12, device->_bindless->layout);
 		device->_bindless->~spudgpu_bindless_state_d3d12();
-		free(device->_bindless);
+		SPUD_DELETE(&allocator, spudgpu_bindless_state_d3d12, device->_bindless);
 	}
-	free((void *)device->_debug_name);
+	// Freed here, with the capacities they were made with, rather than in
+	// their structs' destructors, which have no allocator.
+	SPUD_DELETE_ARRAY(&allocator, spudgpu_d3d12_heap_range, device->_csv_heap.free_ranges, device->_csv_heap.free_capacity);
+	SPUD_DELETE_ARRAY(&allocator, spudgpu_d3d12_heap_range, device->_sampler_heap.free_ranges, device->_sampler_heap.free_capacity);
+	for (uint32_t i = 0; i < device->_indirect_signatures.count; ++i)
+		device->_indirect_signatures.entries[i].signature->Release();
+	SPUD_DELETE_ARRAY(&allocator, spudgpu_d3d12_indirect_signature, device->_indirect_signatures.entries, device->_indirect_signatures.capacity);
+	spud_string_free(&allocator, device->head.debug_name);
 	device->~spudgpu_device_d3d12();
-	free(device);
+	SPUD_DELETE(&allocator, spudgpu_device_d3d12, device);
 }
 
 static void ___internal_spudgpu_d3d12_destroy_devices(
@@ -182,23 +194,23 @@ ___internal_spudgpu_d3d12_create_device_command_queues(spudgpu_device device) {
 extern "C" {
 
 SPUDRESULT spudgpu_create_instance(
-    const char *application_name,
-    uint32_t application_version,
-    const char *engine_name,
-    uint32_t engine_version,
+    const spudgpu_instance_desc *desc,
     spudgpu_instance *out_instance) {
-	if (!out_instance)
-		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
+	// NULL desc, its base, NULL out_instance (and *out_instance = NULL from
+	// here on), its allocator.
+	const SPUDRESULT check_sr = spudgpu___internal_check_instance_desc(desc, out_instance);
+	if (check_sr != SPUD_SUCCESS)
+		return check_sr;
 
-	spudgpu_instance_d3d12 *pResult =
-	    (spudgpu_instance_d3d12 *)malloc(sizeof(spudgpu_instance_d3d12));
+	spudgpu_instance_d3d12 *pResult = SPUD_NEW(desc->allocator, spudgpu_instance_d3d12);
 	if (!pResult)
 		return SPUDRESULT_OUT_OF_MEMORY;
 	pResult                          = new (pResult) spudgpu_instance_d3d12();
-	pResult->application_name        = application_name;
-	pResult->application_version     = application_version;
-	pResult->engine_name             = engine_name;
-	pResult->engine_version          = engine_version;
+	pResult->head.allocator          = *desc->allocator;
+	pResult->application_name        = desc->application_name;
+	pResult->application_version     = desc->application_version;
+	pResult->engine_name             = desc->engine_name;
+	pResult->engine_version          = desc->engine_version;
 	pResult->_gpu_devices            = nullptr;
 	pResult->_gpu_device_count       = 0;
 	pResult->_gpu_devices_enumerated = false;
@@ -219,7 +231,7 @@ SPUDRESULT spudgpu_create_instance(
 	    CreateDXGIFactory2(dxgiFlags, IID_PPV_ARGS(&pResult->_dxgi_factory));
 	if (FAILED(hr)) {
 		pResult->~spudgpu_instance_d3d12();
-		free(pResult);
+		SPUD_DELETE(desc->allocator, spudgpu_instance_d3d12, pResult);
 		return SPUDRESULT_API_SPECIFIC_FAILURE;
 	}
 
@@ -230,12 +242,13 @@ SPUDRESULT spudgpu_create_instance(
 SPUDRESULT spudgpu_destroy_instance(spudgpu_instance instance) {
 	if (!instance)
 		return SPUD_SUCCESS;
+	const SPUD_ALLOCATOR allocator = instance->head.allocator;
 	___internal_spudgpu_d3d12_destroy_devices(
 	    instance->_gpu_devices, instance->_gpu_device_count);
-	free(instance->_gpu_devices);
-	free((void *)instance->_debug_name);
+	SPUD_DELETE_ARRAY(&allocator, spudgpu_device, instance->_gpu_devices, instance->_gpu_device_count);
+	spud_string_free(&allocator, instance->head.debug_name);
 	instance->~spudgpu_instance_d3d12();
-	free(instance);
+	SPUD_DELETE(&allocator, spudgpu_instance_d3d12, instance);
 	return SPUD_SUCCESS;
 }
 
@@ -358,13 +371,16 @@ SPUDRESULT spudgpu_enumerate_devices(
 			// Every failure below releases this device and the ones
 			// already gathered, so nothing outlives a failed enumeration.
 			spudgpu_device_d3d12 *gpuDevice =
-			    (spudgpu_device_d3d12 *)malloc(sizeof(spudgpu_device_d3d12));
+			    SPUD_NEW(&instance->head.allocator, spudgpu_device_d3d12);
 			if (!gpuDevice) {
 				___internal_spudgpu_d3d12_destroy_devices(
 				    gpuDevices.data(), gpuDevices.size());
 				return SPUDRESULT_OUT_OF_MEMORY;
 			}
 			gpuDevice = new (gpuDevice) spudgpu_device_d3d12();
+			// Before anything that may destroy it: the device frees
+			// through its own copy.
+			gpuDevice->head.allocator = instance->head.allocator;
 			if (FAILED(D3D12CreateDevice(
 			        dxgiAdapter.Get(), minimumFeatureLevel,
 			        IID_PPV_ARGS(&gpuDevice->_d3d_device)))) {
@@ -407,8 +423,10 @@ SPUDRESULT spudgpu_enumerate_devices(
 	}
 	// No array for zero devices: _gpu_devices stays null and the count 0.
 	if (!gpuDevices.empty()) {
-		spudgpu_device *devices = (spudgpu_device *)malloc(
-		    sizeof(spudgpu_device) * gpuDevices.size());
+		// Freed by spudgpu_destroy_instance with _gpu_device_count, which
+		// is this size.
+		spudgpu_device *devices = SPUD_NEW_ARRAY(
+		    &instance->head.allocator, spudgpu_device, gpuDevices.size());
 		if (!devices) {
 			___internal_spudgpu_d3d12_destroy_devices(
 			    gpuDevices.data(), gpuDevices.size());
@@ -516,19 +534,21 @@ SPUDRESULT spudgpu_create_surface(
 	if (!out_surface)
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
 	spudgpu_surface_d3d12 *pResult =
-	    (spudgpu_surface_d3d12 *)calloc(1, sizeof(spudgpu_surface_d3d12));
+	    SPUD_NEW_ZEROED(&instance->head.allocator, spudgpu_surface_d3d12);
 	if (!pResult)
 		return SPUDRESULT_OUT_OF_MEMORY;
-	pResult->_hwnd     = (HWND)window_handle;
-	pResult->_instance = instance;
-	*out_surface       = pResult;
+	pResult->head.allocator = instance->head.allocator;
+	pResult->_hwnd          = (HWND)window_handle;
+	pResult->_instance      = instance;
+	*out_surface            = pResult;
 	return SPUD_SUCCESS;
 }
 void spudgpu_destroy_surface(spudgpu_surface surface) {
 	if (!surface)
 		return;
-	free((void *)surface->_debug_name);
-	free(surface);
+	const SPUD_ALLOCATOR allocator = surface->head.allocator;
+	spud_string_free(&allocator, surface->head.debug_name);
+	SPUD_DELETE(&allocator, spudgpu_surface_d3d12, surface);
 }
 }
 

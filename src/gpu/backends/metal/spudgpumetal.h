@@ -8,6 +8,7 @@
 #define SPUDLIB_SPUDGPUMETAL_H
 
 #include "spudgpu.h"
+#include "../../../spudallocator.h"
 #include <Metal/Metal.h>
 #include <stdatomic.h>
 #include <QuartzCore/QuartzCore.h>
@@ -56,7 +57,7 @@
 	(SPUDGPU_METAL_PUSH_CONSTANTS_BUFFER_INDEX - SPUDGPU_MAX_DESCRIPTOR_SET_LAYOUTS)
 
 typedef struct spudgpu_instance_t {
-	const char *_debug_name;
+	spud_object_head head;
 	// Metal has no top-level instance/factory object (unlike VkInstance or
 	// IDXGIFactory) - devices come straight from MTLCopyAllDevices(). This
 	// struct exists purely so spudgpu_instance can still own and clean up
@@ -70,7 +71,7 @@ typedef struct spudgpu_instance_t {
 } spudgpu_instance_metal;
 
 typedef struct spudgpu_device_t {
-	const char *_debug_name;
+	spud_object_head head;
 	id<MTLDevice> _device_mtl;
 	SPUDGPU_DEVICE_PROPERTIES _properties;
 	spudgpu_command_queue _cmd_queues_direct[SPUD_METAL_COMMAND_QUEUE_COUNT_PER_FAMILY];
@@ -88,7 +89,7 @@ typedef struct spudgpu_device_t {
 } spudgpu_device_metal;
 
 typedef struct spudgpu_buffer_t {
-	const char *_debug_name;
+	spud_object_head head;
 	id<MTLBuffer> _buffer_mtl;
 	spudgpu_device_metal * _parent_device;
 	spudgpu_buffer_desc _desc;
@@ -98,7 +99,7 @@ typedef struct spudgpu_buffer_t {
 } spudgpu_buffer_metal;
 
 typedef struct spudgpu_buffer_view_t {
-	const char *_debug_name;
+	spud_object_head head;
 	// The parent buffer lives in _desc.parent_buffer (set from the
 	// authoritative `buffer` parameter at creation, not necessarily whatever
 	// the caller's desc.parent_buffer was - see spudgpu_create_buffer_view)
@@ -107,7 +108,7 @@ typedef struct spudgpu_buffer_view_t {
 } spudgpu_buffer_view_metal;
 
 typedef struct spudgpu_image_t {
-	const char *_debug_name;
+	spud_object_head head;
 	id<MTLTexture> _texture_mtl;
 	spudgpu_device_metal *_parent_device;
 	spudgpu_image_desc _desc;
@@ -117,7 +118,7 @@ typedef struct spudgpu_image_t {
 } spudgpu_image_metal;
 
 typedef struct spudgpu_heap_t {
-	const char *_debug_name;
+	spud_object_head head;
 #if _DEBUG
 	// Buffers and images placed in the heap and not yet destroyed.
 	// spudgpu_destroy_heap asserts it is 0. Atomic, because resources in
@@ -152,7 +153,7 @@ SPUDRESULT spudgpumetal___check_image_desc(const spudgpu_image_desc *desc);
 MTLTextureDescriptor *spudgpumetal___new_texture_descriptor(const spudgpu_image_desc *desc);
 
 typedef struct spudgpu_image_view_t {
-	const char *_debug_name;
+	spud_object_head head;
 	// Metal represents a texture view as another id<MTLTexture> (see
 	// spudgpu_get_mtl_texture_view in spudgpu_metal_natives.h) rather than a
 	// distinct view object - this is that view texture, not the parent's.
@@ -162,13 +163,13 @@ typedef struct spudgpu_image_view_t {
 } spudgpu_image_view_metal;
 
 typedef struct spudgpu_command_queue_t {
-	const char *_debug_name;
+	spud_object_head head;
 	id<MTLCommandQueue> _command_queue_mtl;
 	spudgpu_device_metal *_parent_device;
 } spudgpu_command_queue_metal;
 
 typedef struct spudgpu_command_allocator_t {
-	const char *_debug_name;
+	spud_object_head head;
 	// No native Metal handle: command buffers are requested fresh from the
 	// queue each time (see spudgpu_metal_natives.h) rather than reset from a
 	// persistent allocator/pool object the way Vulkan/D3D12 do. _parent_queue
@@ -191,7 +192,7 @@ typedef struct spudgpu_command_allocator_t {
 } spudgpu_command_allocator_metal;
 
 typedef struct spudgpu_command_list_t {
-	const char *_debug_name;
+	spud_object_head head;
 	id<MTLCommandBuffer> _command_buffer_mtl;
 	spudgpu_command_allocator_metal *_parent_allocator;
 
@@ -274,7 +275,7 @@ typedef struct spudgpu_command_list_t {
 } spudgpu_command_list_metal;
 
 typedef struct spudgpu_timestamp_set_t {
-	const char *_debug_name;
+	spud_object_head head;
 	// Of the device's timestamp counter set, in shared storage so the CPU
 	// can resolve it. A pass samples it at its stage boundaries
 	// (spudgpumetalrenderpass.m).
@@ -314,7 +315,7 @@ void spudgpumetal___internal_end_active_blit_encoder(spudgpu_command_list_metal 
 id<MTLCounterSet> spudgpumetal___internal_timestamp_counter_set(id<MTLDevice> device);
 
 typedef struct spudgpu_shader_module_t {
-	const char *_debug_name;
+	spud_object_head head;
 	spudgpu_device_metal *_parent_device;
 	spudgpu_shader_module_desc _desc;
 	// SPIRV-Cross-generated MSL source is compiled into this once at module
@@ -344,7 +345,7 @@ typedef struct spudgpu_shader_module_t {
 } spudgpu_shader_module_metal;
 
 typedef struct spudgpu_shader_pipeline_t {
-	const char *_debug_name;
+	spud_object_head head;
 	id<MTLRenderPipelineState> _render_pipeline_state_mtl;
 	// Vulkan/D3D12 bake depth/stencil test config into the same monolithic
 	// pipeline object as everything else; Metal keeps it as a wholly
@@ -380,7 +381,7 @@ typedef struct spudgpu_shader_pipeline_t {
 } spudgpu_shader_pipeline_metal;
 
 typedef struct spudgpu_compute_pipeline_t {
-	const char *_debug_name;
+	spud_object_head head;
 	id<MTLComputePipelineState> _compute_pipeline_state_mtl;
 	spudgpu_device_metal *_parent_device;
 	spudgpu_compute_pipeline_desc _desc;
@@ -390,7 +391,7 @@ typedef struct spudgpu_compute_pipeline_t {
 } spudgpu_compute_pipeline_metal;
 
 typedef struct spudgpu_fence_t {
-	const char *_debug_name;
+	spud_object_head head;
 	// Fences map to id<MTLSharedEvent>, not MTLFence - see
 	// spudgpu_metal_natives.h for why (MTLFence can't be CPU-waited).
 	id<MTLSharedEvent> _shared_event_mtl;
@@ -405,7 +406,7 @@ typedef struct spudgpu_fence_t {
 } spudgpu_fence_metal;
 
 typedef struct spudgpu_semaphore_t {
-	const char *_debug_name;
+	spud_object_head head;
 	// Semaphores map to plain id<MTLEvent>, not id<MTLSharedEvent> - unlike
 	// spudgpu_fence, spudgpu_semaphore's public API never exposes a CPU-side
 	// wait/signal/read, only GPU wait/signal across queue submissions, which
@@ -416,12 +417,12 @@ typedef struct spudgpu_semaphore_t {
 } spudgpu_semaphore_metal;
 
 typedef struct spudgpu_sampler_t {
-	const char *_debug_name;
+	spud_object_head head;
 	id<MTLSamplerState> _sampler_state_mtl;
 } spudgpu_sampler_metal;
 
 typedef struct spudgpu_descriptor_set_layout_t {
-	const char *_debug_name;
+	spud_object_head head;
 	spudgpu_device_metal *_parent_device;
 	spudgpu_descriptor_set_layout_desc _desc;
 	// Metal has no VkDescriptorSetLayout-equivalent schema object independent
@@ -434,7 +435,7 @@ typedef struct spudgpu_descriptor_set_layout_t {
 } spudgpu_descriptor_set_layout_metal;
 
 typedef struct spudgpu_descriptor_pool_t {
-	const char *_debug_name;
+	spud_object_head head;
 	spudgpu_device_metal *_parent_device;
 	spudgpu_descriptor_pool_desc _desc;
 	// Metal needs no real backing arena the way Vulkan's VkDescriptorPool
@@ -462,7 +463,7 @@ typedef struct spudgpu_descriptor_pool_t {
 #define SPUDGPU_METAL_MAX_TRACKED_RESOURCES_PER_SET 32
 
 typedef struct spudgpu_descriptor_set_t {
-	const char *_debug_name;
+	spud_object_head head;
 	spudgpu_descriptor_pool_metal *_parent_pool;
 	spudgpu_descriptor_set_layout_metal *_layout;
 	// The argument buffer itself, written into by spudgpu_update_descriptor_sets
@@ -480,7 +481,7 @@ typedef struct spudgpu_descriptor_set_t {
 } spudgpu_descriptor_set_metal;
 
 typedef struct spudgpu_surface_t {
-	const char *_debug_name;
+	spud_object_head head;
 	spudgpu_instance_metal *_parent_instance;
 	void *_window_handle;
 	void *_display_handle;
@@ -491,7 +492,7 @@ typedef struct spudgpu_surface_t {
 } spudgpu_surface_metal;
 
 typedef struct spudgpu_swap_chain_t {
-	const char *_debug_name;
+	spud_object_head head;
 	spudgpu_device_metal *_parent_device;
 	spudgpu_swap_chain_desc _desc;
 	// Borrowed from _desc.surface->_metal_layer - not owned here.

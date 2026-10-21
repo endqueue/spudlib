@@ -128,12 +128,13 @@ SPUDRESULT spudgpu_create_heap(
 	if (desc->memory_kind == SPUDGPU_MEMORY_KIND_DEVICE_MAPPABLE && !device->_properties.device_mappable_memory)
 		return SPUDRESULT_GPU_MEMORY_KIND_NOT_SUPPORTED;
 
-	spudgpu_heap_d3d12 *heap = (spudgpu_heap_d3d12 *)malloc(sizeof(spudgpu_heap_d3d12));
+	spudgpu_heap_d3d12 *heap = SPUD_NEW(&device->head.allocator, spudgpu_heap_d3d12);
 	if (!heap)
 		return SPUDRESULT_OUT_OF_MEMORY;
-	heap          = new (heap) spudgpu_heap_d3d12();
-	heap->_device = device;
-	heap->_desc   = *desc;
+	heap                 = new (heap) spudgpu_heap_d3d12();
+	heap->head.allocator = device->head.allocator;
+	heap->_device        = device;
+	heap->_desc          = *desc;
 
 	D3D12_HEAP_DESC d3dHeapDesc = {};
 	d3dHeapDesc.SizeInBytes     = desc->size;
@@ -142,7 +143,7 @@ SPUDRESULT spudgpu_create_heap(
 	d3dHeapDesc.Flags           = spudgpu_d3d12_get_heap_flags() | spudgpu_d3d12_heap_class_flags(desc->resource_class);
 	if (FAILED(device->_d3d_device->CreateHeap(&d3dHeapDesc, IID_PPV_ARGS(&heap->_d3d_heap)))) {
 		heap->~spudgpu_heap_d3d12();
-		free(heap);
+		SPUD_DELETE(&device->head.allocator, spudgpu_heap_d3d12, heap);
 		return SPUDRESULT_API_SPECIFIC_FAILURE;
 	}
 
@@ -150,7 +151,7 @@ SPUDRESULT spudgpu_create_heap(
 		spudgpu_destroy_heap(heap);
 		return SPUDRESULT_OUT_OF_MEMORY;
 	}
-	heap->_desc.debug_name = heap->_debug_name;
+	heap->_desc.debug_name = heap->head.debug_name;
 
 	*out_heap = heap;
 	return SPUD_SUCCESS;
@@ -164,9 +165,10 @@ void spudgpu_destroy_heap(spudgpu_heap heap) {
 	// spudgpu.h).
 	assert(heap->_placed_count == 0);
 #endif
-	free((void *)heap->_debug_name);
+	const SPUD_ALLOCATOR allocator = heap->head.allocator;
+	spud_string_free(&allocator, heap->head.debug_name);
 	heap->~spudgpu_heap_d3d12();
-	free(heap);
+	SPUD_DELETE(&allocator, spudgpu_heap_d3d12, heap);
 }
 
 SPUDRESULT spudgpu_get_heap_desc(
@@ -257,10 +259,11 @@ SPUDRESULT spudgpu_create_placed_buffer(
 	if (sr != SPUD_SUCCESS)
 		return sr;
 
-	spudgpu_buffer_d3d12 *buffer = (spudgpu_buffer_d3d12 *)malloc(sizeof(spudgpu_buffer_d3d12));
+	spudgpu_buffer_d3d12 *buffer = SPUD_NEW(&heap->_device->head.allocator, spudgpu_buffer_d3d12);
 	if (!buffer)
 		return SPUDRESULT_OUT_OF_MEMORY;
 	buffer                     = new (buffer) spudgpu_buffer_d3d12();
+	buffer->head.allocator     = heap->_device->head.allocator;
 	buffer->_device            = heap->_device;
 	buffer->_desc              = *desc;
 	buffer->_d3d_resource_desc = d3dDesc;
@@ -269,7 +272,7 @@ SPUDRESULT spudgpu_create_placed_buffer(
 	        spudgpu_d3d12_get_initial_buffer_state(desc->memory_kind), nullptr,
 	        IID_PPV_ARGS(&buffer->_d3d_resource)))) {
 		buffer->~spudgpu_buffer_d3d12();
-		free(buffer);
+		SPUD_DELETE(&heap->_device->head.allocator, spudgpu_buffer_d3d12, buffer);
 		return SPUDRESULT_API_SPECIFIC_FAILURE;
 	}
 	buffer->_d3d_gpu_address = buffer->_d3d_resource->GetGPUVirtualAddress();
@@ -284,7 +287,7 @@ SPUDRESULT spudgpu_create_placed_buffer(
 		spudgpu_destroy_buffer(buffer);
 		return SPUDRESULT_OUT_OF_MEMORY;
 	}
-	buffer->_desc.debug_name = buffer->_debug_name;
+	buffer->_desc.debug_name = buffer->head.debug_name;
 
 	*out_buffer = buffer;
 	return SPUD_SUCCESS;
@@ -320,10 +323,11 @@ SPUDRESULT spudgpu_create_placed_image(
 	if (sr != SPUD_SUCCESS)
 		return sr;
 
-	spudgpu_image_d3d12 *image = (spudgpu_image_d3d12 *)malloc(sizeof(spudgpu_image_d3d12));
+	spudgpu_image_d3d12 *image = SPUD_NEW(&heap->_device->head.allocator, spudgpu_image_d3d12);
 	if (!image)
 		return SPUDRESULT_OUT_OF_MEMORY;
 	image                     = new (image) spudgpu_image_d3d12();
+	image->head.allocator     = heap->_device->head.allocator;
 	image->_device            = heap->_device;
 	image->_desc              = *desc;
 	image->_d3d_resource_desc = d3dDesc;
@@ -338,7 +342,7 @@ SPUDRESULT spudgpu_create_placed_image(
 	        initialState, hasClearValue ? &clearValue : nullptr,
 	        IID_PPV_ARGS(&image->_d3d_resource)))) {
 		image->~spudgpu_image_d3d12();
-		free(image);
+		SPUD_DELETE(&heap->_device->head.allocator, spudgpu_image_d3d12, image);
 		return SPUDRESULT_API_SPECIFIC_FAILURE;
 	}
 	image->_current_state = initialState;
@@ -351,7 +355,7 @@ SPUDRESULT spudgpu_create_placed_image(
 		spudgpu_destroy_image(image);
 		return SPUDRESULT_OUT_OF_MEMORY;
 	}
-	image->_desc.debug_name = image->_debug_name;
+	image->_desc.debug_name = image->head.debug_name;
 
 	*out_image = image;
 	return SPUD_SUCCESS;

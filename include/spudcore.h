@@ -3,13 +3,15 @@
  * @brief SpudCore: what every SpudLib module shares.
  *
  * The SPUDRESULT enum all modules return, the library's version, the
- * fixed-width integer limits, struct bases and the debug-name functions. Platform-agnostic: nothing here calls a platform
+ * fixed-width integer limits, struct bases, the caller's allocator and the
+ * debug-name functions. Platform-agnostic: nothing here calls a platform
  * API.
  */
 
 #ifndef SPUDCORE_H
 #define SPUDCORE_H
 
+#include <stddef.h>
 #include <stdint.h>
 
 #if __cplusplus
@@ -107,7 +109,7 @@ uint32_t spud_get_version(void);
  * one specific failure. Test a result with SPUDFAIL() and print it with
  * spudresult_str().
  *
- * The values are grouped by module: 1-14 are general, 199-354 are SpudGPU
+ * The values are grouped by module: 1-16 are general, 199-354 are SpudGPU
  * (`SPUDRESULT_GPU_*`), 1001-1007 SpudFiles (`SPUDRESULT_SFS_*`), 2001-2026
  * SpudMemory (`SPUDRESULT_SMEM_*`), 3001-3033 SpudNet (`SPUDRESULT_SPUDNET_*`),
  * 4001-4012 SpudAudio (`SPUDRESULT_SAUD_*`) and 5001-5005 SpudInput
@@ -147,6 +149,10 @@ typedef enum SPUDRESULT {
 	SPUDRESULT_STRUCT_UNKNOWN_IN_CHAIN   = 13,
 	/** One type appears twice in a chain. */
 	SPUDRESULT_STRUCT_DUPLICATE_IN_CHAIN = 14,
+	/** A desc's allocator pointer is NULL (see SPUD_ALLOCATOR). */
+	SPUDRESULT_NULL_ALLOCATOR            = 15,
+	/** An allocator's `allocate` or `free` is NULL. */
+	SPUDRESULT_INVALID_ALLOCATOR         = 16,
 
 	SPUDRESULT_GPU_DEVICE_ENUMERATION_FAILURE                  = 199,
 	SPUDRESULT_GPU_INVALID_INSTANCE                            = 200,
@@ -422,6 +428,8 @@ typedef enum SPUD_STRUCT_TYPE {
 	SPUD_STRUCT_TYPE_GPU_RENDERING_BEGIN_DESC       = 1023,
 	/** spudgpu_bundle_inheritance_desc (SPUD_STRUCT_BASE). */
 	SPUD_STRUCT_TYPE_GPU_BUNDLE_INHERITANCE_DESC    = 1024,
+	/** spudgpu_instance_desc (SPUD_STRUCT_BASE). */
+	SPUD_STRUCT_TYPE_GPU_INSTANCE_DESC              = 1025,
 
 	/* SpudAudio */
 	/** SPUDAUDIO_DEVICE_PROPERTIES (SPUD_STRUCT_BASE_OUT). */
@@ -432,6 +440,8 @@ typedef enum SPUD_STRUCT_TYPE {
 	SPUD_STRUCT_TYPE_AUDIO_STREAM_DESC              = 2002,
 	/** SPUDAUDIO_STREAM_CONFIG (SPUD_STRUCT_BASE_OUT). */
 	SPUD_STRUCT_TYPE_AUDIO_STREAM_CONFIG            = 2003,
+	/** SPUDAUDIO_INSTANCE_DESC (SPUD_STRUCT_BASE). */
+	SPUD_STRUCT_TYPE_AUDIO_INSTANCE_DESC            = 2004,
 
 	/* SpudNet */
 	/** spudnet_resolver_desc (SPUD_STRUCT_BASE). */
@@ -446,6 +456,8 @@ typedef enum SPUD_STRUCT_TYPE {
 	SPUD_STRUCT_TYPE_NET_HTTP_TRANSFER_DESC         = 3004,
 	/** spudnet_websocket_connect_desc (SPUD_STRUCT_BASE). */
 	SPUD_STRUCT_TYPE_NET_WEBSOCKET_CONNECT_DESC     = 3005,
+	/** spudnet_instance_desc (SPUD_STRUCT_BASE). */
+	SPUD_STRUCT_TYPE_NET_INSTANCE_DESC              = 3006,
 
 	/* SpudInput */
 	/** SPUDINPUT_INSTANCE_DESC (SPUD_STRUCT_BASE). */
@@ -482,6 +494,107 @@ typedef struct SPUD_STRUCT_BASE_OUT {
 /** @} */
 
 /**
+ * @defgroup spud_allocator The caller's allocator
+ * @brief Where SpudLib's own memory comes from.
+ *
+ * SpudLib never chooses where its memory comes from. Each module's
+ * instance is made with a SPUD_ALLOCATOR, and SpudLib takes every block
+ * it needs for that instance, and for every object made from it, from that
+ * allocator alone: the handles, the copies it keeps (debug names, descs),
+ * and its own lists and tables. An object never has an allocator of its
+ * own, and a destroy call never takes one: an object frees through the
+ * allocator of the instance it was made from.
+ *
+ * Memory that the platform, the operating system or a graphics driver
+ * allocates for itself is not covered, because those offer SpudLib no way
+ * to pass an allocator on.
+ *
+ * There is no default. A create call given no allocator refuses it with
+ * SPUDRESULT_NULL_ALLOCATOR, and one missing either function with
+ * SPUDRESULT_INVALID_ALLOCATOR. spud_allocator_system() is the system heap,
+ * for a caller that chooses it.
+ *
+ * The rules an allocator keeps:
+ *
+ * - `allocate` returns a block of at least `size` bytes whose address is a
+ *   multiple of `alignment`, or NULL if it can't. SpudLib then fails the
+ *   call it was making with SPUDRESULT_OUT_OF_MEMORY and leaves everything
+ *   as it was before the call. The block's contents are undefined.
+ * - SpudLib never asks for 0 bytes. `alignment` is always a power of two,
+ *   1 or more. An allocator that can't meet an alignment returns NULL.
+ * - `free` is called once for each block, with the same `size` and
+ *   `alignment` the block was allocated with, so an allocator need not
+ *   record either. It is never called with NULL, and it can't fail.
+ * - Either function may be called from any thread, and from several
+ *   threads at once, unless a module's header says otherwise for one of its
+ *   calls. An allocator that is safe on one thread only is a choice the
+ *   caller keeps to itself, by calling that instance from one thread.
+ * - Neither function may call SpudLib.
+ * - SpudLib copies the SPUD_ALLOCATOR when the instance is made, so the
+ *   caller's struct need not outlive the call. The functions and
+ *   `user_data` must stay valid until the instance and every object made
+ *   from it are destroyed, and by then every block SpudLib took from them
+ *   has been freed. Where a module lets an object's memory outlast its
+ *   destroy call, its header says until when (a SpudNet resolver whose
+ *   lookup is still running).
+ * @{
+ */
+
+/**
+ * @brief Allocates a block for SpudLib.
+ *
+ * @param[in] user_data The allocator's `user_data`, passed as it was given.
+ * @param[in] size      The bytes wanted. Never 0.
+ * @param[in] alignment What the address must be a multiple of. A power of
+ *                      two, 1 or more.
+ *
+ * @return The block, or NULL if it can't be given.
+ */
+typedef void *(*SPUD_ALLOCATE_FUNCTION)(
+    void *user_data,
+    size_t size,
+    size_t alignment);
+
+/**
+ * @brief Frees a block SPUD_ALLOCATE_FUNCTION gave.
+ *
+ * @param[in] user_data The allocator's `user_data`, passed as it was given.
+ * @param[in] memory    The block. Never NULL.
+ * @param[in] size      The `size` it was allocated with.
+ * @param[in] alignment The `alignment` it was allocated with.
+ */
+typedef void (*SPUD_FREE_FUNCTION)(
+    void *user_data,
+    void *memory,
+    size_t size,
+    size_t alignment);
+
+/** @brief The caller's allocator: two functions and the state they share. */
+/* Frozen: a table of functions. A new function or hint is a new struct. */
+typedef struct SPUD_ALLOCATOR {
+	/** Passed to both functions as it is. SpudLib never reads it. May be NULL. */
+	void *user_data;
+	/** Gives a block. Not NULL. */
+	SPUD_ALLOCATE_FUNCTION allocate;
+	/** Frees a block `allocate` gave. Not NULL. */
+	SPUD_FREE_FUNCTION free;
+} SPUD_ALLOCATOR;
+
+/**
+ * @brief Returns an allocator over the system heap.
+ *
+ * Exists so that a caller choosing the system heap says so by name. It is
+ * the C library's heap (the CRT's aligned functions on Windows), safe
+ * from any thread at once, with a NULL `user_data`. Calling it allocates
+ * nothing; it only fills in the struct.
+ *
+ * @return The allocator, by value.
+ */
+SPUD_ALLOCATOR spud_allocator_system(void);
+
+/** @} */
+
+/**
  * @brief Returns the name of a SPUDRESULT enumerator as a string.
  *
  * For logs and error messages. The string is the enumerator's identifier
@@ -499,8 +612,9 @@ const char *spudresult_str(SPUDRESULT r);
 /**
  * @brief Gives a SpudLib object a debug name, replacing any it already has.
  *
- * The string is copied, so it need not outlive the call. The object's
- * previous name is freed, and the object's own destroy call frees the name it
+ * The string is copied, through the allocator of the instance the object
+ * was made from (SPUD_ALLOCATOR), so it need not outlive the call. The
+ * object's previous name is freed, and the object's own destroy call frees the name it
  * holds at that point. Exists in every build, and the name is kept in every
  * build: a debug name never changes a struct's layout or a library's symbols.
  *

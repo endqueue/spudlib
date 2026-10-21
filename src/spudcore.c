@@ -1,8 +1,12 @@
 
 #include "spudcore.h"
+#include "spudallocator.h"
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
+#if defined(_WIN32)
+#include <malloc.h>
+#endif
 
 #if __cplusplus
 extern "C" {
@@ -18,30 +22,52 @@ SPUDRESULT spud_debug_name_set(void *object, const char *name) {
 	if (!object)
 		return SPUDRESULT_NULL_OBJECT;
 
-	/* The debug name is the first member of the object struct. It is a copy
-	 * this function made, or NULL, so the old one is this function's to free. */
-	char **name_ptr = (char **)object;
-	char *copy      = NULL;
-	if (name) {
-		size_t size = strlen(name) + 1;
-		copy        = (char *)malloc(size);
-		if (!copy)
-			return SPUDRESULT_OUT_OF_MEMORY;
-		memcpy(copy, name, size);
-	}
-	/* Freed after the copy is made, so that name may be the object's own. */
-	free(*name_ptr);
-	*name_ptr = copy;
-	return SPUD_SUCCESS;
+	/* Every object that carries a debug name starts with a spud_object_head,
+	 * which holds the name and the allocator it is copied and freed with. */
+	return spud_object_name_set((spud_object_head *)object, name);
 }
 
 const char *spud_debug_name_get(void *object) {
 	if (object) {
-		/* Get the debug name from the first member of the object struct. */
-		char **name_ptr = (char **)object;
-		return *name_ptr;
+		return ((const spud_object_head *)object)->debug_name;
 	} else
 		return NULL;
+}
+
+static void *spud_system_allocate(void *user_data, size_t size, size_t alignment) {
+	(void)user_data;
+#if defined(_WIN32)
+	return _aligned_malloc(size, alignment);
+#else
+	/* malloc already meets max_align_t's alignment. aligned_alloc may refuse
+	 * a size that isn't a multiple of the alignment, so the size is rounded
+	 * up to one. */
+	if (alignment <= _Alignof(max_align_t))
+		return malloc(size);
+	if (size > SIZE_MAX - (alignment - 1))
+		return NULL;
+	return aligned_alloc(alignment, (size + alignment - 1) & ~(alignment - 1));
+#endif
+}
+
+static void spud_system_free(void *user_data, void *memory, size_t size, size_t alignment) {
+	(void)user_data;
+	(void)size;
+	(void)alignment;
+#if defined(_WIN32)
+	_aligned_free(memory);
+#else
+	free(memory);
+#endif
+}
+
+SPUD_ALLOCATOR spud_allocator_system(void) {
+	SPUD_ALLOCATOR allocator = {
+	    .user_data = NULL,
+	    .allocate  = spud_system_allocate,
+	    .free      = spud_system_free,
+	};
+	return allocator;
 }
 
 const char *spudresult_str(SPUDRESULT r) {
@@ -76,6 +102,10 @@ const char *spudresult_str(SPUDRESULT r) {
 		return "SPUDRESULT_STRUCT_UNKNOWN_IN_CHAIN";
 	case SPUDRESULT_STRUCT_DUPLICATE_IN_CHAIN:
 		return "SPUDRESULT_STRUCT_DUPLICATE_IN_CHAIN";
+	case SPUDRESULT_NULL_ALLOCATOR:
+		return "SPUDRESULT_NULL_ALLOCATOR";
+	case SPUDRESULT_INVALID_ALLOCATOR:
+		return "SPUDRESULT_INVALID_ALLOCATOR";
 	case SPUDRESULT_GPU_DEVICE_ENUMERATION_FAILURE:
 		return "SPUDRESULT_GPU_DEVICE_ENUMERATION_FAILURE";
 	case SPUDRESULT_GPU_INVALID_INSTANCE:

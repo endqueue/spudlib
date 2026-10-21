@@ -157,6 +157,7 @@ SPUDRESULT spudgpu_create_shader_module(
 		                                               // aligned
 
 	spudgpu_shader_module_vulkan result = {0};
+	result.head.allocator               = device->head.allocator;
 	result._device                      = *((spudgpu_device_vulkan *)device);
 	result._stage_vk = spudgpuvulkan___shader_stage_flag_internal(desc->stage);
 
@@ -171,7 +172,11 @@ SPUDRESULT spudgpu_create_shader_module(
 	}
 
 	spudgpu_shader_module_vulkan *pResult =
-	    malloc(sizeof(spudgpu_shader_module_vulkan));
+	    SPUD_NEW(&result.head.allocator, spudgpu_shader_module_vulkan);
+	if (!pResult) {
+		vkDestroyShaderModule(result._device._logical_device_vk, result._shader_module_vk, NULL);
+		return SPUDRESULT_OUT_OF_MEMORY;
+	}
 	memcpy(pResult, &result, sizeof(spudgpu_shader_module_vulkan));
 	if (spud_debug_name_set(pResult, desc->debug_name) != SPUD_SUCCESS) {
 		spudgpu_destroy_shader_module(pResult);
@@ -188,8 +193,9 @@ void spudgpu_destroy_shader_module(spudgpu_shader_module shader_module) {
 	vkDestroyShaderModule(
 	    shader_module->_device._logical_device_vk,
 	    shader_module->_shader_module_vk, NULL);
-	free((void *)shader_module->_debug_name);
-	free(shader_module);
+	const SPUD_ALLOCATOR allocator = shader_module->head.allocator;
+	spud_string_free(&allocator, shader_module->head.debug_name);
+	SPUD_DELETE(&allocator, spudgpu_shader_module_vulkan, shader_module);
 }
 
 SPUDRESULT spudgpu_create_shader_pipeline(
@@ -219,6 +225,7 @@ SPUDRESULT spudgpu_create_shader_pipeline(
 		return outputs;
 
 	spudgpu_shader_pipeline_vulkan result = {0};
+	result.head.allocator                 = device->head.allocator;
 	result._device                        = *device;
 	result._desc                          = *desc;
 
@@ -574,13 +581,18 @@ SPUDRESULT spudgpu_create_shader_pipeline(
 
 	// If all successful, return a heap-allocated copy.
 	spudgpu_shader_pipeline_vulkan *pResult =
-	    malloc(sizeof(spudgpu_shader_pipeline_vulkan));
+	    SPUD_NEW(&result.head.allocator, spudgpu_shader_pipeline_vulkan);
+	if (!pResult) {
+		vkDestroyPipeline(vk_device, result._pipeline_vk, NULL);
+		vkDestroyPipelineLayout(vk_device, result._pipeline_layout_vk, NULL);
+		return SPUDRESULT_OUT_OF_MEMORY;
+	}
 	memcpy(pResult, &result, sizeof(spudgpu_shader_pipeline_vulkan));
 	if (spud_debug_name_set(pResult, desc->debug_name) != SPUD_SUCCESS) {
 		spudgpu_destroy_shader_pipeline(pResult);
 		return SPUDRESULT_OUT_OF_MEMORY;
 	}
-	pResult->_desc.debug_name = pResult->_debug_name;
+	pResult->_desc.debug_name = pResult->head.debug_name;
 
 	*out_pipeline = pResult;
 	return SPUD_SUCCESS;
@@ -594,8 +606,9 @@ void spudgpu_destroy_shader_pipeline(spudgpu_shader_pipeline pipeline) {
 	VkDevice vk_device = vkPipeline->_device._logical_device_vk;
 	vkDestroyPipeline(vk_device, vkPipeline->_pipeline_vk, NULL);
 	vkDestroyPipelineLayout(vk_device, vkPipeline->_pipeline_layout_vk, NULL);
-	free((void *)vkPipeline->_debug_name);
-	free(vkPipeline);
+	const SPUD_ALLOCATOR allocator = vkPipeline->head.allocator;
+	spud_string_free(&allocator, vkPipeline->head.debug_name);
+	SPUD_DELETE(&allocator, spudgpu_shader_pipeline_vulkan, vkPipeline);
 }
 
 SPUDRESULT spudgpu_get_shader_pipeline_desc(
@@ -626,6 +639,7 @@ SPUDRESULT spudgpu_create_compute_pipeline(
 		return SPUDRESULT_GPU_INVALID_COMPUTE_MODULE;
 
 	spudgpu_compute_pipeline_vulkan result = {0};
+	result.head.allocator                  = device->head.allocator;
 	result._device                         = *device;
 	result._desc                           = *desc;
 
@@ -683,13 +697,18 @@ SPUDRESULT spudgpu_create_compute_pipeline(
 	}
 
 	spudgpu_compute_pipeline_vulkan *pResult =
-	    malloc(sizeof(spudgpu_compute_pipeline_vulkan));
+	    SPUD_NEW(&result.head.allocator, spudgpu_compute_pipeline_vulkan);
+	if (!pResult) {
+		vkDestroyPipeline(vk_device, result._pipeline_vk, NULL);
+		vkDestroyPipelineLayout(vk_device, result._pipeline_layout_vk, NULL);
+		return SPUDRESULT_OUT_OF_MEMORY;
+	}
 	memcpy(pResult, &result, sizeof(spudgpu_compute_pipeline_vulkan));
 	if (spud_debug_name_set(pResult, desc->debug_name) != SPUD_SUCCESS) {
 		spudgpu_destroy_compute_pipeline(pResult);
 		return SPUDRESULT_OUT_OF_MEMORY;
 	}
-	pResult->_desc.debug_name = pResult->_debug_name;
+	pResult->_desc.debug_name = pResult->head.debug_name;
 
 	*out_pipeline = pResult;
 	return SPUD_SUCCESS;
@@ -703,8 +722,9 @@ void spudgpu_destroy_compute_pipeline(spudgpu_compute_pipeline pipeline) {
 	VkDevice vk_device = vkPipeline->_device._logical_device_vk;
 	vkDestroyPipeline(vk_device, vkPipeline->_pipeline_vk, NULL);
 	vkDestroyPipelineLayout(vk_device, vkPipeline->_pipeline_layout_vk, NULL);
-	free((void *)vkPipeline->_debug_name);
-	free(vkPipeline);
+	const SPUD_ALLOCATOR allocator = vkPipeline->head.allocator;
+	spud_string_free(&allocator, vkPipeline->head.debug_name);
+	SPUD_DELETE(&allocator, spudgpu_compute_pipeline_vulkan, vkPipeline);
 }
 
 SPUDRESULT spudgpu_get_compute_pipeline_desc(

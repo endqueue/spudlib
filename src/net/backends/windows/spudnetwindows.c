@@ -69,19 +69,21 @@ static SPUDRESULT spudnet_win_start(spudnet_error *out_error) {
 }
 
 SPUDRESULT spudnet_instance_create(
+    const spudnet_instance_desc *desc,
     spudnet_instance *out_instance,
     spudnet_error *out_error) {
 	spudnet_error_clear(out_error);
-	if (!out_instance)
-		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
-	*out_instance = NULL;
+	const SPUDRESULT desc_result = spudnet_instance_desc_check(desc, out_instance);
+	if (desc_result != SPUD_SUCCESS)
+		return desc_result;
 
-	struct spudnet_instance_t *instance = (struct spudnet_instance_t *)calloc(1, sizeof(struct spudnet_instance_t));
+	struct spudnet_instance_t *instance = SPUD_NEW_ZEROED(desc->allocator, struct spudnet_instance_t);
 	if (!instance)
 		return SPUDRESULT_OUT_OF_MEMORY;
-	SPUDRESULT result = spudnet_win_start(out_error);
+	instance->head.allocator = *desc->allocator;
+	SPUDRESULT result        = spudnet_win_start(out_error);
 	if (SPUDFAIL(result)) {
-		free(instance);
+		SPUD_DELETE(desc->allocator, struct spudnet_instance_t, instance);
 		return result;
 	}
 	*out_instance = instance;
@@ -92,8 +94,9 @@ void spudnet_instance_destroy(spudnet_instance instance) {
 	if (!instance)
 		return;
 	WSACleanup();
-	free((void *)instance->debug_name);
-	free(instance);
+	const SPUD_ALLOCATOR allocator = instance->head.allocator;
+	spud_string_free(&allocator, instance->head.debug_name);
+	SPUD_DELETE(&allocator, struct spudnet_instance_t, instance);
 }
 
 // --------------------------------------------------------------------------
@@ -243,7 +246,7 @@ static SOCKET spudnet_win_open_tcp(int family) {
 // --------------------------------------------------------------------------
 
 struct spudnet_tcp_listener_t {
-	const char *debug_name;
+	spud_object_head            head; // its allocator, also every socket's it accepts
 	spudnet_instance            instance; // also every socket's it accepts
 	struct spudnet_win_endpoint endpoint;
 	// The last accept that failed.
@@ -251,7 +254,7 @@ struct spudnet_tcp_listener_t {
 };
 
 struct spudnet_tcp_socket_t {
-	const char *debug_name;
+	spud_object_head head;
 	spudnet_instance instance;
 	// The endpoint's handle is made by connect, read by other calls only
 	// once `open` says the connection is up, and closed only by destroy.
@@ -262,15 +265,18 @@ struct spudnet_tcp_socket_t {
 	spudnet_error errors[SPUDNET_ERROR_SIDE_COUNT];
 };
 
-/* A socket with its events set up and no connection. NULL on failure. */
-static struct spudnet_tcp_socket_t *spudnet_win_socket_alloc(spudnet_instance instance) {
-	struct spudnet_tcp_socket_t *created = (struct spudnet_tcp_socket_t *)calloc(1, sizeof(struct spudnet_tcp_socket_t));
+/* A socket with its events set up and no connection, made through
+ * `allocator` (its instance's, or for an accepted socket its listener's),
+ * which it keeps a copy of. NULL on failure. */
+static struct spudnet_tcp_socket_t *spudnet_win_socket_alloc(spudnet_instance instance, const SPUD_ALLOCATOR *allocator) {
+	struct spudnet_tcp_socket_t *created = SPUD_NEW_ZEROED(allocator, struct spudnet_tcp_socket_t);
 	if (!created)
 		return NULL;
-	created->instance = instance;
+	created->head.allocator = *allocator;
+	created->instance       = instance;
 	if (!spudnet_win_endpoint_init(&created->endpoint)) {
 		spudnet_win_endpoint_free(&created->endpoint);
-		free(created);
+		SPUD_DELETE(allocator, struct spudnet_tcp_socket_t, created);
 		return NULL;
 	}
 	return created;
@@ -306,8 +312,9 @@ void spudnet_tcp_listener_destroy(spudnet_tcp_listener listener) {
 	if (!listener)
 		return;
 	spudnet_win_endpoint_free(&listener->endpoint);
-	free((void *)listener->debug_name);
-	free(listener);
+	const SPUD_ALLOCATOR allocator = listener->head.allocator;
+	spud_string_free(&allocator, listener->head.debug_name);
+	SPUD_DELETE(&allocator, struct spudnet_tcp_listener_t, listener);
 }
 
 SPUDRESULT spudnet_tcp_listener_create(
@@ -334,10 +341,11 @@ SPUDRESULT spudnet_tcp_listener_create(
 	if (!spudnet_win_parse_address(desc->address, desc->port, &storage, &length))
 		return SPUDRESULT_SPUDNET_INVALID_ADDRESS;
 
-	struct spudnet_tcp_listener_t *listener = (struct spudnet_tcp_listener_t *)calloc(1, sizeof(struct spudnet_tcp_listener_t));
+	struct spudnet_tcp_listener_t *listener = SPUD_NEW_ZEROED(&instance->head.allocator, struct spudnet_tcp_listener_t);
 	if (!listener)
 		return SPUDRESULT_OUT_OF_MEMORY;
-	listener->instance = instance;
+	listener->head.allocator = instance->head.allocator;
+	listener->instance       = instance;
 	if (!spudnet_win_endpoint_init(&listener->endpoint)) {
 		int error = (int)GetLastError();
 		spudnet_tcp_listener_destroy(listener);
@@ -422,7 +430,7 @@ SPUDRESULT spudnet_tcp_listener_accept(
 		ResetEvent(endpoint->readable_event);
 		SOCKET handle = accept(endpoint->handle, NULL, NULL);
 		if (handle != INVALID_SOCKET) {
-			struct spudnet_tcp_socket_t *accepted = spudnet_win_socket_alloc(listener->instance);
+			struct spudnet_tcp_socket_t *accepted = spudnet_win_socket_alloc(listener->instance, &listener->head.allocator);
 			if (!accepted) {
 				closesocket(handle);
 				return SPUDRESULT_OUT_OF_MEMORY;
@@ -478,7 +486,7 @@ SPUDRESULT spudnet_tcp_socket_create(
 	*out_socket = NULL;
 	if (!instance)
 		return SPUDRESULT_SPUDNET_INVALID_INSTANCE;
-	*out_socket = spudnet_win_socket_alloc(instance);
+	*out_socket = spudnet_win_socket_alloc(instance, &instance->head.allocator);
 	return *out_socket ? SPUD_SUCCESS : SPUDRESULT_OUT_OF_MEMORY;
 }
 
@@ -486,8 +494,9 @@ void spudnet_tcp_socket_destroy(spudnet_tcp_socket socket) {
 	if (!socket)
 		return;
 	spudnet_win_endpoint_free(&socket->endpoint);
-	free((void *)socket->debug_name);
-	free(socket);
+	const SPUD_ALLOCATOR allocator = socket->head.allocator;
+	spud_string_free(&allocator, socket->head.debug_name);
+	SPUD_DELETE(&allocator, struct spudnet_tcp_socket_t, socket);
 }
 
 void spudnet_tcp_socket_abort(spudnet_tcp_socket socket) {
@@ -714,14 +723,18 @@ SPUDRESULT spudnet_tcp_socket_get_peer_address(
  * The thread in run may also outlast the instance the resolver was made
  * with: the caller destroys the resolver, then the instance, while the
  * lookup is still out. So the resolver has a start of Winsock of its own
- * (`started`), made by create and given back when the resolver is freed. */
+ * (`started`), made by create and given back when the resolver is freed,
+ * and a copy of the instance's allocator in its head, which it is freed
+ * through - by whichever of run and destroy lets go last, so possibly on
+ * the thread in run, after the instance is gone. */
 struct spudnet_resolver_t {
-	const char *debug_name;
-	volatile LONG references;
+	spud_object_head head;
+	volatile LONG    references;
 	bool          started; // WSAStartup succeeded and WSACleanup is owed
 
 	// Set by create and only read after.
 	wchar_t               *host;
+	size_t                 host_count; // the wchar_ts `host` was allocated with
 	SPUDNET_ADDRESS_FAMILY family;
 
 	HANDLE        abort_event; // set by abort and never reset
@@ -735,6 +748,7 @@ struct spudnet_resolver_t {
 	SPUDRESULT       result;
 	char (*addresses)[SPUDNET_MAX_ADDRESS_STRING_LEN];
 	uint32_t      address_count;
+	uint32_t      address_capacity; // the entries `addresses` was allocated with
 	spudnet_error error;
 };
 
@@ -746,11 +760,13 @@ static void spudnet_win_resolver_release(struct spudnet_resolver_t *resolver) {
 	if (resolver->done_event)
 		CloseHandle(resolver->done_event);
 	DeleteCriticalSection(&resolver->lock);
-	free(resolver->addresses);
-	free(resolver->host);
+	// The resolver's own copy: this may run after its instance is gone.
+	const SPUD_ALLOCATOR allocator = resolver->head.allocator;
+	spud_free_array(&allocator, resolver->addresses, resolver->address_capacity, SPUDNET_MAX_ADDRESS_STRING_LEN, 1);
+	SPUD_DELETE_ARRAY(&allocator, wchar_t, resolver->host, resolver->host_count);
 	bool started = resolver->started;
-	free((void *)resolver->debug_name);
-	free(resolver);
+	spud_string_free(&allocator, resolver->head.debug_name);
+	SPUD_DELETE(&allocator, struct spudnet_resolver_t, resolver);
 	// Last, with nothing of the resolver's left that could need Winsock.
 	if (started)
 		WSACleanup();
@@ -779,9 +795,10 @@ SPUDRESULT spudnet_resolver_create(
 	if (wide_count <= 0)
 		return SPUDRESULT_DESC_INVALID_PARAMETERS;
 
-	struct spudnet_resolver_t *resolver = (struct spudnet_resolver_t *)calloc(1, sizeof(struct spudnet_resolver_t));
+	struct spudnet_resolver_t *resolver = SPUD_NEW_ZEROED(&instance->head.allocator, struct spudnet_resolver_t);
 	if (!resolver)
 		return SPUDRESULT_OUT_OF_MEMORY;
+	resolver->head.allocator = instance->head.allocator;
 	// One for this function's failure paths to let go of; the second is
 	// added only once there is a resolver to hand out.
 	resolver->references = 1;
@@ -789,7 +806,9 @@ SPUDRESULT spudnet_resolver_create(
 	resolver->family      = desc->family;
 	resolver->abort_event = CreateEventW(NULL, TRUE, FALSE, NULL);
 	resolver->done_event  = CreateEventW(NULL, TRUE, FALSE, NULL);
-	resolver->host        = (wchar_t *)malloc((size_t)wide_count * sizeof(wchar_t));
+	resolver->host        = SPUD_NEW_ARRAY(&resolver->head.allocator, wchar_t, (size_t)wide_count);
+	if (resolver->host)
+		resolver->host_count = (size_t)wide_count;
 	if (!resolver->abort_event || !resolver->done_event || !resolver->host ||
 	    MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, desc->host, -1, resolver->host, wide_count) <= 0) {
 		spudnet_win_resolver_release(resolver);
@@ -847,6 +866,7 @@ SPUDRESULT spudnet_resolver_run(spudnet_resolver resolver) {
 	spudnet_error_clear(&error);
 	char (*addresses)[SPUDNET_MAX_ADDRESS_STRING_LEN] = NULL;
 	uint32_t address_count                            = 0;
+	uint32_t address_capacity                         = 0;
 
 	// GetAddrInfoExW reports through this event when it couldn't answer on
 	// the spot. Without it there is no lookup to make.
@@ -895,8 +915,14 @@ SPUDRESULT spudnet_resolver_run(spudnet_resolver resolver) {
 			for (PADDRINFOEXW entry = found; entry != NULL; entry = entry->ai_next)
 				entries++;
 			result = SPUDRESULT_SPUDNET_RESOLVE_FAILED; // until an address turns up
-			if (entries > 0)
-				addresses = (char (*)[SPUDNET_MAX_ADDRESS_STRING_LEN])calloc(entries, SPUDNET_MAX_ADDRESS_STRING_LEN);
+			// On the caller's thread in run, through the resolver's own
+			// allocator (the instance may be gone by now).
+			if (entries > 0) {
+				addresses = (char (*)[SPUDNET_MAX_ADDRESS_STRING_LEN])spud_allocate_array(
+				    &resolver->head.allocator, entries, SPUDNET_MAX_ADDRESS_STRING_LEN, 1, true);
+				if (addresses)
+					address_capacity = entries;
+			}
 			if (entries > 0 && !addresses)
 				result = SPUDRESULT_OUT_OF_MEMORY;
 
@@ -931,8 +957,9 @@ SPUDRESULT spudnet_resolver_run(spudnet_resolver resolver) {
 	EnterCriticalSection(&resolver->lock);
 	resolver->finished      = true;
 	resolver->result        = result;
-	resolver->addresses     = addresses;
-	resolver->address_count = address_count;
+	resolver->addresses        = addresses;
+	resolver->address_count    = address_count;
+	resolver->address_capacity = address_capacity;
 	resolver->error         = error;
 	LeaveCriticalSection(&resolver->lock);
 	SetEvent(resolver->done_event);

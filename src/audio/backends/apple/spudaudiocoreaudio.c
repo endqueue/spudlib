@@ -48,10 +48,12 @@
 #include <math.h>
 #include <pthread.h>
 #include <stdatomic.h>
+#include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
+#include "../../../spudallocator.h"
 #include "../../../spudstructbase.h"
 
 #if __cplusplus
@@ -59,7 +61,7 @@ extern "C" {
 #endif
 
 struct spudaudio_device_t {
-	const char *debug_name;
+	spud_object_head head; // allocator: a copy of its instance's
 	AudioObjectID id;
 	SPUDAUDIO_DIRECTION direction;
 	char persistent_id[256]; // kAudioDevicePropertyDeviceUID
@@ -81,6 +83,8 @@ struct ca_endpoint {
  * device list, which belongs to the thread that enumerates.
  */
 struct ca_watch {
+	// The instance's: the watch and its endpoint lists are its memory.
+	SPUD_ALLOCATOR allocator;
 	SPUDAUDIO_DEVICE_EVENT_CALLBACK callback;
 	void *user_data;
 	// Listeners run on this private serial queue, so destroy can drain it
@@ -93,17 +97,19 @@ struct ca_watch {
 	SPUDRESULT baseline;
 	struct ca_endpoint *endpoints;
 	uint32_t endpoint_count;
+	uint32_t endpoint_capacity; // what `endpoints` was allocated, and is freed, with
 };
 
 struct spudaudio_instance_t {
-	const char *debug_name;
+	spud_object_head head;
 	struct spudaudio_device_t *devices; // every device ever enumerated
 	spudaudio_device *enumerated[2];    // latest array per direction
+	uint32_t enumerated_capacity[2];    // what each was allocated, and is freed, with
 	struct ca_watch *watch;             // NULL while no device-event callback is set
 };
 
 struct spudaudio_stream_t {
-	const char *debug_name;
+	spud_object_head head; // allocator: a copy of its device's
 	AudioObjectID device;
 	SPUDAUDIO_DIRECTION direction;
 	SPUDAUDIO_STREAM_CONFIG config;
@@ -114,6 +120,8 @@ struct spudaudio_stream_t {
 	mach_timebase_info_data_t timebase;
 	float *scratch;   // max_callback_frames x channels; converting: device_max_frames x device channels, interleaved
 	float **planes;   // planar: one pointer per channel into scratch; unused when converting
+	size_t scratch_count;           // floats in scratch, which it is freed with
+	uint32_t planes_count;          // pointers in planes
 	SPUDAUDIO_FORMAT device_format; // the device's own format when the stream was created
 	uint32_t device_max_frames;     // the most frames one IOProc call brings
 
@@ -125,6 +133,8 @@ struct spudaudio_stream_t {
 	uint8_t *client;             // one period in the stream's format
 	void **client_planes;        // planar: one pointer per channel into client
 	uint32_t client_sample_bytes; // bytes of one sample
+	size_t client_samples;        // samples in client (frames x channels), which it is freed with
+	uint32_t client_planes_count; // pointers in client_planes
 
 	// Device-change listeners (alive, nominal rate) run on this private
 	// serial queue, so destroy can drain it after removing them.
@@ -178,20 +188,45 @@ static OSStatus ca_set(AudioObjectID obj, AudioObjectPropertySelector sel, Audio
 	return AudioObjectSetPropertyData(obj, &a, 0, NULL, size, in);
 }
 
-// Variable-size property, malloc'd; NULL if absent or empty.
-static void *ca_get_alloc(AudioObjectID obj, AudioObjectPropertySelector sel, AudioObjectPropertyScope scope, UInt32 *out_size) {
+// A variable-size property, in a block of the caller's allocator.
+struct ca_property {
+	void *data;      // NULL if absent, empty or unreadable
+	UInt32 size;     // bytes the HAL wrote
+	UInt32 capacity; // bytes allocated, which the block is freed with
+};
+
+// The HAL may write fewer bytes than it said it would, so `size` can be
+// below `capacity`; the property's contents are the first `size` bytes.
+static struct ca_property ca_get_alloc(
+    const SPUD_ALLOCATOR *allocator,
+    AudioObjectID obj,
+    AudioObjectPropertySelector sel,
+    AudioObjectPropertyScope scope) {
+	struct ca_property p         = {NULL, 0, 0};
 	AudioObjectPropertyAddress a = {sel, scope, kAudioObjectPropertyElementMain};
 	UInt32 size                  = 0;
 	if (!AudioObjectHasProperty(obj, &a) || AudioObjectGetPropertyDataSize(obj, &a, 0, NULL, &size) != noErr || size == 0)
-		return NULL;
-	void *data = malloc(size);
-	if (data && AudioObjectGetPropertyData(obj, &a, 0, NULL, &size, data) != noErr) {
-		free(data);
-		data = NULL;
+		return p;
+	// Cast to HAL structs (AudioBufferList, AudioChannelLayout, ...).
+	void *data = spud_allocate(allocator, size, SPUD_ALIGNOF(max_align_t));
+	if (!data)
+		return p;
+	const UInt32 capacity = size;
+	if (AudioObjectGetPropertyData(obj, &a, 0, NULL, &size, data) != noErr) {
+		spud_free(allocator, data, capacity, SPUD_ALIGNOF(max_align_t));
+		return p;
 	}
-	if (out_size)
-		*out_size = size;
-	return data;
+	p.data     = data;
+	p.size     = size;
+	p.capacity = capacity;
+	return p;
+}
+
+// NULL data is nothing to free.
+static void ca_property_free(
+    const SPUD_ALLOCATOR *allocator,
+    const struct ca_property *p) {
+	spud_free(allocator, p->data, p->capacity, SPUD_ALIGNOF(max_align_t));
 }
 
 static void ca_get_string(AudioObjectID obj, AudioObjectPropertySelector sel, char *out, size_t out_size) {
@@ -223,16 +258,21 @@ static SPUDRESULT ca_result(OSStatus status) {
 
 // Total channels in one direction, summed over the device's HAL streams,
 // and whether they arrive as a single interleaved buffer.
-static uint32_t ca_channel_count(AudioObjectID dev, SPUDAUDIO_DIRECTION dir, bool *out_single_buffer) {
-	AudioBufferList *list = (AudioBufferList *)ca_get_alloc(dev, kAudioDevicePropertyStreamConfiguration, ca_scope(dir), NULL);
-	uint32_t channels     = 0;
+static uint32_t ca_channel_count(
+    const SPUD_ALLOCATOR *allocator,
+    AudioObjectID dev,
+    SPUDAUDIO_DIRECTION dir,
+    bool *out_single_buffer) {
+	const struct ca_property p  = ca_get_alloc(allocator, dev, kAudioDevicePropertyStreamConfiguration, ca_scope(dir));
+	const AudioBufferList *list = (const AudioBufferList *)p.data;
+	uint32_t channels           = 0;
 	if (list) {
 		for (UInt32 b = 0; b < list->mNumberBuffers; ++b)
 			channels += list->mBuffers[b].mNumberChannels;
 		if (out_single_buffer)
 			*out_single_buffer = list->mNumberBuffers == 1;
-		free(list);
 	}
+	ca_property_free(allocator, &p);
 	return channels;
 }
 
@@ -245,18 +285,22 @@ static uint32_t ca_nominal_rate(AudioObjectID dev) {
 // The device's own format in one direction, as clients see it (the HAL
 // virtual format: Float32 at the nominal rate), with its preferred channel
 // layout as positions.
-static void ca_device_format(AudioObjectID dev, SPUDAUDIO_DIRECTION dir, SPUDAUDIO_FORMAT *out) {
+static void ca_device_format(
+    const SPUD_ALLOCATOR *allocator,
+    AudioObjectID dev,
+    SPUDAUDIO_DIRECTION dir,
+    SPUDAUDIO_FORMAT *out) {
 	memset(out, 0, sizeof(*out));
 	bool single         = true;
 	out->sample_format  = SPUDAUDIO_SAMPLE_FORMAT_F32;
 	out->sample_rate    = ca_nominal_rate(dev);
-	out->channel_count  = ca_channel_count(dev, dir, &single);
+	out->channel_count  = ca_channel_count(allocator, dev, dir, &single);
 	out->interleaved    = single || out->channel_count == 1;
 	if (out->channel_count > SPUDAUDIO_MAX_CHANNELS)
 		out->channel_count = SPUDAUDIO_MAX_CHANNELS;
-	AudioChannelLayout *layout = (AudioChannelLayout *)ca_get_alloc(dev, kAudioDevicePropertyPreferredChannelLayout, ca_scope(dir), NULL);
-	spudaudio_apple_layout_to_positions(layout, out);
-	free(layout);
+	const struct ca_property layout = ca_get_alloc(allocator, dev, kAudioDevicePropertyPreferredChannelLayout, ca_scope(dir));
+	spudaudio_apple_layout_to_positions(allocator, (const AudioChannelLayout *)layout.data, out);
+	ca_property_free(allocator, &layout);
 }
 
 // A SpudAudio format as linear PCM in native byte order. False for a sample
@@ -376,39 +420,47 @@ static const AudioObjectPropertyAddress ca_hardware_watched[] = {
 // value stored under it is the watch. Only the address is used.
 static const char ca_watch_key = 0;
 
-// Every endpoint there is now, malloc'd: the same test and the same identity
-// (UID + direction) as spudaudio_enumerate_devices, for both directions.
-static SPUDRESULT ca_list_endpoints(struct ca_endpoint **out_endpoints, uint32_t *out_count) {
+// Every endpoint there is now, in a block of the watch's allocator with
+// room for `*out_capacity`: the same test and the same identity (UID +
+// direction) as spudaudio_enumerate_devices, for both directions.
+static SPUDRESULT ca_list_endpoints(
+    const SPUD_ALLOCATOR *allocator,
+    struct ca_endpoint **out_endpoints,
+    uint32_t *out_count,
+    uint32_t *out_capacity) {
 	static const SPUDAUDIO_DIRECTION directions[] = {SPUDAUDIO_DIRECTION_OUTPUT, SPUDAUDIO_DIRECTION_INPUT};
 	*out_endpoints                                = NULL;
 	*out_count                                    = 0;
+	*out_capacity                                 = 0;
 
-	UInt32 size        = 0;
-	AudioObjectID *ids = (AudioObjectID *)ca_get_alloc(kAudioObjectSystemObject, kAudioHardwarePropertyDevices, kAudioObjectPropertyScopeGlobal, &size);
-	uint32_t count     = ids ? size / (uint32_t)sizeof(AudioObjectID) : 0;
+	const struct ca_property p = ca_get_alloc(allocator, kAudioObjectSystemObject, kAudioHardwarePropertyDevices, kAudioObjectPropertyScopeGlobal);
+	const AudioObjectID *ids   = (const AudioObjectID *)p.data;
+	uint32_t count             = ids ? p.size / (uint32_t)sizeof(AudioObjectID) : 0;
 	if (count == 0) {
-		free(ids);
+		ca_property_free(allocator, &p);
 		return SPUD_SUCCESS;
 	}
-	struct ca_endpoint *list = (struct ca_endpoint *)calloc((size_t)count * 2, sizeof(*list));
+	const uint32_t capacity  = count * 2;
+	struct ca_endpoint *list = SPUD_NEW_ARRAY_ZEROED(allocator, struct ca_endpoint, capacity);
 	if (!list) {
-		free(ids);
+		ca_property_free(allocator, &p);
 		return SPUDRESULT_OUT_OF_MEMORY;
 	}
 
 	uint32_t written = 0;
 	for (uint32_t i = 0; i < count; ++i) {
 		for (size_t d = 0; d < sizeof(directions) / sizeof(directions[0]); ++d) {
-			if (ca_channel_count(ids[i], directions[d], NULL) == 0)
+			if (ca_channel_count(allocator, ids[i], directions[d], NULL) == 0)
 				continue; // no streams in this direction
 			list[written].direction = directions[d];
 			ca_get_string(ids[i], kAudioDevicePropertyDeviceUID, list[written].persistent_id, sizeof(list[written].persistent_id));
 			++written;
 		}
 	}
-	free(ids);
+	ca_property_free(allocator, &p);
 	*out_endpoints = list;
 	*out_count     = written;
+	*out_capacity  = capacity;
 	return SPUD_SUCCESS;
 }
 
@@ -426,12 +478,15 @@ static bool ca_endpoint_in(const struct ca_endpoint *endpoint, const struct ca_e
 static void ca_watch_devices_changed(struct ca_watch *w) {
 	struct ca_endpoint *now = NULL;
 	uint32_t now_count      = 0;
-	if (SPUDFAIL(ca_list_endpoints(&now, &now_count)))
+	uint32_t now_capacity   = 0;
+	if (SPUDFAIL(ca_list_endpoints(&w->allocator, &now, &now_count, &now_capacity)))
 		return;
-	struct ca_endpoint *before = w->endpoints;
-	uint32_t before_count      = w->endpoint_count;
-	w->endpoints               = now;
-	w->endpoint_count          = now_count;
+	struct ca_endpoint *before     = w->endpoints;
+	uint32_t before_count          = w->endpoint_count;
+	const uint32_t before_capacity = w->endpoint_capacity;
+	w->endpoints                   = now;
+	w->endpoint_count              = now_count;
+	w->endpoint_capacity           = now_capacity;
 
 	for (uint32_t i = 0; i < before_count; ++i)
 		if (!ca_endpoint_in(&before[i], now, now_count))
@@ -439,7 +494,7 @@ static void ca_watch_devices_changed(struct ca_watch *w) {
 	for (uint32_t i = 0; i < now_count; ++i)
 		if (!ca_endpoint_in(&now[i], before, before_count))
 			w->callback(SPUDAUDIO_DEVICE_EVENT_ADDED, now[i].persistent_id, now[i].direction, SPUDAUDIO_DEFAULT_ROLE_NONE, w->user_data);
-	free(before);
+	SPUD_DELETE_ARRAY(&w->allocator, struct ca_endpoint, before, before_capacity);
 }
 
 // Runs on the watch's queue: one of ca_defaults changed. A role left with
@@ -474,7 +529,7 @@ static void ca_on_hardware_change(struct ca_watch *w, UInt32 count, const AudioO
 // Runs on the watch's queue, once, after the listeners are registered.
 static void ca_watch_take_baseline(void *context) {
 	struct ca_watch *w = (struct ca_watch *)context;
-	w->baseline        = ca_list_endpoints(&w->endpoints, &w->endpoint_count);
+	w->baseline        = ca_list_endpoints(&w->allocator, &w->endpoints, &w->endpoint_count, &w->endpoint_capacity);
 	w->have_baseline   = SPUD_SUCCESS == w->baseline;
 }
 
@@ -493,14 +548,20 @@ static void ca_watch_destroy(struct ca_watch *w) {
 		Block_release(w->listener);
 	if (w->queue)
 		dispatch_release(w->queue);
-	free(w->endpoints);
-	free(w);
+	const SPUD_ALLOCATOR allocator = w->allocator;
+	SPUD_DELETE_ARRAY(&allocator, struct ca_endpoint, w->endpoints, w->endpoint_capacity);
+	SPUD_DELETE(&allocator, struct ca_watch, w);
 }
 
-static SPUDRESULT ca_watch_create(SPUDAUDIO_DEVICE_EVENT_CALLBACK callback, void *user_data, struct ca_watch **out_watch) {
-	struct ca_watch *w = (struct ca_watch *)calloc(1, sizeof(*w));
+static SPUDRESULT ca_watch_create(
+    const SPUD_ALLOCATOR *allocator,
+    SPUDAUDIO_DEVICE_EVENT_CALLBACK callback,
+    void *user_data,
+    struct ca_watch **out_watch) {
+	struct ca_watch *w = SPUD_NEW_ZEROED(allocator, struct ca_watch);
 	if (!w)
 		return SPUDRESULT_OUT_OF_MEMORY;
+	w->allocator = *allocator;
 	w->callback  = callback;
 	w->user_data = user_data;
 	w->queue     = dispatch_queue_create("spudaudio.coreaudio.devices", DISPATCH_QUEUE_SERIAL);
@@ -544,17 +605,18 @@ static bool ca_in_device_event_callback(spudaudio_instance instance) {
 // --------------------------------------------------------------------------
 
 SPUDRESULT spudaudio_create_instance(
-    SPUDAUDIO_NATIVE_API api,
+    const SPUDAUDIO_INSTANCE_DESC *desc,
     spudaudio_instance *out_instance) {
-	if (!out_instance)
-		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
-	*out_instance = NULL;
-	if (api != SPUDAUDIO_NATIVE_API_COREAUDIO)
+	const SPUDRESULT desc_result = spudaudio_validate_instance_desc(desc, out_instance);
+	if (desc_result != SPUD_SUCCESS)
+		return desc_result;
+	if (desc->native_api != SPUDAUDIO_NATIVE_API_COREAUDIO)
 		return SPUDRESULT_INVALID_API;
-	struct spudaudio_instance_t *inst = (struct spudaudio_instance_t *)calloc(1, sizeof(*inst));
+	struct spudaudio_instance_t *inst = SPUD_NEW_ZEROED(desc->allocator, struct spudaudio_instance_t);
 	if (!inst)
 		return SPUDRESULT_OUT_OF_MEMORY;
-	*out_instance = inst;
+	inst->head.allocator = *desc->allocator;
+	*out_instance        = inst;
 	return SPUD_SUCCESS;
 }
 
@@ -564,17 +626,18 @@ SPUDRESULT spudaudio_destroy_instance(spudaudio_instance instance) {
 	if (ca_in_device_event_callback(instance))
 		return SPUDRESULT_GENERAL_FAILURE;
 	ca_watch_destroy(instance->watch);
+	const SPUD_ALLOCATOR allocator = instance->head.allocator;
 	struct spudaudio_device_t *dev = instance->devices;
 	while (dev) {
 		struct spudaudio_device_t *next = dev->next;
-		free((void *)dev->debug_name);
-		free(dev);
+		spud_string_free(&allocator, dev->head.debug_name);
+		SPUD_DELETE(&allocator, struct spudaudio_device_t, dev);
 		dev = next;
 	}
-	free(instance->enumerated[0]);
-	free(instance->enumerated[1]);
-	free((void *)instance->debug_name);
-	free(instance);
+	SPUD_DELETE_ARRAY(&allocator, spudaudio_device, instance->enumerated[0], instance->enumerated_capacity[0]);
+	SPUD_DELETE_ARRAY(&allocator, spudaudio_device, instance->enumerated[1], instance->enumerated_capacity[1]);
+	spud_string_free(&allocator, instance->head.debug_name);
+	SPUD_DELETE(&allocator, struct spudaudio_instance_t, instance);
 	return SPUD_SUCCESS;
 }
 
@@ -593,11 +656,12 @@ static struct spudaudio_device_t *ca_find_or_add_device(
 			d->id = id; // the HAL may renumber a device that came back
 			return d;
 		}
-	struct spudaudio_device_t *d = (struct spudaudio_device_t *)calloc(1, sizeof(*d));
+	struct spudaudio_device_t *d = SPUD_NEW_ZEROED(&instance->head.allocator, struct spudaudio_device_t);
 	if (!d)
 		return NULL;
-	d->id        = id;
-	d->direction = direction;
+	d->head.allocator = instance->head.allocator;
+	d->id             = id;
+	d->direction      = direction;
 	strncpy(d->persistent_id, uid, sizeof(d->persistent_id) - 1);
 	d->next           = instance->devices;
 	instance->devices = d;
@@ -618,19 +682,20 @@ SPUDRESULT spudaudio_enumerate_devices(
 	if (direction != SPUDAUDIO_DIRECTION_OUTPUT && direction != SPUDAUDIO_DIRECTION_INPUT)
 		return SPUDRESULT_DESC_INVALID_PARAMETERS;
 
-	UInt32 size        = 0;
-	AudioObjectID *ids = (AudioObjectID *)ca_get_alloc(kAudioObjectSystemObject, kAudioHardwarePropertyDevices, kAudioObjectPropertyScopeGlobal, &size);
-	uint32_t count     = ids ? size / (uint32_t)sizeof(AudioObjectID) : 0;
-	spudaudio_device *list = count ? (spudaudio_device *)calloc(count, sizeof(spudaudio_device)) : NULL;
+	const SPUD_ALLOCATOR *allocator = &instance->head.allocator;
+	const struct ca_property p      = ca_get_alloc(allocator, kAudioObjectSystemObject, kAudioHardwarePropertyDevices, kAudioObjectPropertyScopeGlobal);
+	const AudioObjectID *ids        = (const AudioObjectID *)p.data;
+	uint32_t count                  = ids ? p.size / (uint32_t)sizeof(AudioObjectID) : 0;
+	spudaudio_device *list          = count ? SPUD_NEW_ARRAY_ZEROED(allocator, spudaudio_device, count) : NULL;
 	if (count && !list) {
-		free(ids);
+		ca_property_free(allocator, &p);
 		return SPUDRESULT_OUT_OF_MEMORY;
 	}
 
 	uint32_t written = 0;
 	SPUDRESULT r     = SPUD_SUCCESS;
 	for (uint32_t i = 0; i < count; ++i) {
-		if (ca_channel_count(ids[i], direction, NULL) == 0)
+		if (ca_channel_count(allocator, ids[i], direction, NULL) == 0)
 			continue; // no streams in this direction
 		char uid[256];
 		ca_get_string(ids[i], kAudioDevicePropertyDeviceUID, uid, sizeof(uid));
@@ -641,15 +706,16 @@ SPUDRESULT spudaudio_enumerate_devices(
 		}
 		list[written++] = d;
 	}
-	free(ids);
+	ca_property_free(allocator, &p);
 	if (SPUDFAIL(r)) {
-		free(list);
+		SPUD_DELETE_ARRAY(allocator, spudaudio_device, list, count);
 		return r;
 	}
-	free(instance->enumerated[direction]);
-	instance->enumerated[direction] = list;
-	*out_devices                    = list;
-	*out_device_count               = written;
+	SPUD_DELETE_ARRAY(allocator, spudaudio_device, instance->enumerated[direction], instance->enumerated_capacity[direction]);
+	instance->enumerated[direction]          = list;
+	instance->enumerated_capacity[direction] = count;
+	*out_devices                             = list;
+	*out_device_count                        = written;
 	return SPUD_SUCCESS;
 }
 
@@ -674,7 +740,7 @@ SPUDRESULT spudaudio_get_device_properties(
 	memcpy(out_properties->persistent_id, device->persistent_id, sizeof(out_properties->persistent_id));
 	out_properties->direction          = device->direction;
 	out_properties->supports_exclusive = true; // hog mode
-	ca_device_format(device->id, device->direction, &out_properties->native_format);
+	ca_device_format(&device->head.allocator, device->id, device->direction, &out_properties->native_format);
 
 	for (size_t i = 0; i < sizeof(ca_defaults) / sizeof(ca_defaults[0]); ++i) {
 		if (ca_defaults[i].direction != device->direction)
@@ -697,13 +763,14 @@ SPUDRESULT spudaudio_set_device_sample_rate(spudaudio_device device, uint32_t sa
 	if (sample_rate == 0)
 		return SPUDRESULT_DESC_INVALID_PARAMETERS;
 
-	UInt32 size             = 0;
-	AudioValueRange *ranges = (AudioValueRange *)ca_get_alloc(device->id, kAudioDevicePropertyAvailableNominalSampleRates, kAudioObjectPropertyScopeGlobal, &size);
-	bool available          = false;
-	for (uint32_t i = 0; ranges && i < size / sizeof(AudioValueRange); ++i)
+	const struct ca_property p =
+	    ca_get_alloc(&device->head.allocator, device->id, kAudioDevicePropertyAvailableNominalSampleRates, kAudioObjectPropertyScopeGlobal);
+	const AudioValueRange *ranges = (const AudioValueRange *)p.data;
+	bool available                = false;
+	for (uint32_t i = 0; ranges && i < p.size / sizeof(AudioValueRange); ++i)
 		if (sample_rate >= ranges[i].mMinimum && sample_rate <= ranges[i].mMaximum)
 			available = true;
-	free(ranges);
+	ca_property_free(&device->head.allocator, &p);
 	if (!available)
 		return SPUDRESULT_SAUD_FORMAT_NOT_SUPPORTED;
 	if (ca_nominal_rate(device->id) == sample_rate)
@@ -775,7 +842,7 @@ SPUDRESULT spudaudio_get_timing_caps(
 	// converted stream's period is in its own, handed over whole each time.
 	if (flags & SPUDAUDIO_STREAM_FLAG_ALLOW_OS_CONVERSION) {
 		SPUDAUDIO_FORMAT device_format;
-		ca_device_format(device->id, device->direction, &device_format);
+		ca_device_format(&device->head.allocator, device->id, device->direction, &device_format);
 		if (format->sample_rate != 0 && device_format.sample_rate != 0 && ca_format_needs_conversion(format, &device_format)) {
 			out_caps->min_period_frames        = ca_scale_frames(out_caps->min_period_frames, device_format.sample_rate, format->sample_rate, 1);
 			out_caps->max_period_frames        = ca_scale_frames(out_caps->max_period_frames, device_format.sample_rate, format->sample_rate, -1);
@@ -816,7 +883,7 @@ static SPUDRESULT ca_plan_stream(const SPUDAUDIO_STREAM_DESC *desc, SPUDAUDIO_ST
 
 	// --- Format.
 	const SPUDAUDIO_FORMAT *device_format = &plan->device_format;
-	ca_device_format(dev, desc->device->direction, &plan->device_format);
+	ca_device_format(&desc->device->head.allocator, dev, desc->device->direction, &plan->device_format);
 	cfg->format = desc->format;
 	if ((desc->flags & SPUDAUDIO_STREAM_FLAG_ALLOW_OS_CONVERSION) && ca_format_needs_conversion(&desc->format, device_format)) {
 		// A layout must be the one the conversion gives.
@@ -1283,12 +1350,13 @@ static void ca_free_stream(struct spudaudio_stream_t *s) {
 		Block_release(s->listener);
 	if (s->listener_queue)
 		dispatch_release(s->listener_queue);
-	free(s->client_planes);
-	free(s->client);
-	free(s->planes);
-	free(s->scratch);
-	free((void *)s->debug_name);
-	free(s);
+	const SPUD_ALLOCATOR allocator = s->head.allocator;
+	SPUD_DELETE_ARRAY(&allocator, void *, s->client_planes, s->client_planes_count);
+	spud_free_array(&allocator, s->client, s->client_samples, s->client_sample_bytes, SPUD_ALIGNOF(max_align_t));
+	SPUD_DELETE_ARRAY(&allocator, float *, s->planes, s->planes_count);
+	SPUD_DELETE_ARRAY(&allocator, float, s->scratch, s->scratch_count);
+	spud_string_free(&allocator, s->head.debug_name);
+	SPUD_DELETE(&allocator, struct spudaudio_stream_t, s);
 }
 
 SPUDRESULT spudaudio_create_stream(
@@ -1306,13 +1374,14 @@ SPUDRESULT spudaudio_create_stream(
 	if (SPUDFAIL(r))
 		return r;
 
-	struct spudaudio_stream_t *s = (struct spudaudio_stream_t *)calloc(1, sizeof(*s));
+	struct spudaudio_stream_t *s = SPUD_NEW_ZEROED(&desc->device->head.allocator, struct spudaudio_stream_t);
 	if (!s)
 		return SPUDRESULT_OUT_OF_MEMORY;
-	s->device    = desc->device->id;
-	s->direction = desc->device->direction;
-	s->callback  = desc->callback;
-	s->user_data = desc->user_data;
+	s->head.allocator = desc->device->head.allocator;
+	s->device         = desc->device->id;
+	s->direction      = desc->device->direction;
+	s->callback       = desc->callback;
+	s->user_data      = desc->user_data;
 	atomic_init(&s->state, SPUDAUDIO_STREAM_STATE_STOPPED);
 	atomic_init(&s->error, SPUD_SUCCESS);
 	atomic_init(&s->underflow_count, 0);
@@ -1357,22 +1426,32 @@ SPUDRESULT spudaudio_create_stream(
 	if (SPUD_SUCCESS == r && s->converter) {
 		// The scratch buffer is the device side of the converter, and
 		// `client` holds the one period the callback is given.
-		const uint32_t channels = s->config.format.channel_count;
-		const uint32_t frames   = s->config.period_frames;
-		s->client_sample_bytes  = spudaudio_sample_format_byte_size(s->config.format.sample_format);
-		s->scratch              = (float *)calloc((size_t)s->device_max_frames * s->device_format.channel_count, sizeof(float));
-		s->client               = (uint8_t *)calloc((size_t)frames * channels, s->client_sample_bytes);
-		s->client_planes        = (void **)calloc(channels, sizeof(void *));
+		// Every block here and below is made now, so the IOProc never
+		// allocates. Each count is kept: it is what the block is freed with.
+		const SPUD_ALLOCATOR *allocator = &s->head.allocator;
+		const uint32_t channels         = s->config.format.channel_count;
+		const uint32_t frames           = s->config.period_frames;
+		s->client_sample_bytes          = spudaudio_sample_format_byte_size(s->config.format.sample_format);
+		s->scratch_count                = (size_t)s->device_max_frames * s->device_format.channel_count;
+		s->client_samples               = (size_t)frames * channels;
+		s->client_planes_count          = channels;
+		s->scratch                      = SPUD_NEW_ARRAY_ZEROED(allocator, float, s->scratch_count);
+		// Bytes read as the stream's samples (int16_t, int32_t, float).
+		s->client        = (uint8_t *)spud_allocate_array(allocator, s->client_samples, s->client_sample_bytes, SPUD_ALIGNOF(max_align_t), true);
+		s->client_planes = SPUD_NEW_ARRAY_ZEROED(allocator, void *, channels);
 		if (!s->scratch || !s->client || !s->client_planes)
 			r = SPUDRESULT_OUT_OF_MEMORY;
 		else
 			for (uint32_t ch = 0; ch < channels; ++ch)
 				s->client_planes[ch] = s->client + (size_t)ch * frames * s->client_sample_bytes;
 	} else if (SPUD_SUCCESS == r) {
-		const uint32_t channels = s->config.format.channel_count;
-		const uint32_t frames   = s->config.max_callback_frames;
-		s->scratch              = (float *)calloc((size_t)frames * channels, sizeof(float));
-		s->planes               = (float **)calloc(channels, sizeof(float *));
+		const SPUD_ALLOCATOR *allocator = &s->head.allocator;
+		const uint32_t channels         = s->config.format.channel_count;
+		const uint32_t frames           = s->config.max_callback_frames;
+		s->scratch_count                = (size_t)frames * channels;
+		s->planes_count                 = channels;
+		s->scratch                      = SPUD_NEW_ARRAY_ZEROED(allocator, float, s->scratch_count);
+		s->planes                       = SPUD_NEW_ARRAY_ZEROED(allocator, float *, channels);
 		if (!s->scratch || !s->planes)
 			r = SPUDRESULT_OUT_OF_MEMORY;
 		else
@@ -1512,11 +1591,11 @@ SPUDRESULT spudaudio_stream_get_latency_frames(
 		status = ca_get(stream->device, kAudioDevicePropertyBufferFrameSize, kAudioObjectPropertyScopeGlobal, sizeof(buffer), &buffer);
 	if (status != noErr)
 		return ca_result(status);
-	AudioStreamID *streams = (AudioStreamID *)ca_get_alloc(stream->device, kAudioDevicePropertyStreams, scope, NULL);
-	if (streams) {
+	const struct ca_property p   = ca_get_alloc(&stream->head.allocator, stream->device, kAudioDevicePropertyStreams, scope);
+	const AudioStreamID *streams = (const AudioStreamID *)p.data;
+	if (streams && p.size >= sizeof(AudioStreamID))
 		ca_get(streams[0], kAudioStreamPropertyLatency, kAudioObjectPropertyScopeGlobal, sizeof(stream_latency), &stream_latency);
-		free(streams);
-	}
+	ca_property_free(&stream->head.allocator, &p);
 	*out_latency_frames = device_latency + safety + buffer + stream_latency;
 	if (stream->converter)
 		*out_latency_frames = ca_scale_frames(*out_latency_frames, stream->device_format.sample_rate, stream->config.format.sample_rate, 0);
@@ -1536,7 +1615,7 @@ SPUDRESULT spudaudio_set_device_event_callback(
 	// the callback that was set still set.
 	struct ca_watch *watch = NULL;
 	if (callback) {
-		SPUDRESULT r = ca_watch_create(callback, user_data, &watch);
+		SPUDRESULT r = ca_watch_create(&instance->head.allocator, callback, user_data, &watch);
 		if (SPUDFAIL(r))
 			return r;
 	}

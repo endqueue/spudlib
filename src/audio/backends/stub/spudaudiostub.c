@@ -17,12 +17,12 @@ extern "C" {
 #endif
 
 SPUDRESULT spudaudio_create_instance(
-    SPUDAUDIO_NATIVE_API api,
+    const SPUDAUDIO_INSTANCE_DESC *desc,
     spudaudio_instance *out_instance) {
-	if (!out_instance)
-		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
-	*out_instance = NULL;
-	if (api == SPUDAUDIO_NATIVE_API_NONE)
+	const SPUDRESULT desc_result = spudaudio_validate_instance_desc(desc, out_instance);
+	if (desc_result != SPUD_SUCCESS)
+		return desc_result;
+	if (desc->native_api == SPUDAUDIO_NATIVE_API_NONE)
 		return SPUDRESULT_INVALID_API;
 	return SPUDRESULT_NOT_IMPLEMENTED_YET;
 }

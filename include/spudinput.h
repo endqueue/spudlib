@@ -167,12 +167,18 @@ enum {
 /**
  * @brief What the caller decides when creating an instance. No field has a
  * default: a zeroed desc is refused, for its `base`, and one with only its
- * `base` set is refused for its `native_api`.
+ * `base` set is refused for its `allocator`.
  */
 typedef struct SPUDINPUT_INSTANCE_DESC {
 	/** `type` is SPUD_STRUCT_TYPE_INPUT_INSTANCE_DESC; `next` is NULL (nothing is chained onto
 	 * this struct yet). Set by the caller. See SPUD_STRUCT_BASE. */
 	SPUD_STRUCT_BASE base;
+	/** Where the instance's memory comes from (SPUD_ALLOCATOR). Copied, so
+	 * the struct need not outlive the call; its functions and `user_data`
+	 * must outlive the instance. Called only while one of this module's
+	 * calls is running, though not always on that call's thread: GameInput
+	 * may run the device callback that allocates on a thread of its own. */
+	const SPUD_ALLOCATOR *allocator;
 	/** The native input API to bind to. One this build has
 	 * (@ref spudinput_config "Compile-time configuration"). */
 	SPUDINPUT_NATIVE_API native_api;
@@ -222,6 +228,8 @@ typedef struct SPUDINPUT_INSTANCE_DESC {
  *         SPUD_STRUCT_TYPE_INPUT_INSTANCE_DESC.
  * @retval SPUDRESULT_STRUCT_UNKNOWN_IN_CHAIN `desc->base.next` is not NULL.
  * @retval SPUDRESULT_NULL_OUTPUT_PARAMETER `out_instance` is NULL.
+ * @retval SPUDRESULT_NULL_ALLOCATOR `desc->allocator` is NULL.
+ * @retval SPUDRESULT_INVALID_ALLOCATOR `desc->allocator` lacks a function.
  * @retval SPUDRESULT_INVALID_API `desc->native_api` is not one this build
  *         has.
  * @retval SPUDRESULT_SPUDINPUT_UNSUPPORTED `desc->read_in_background` is a

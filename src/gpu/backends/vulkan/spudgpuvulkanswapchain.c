@@ -29,30 +29,42 @@
 extern "C" {
 #endif
 
-void spudgpuvulkan___get_available_formats_internal(
+// The surface's formats, made through the swap chain's allocator: *ppOutput
+// holds *pOutputCount of them in an array of *pOutputCapacity, the count it
+// is freed with. False if the array can't be made.
+bool spudgpuvulkan___get_available_formats_internal(
 	spudgpu_swap_chain_vulkan *pSwapChain,
 	VkSurfaceFormatKHR **ppOutput,
-	uint32_t *pOutputCount) {
-	uint32_t formatCount;
+	uint32_t *pOutputCount,
+	uint32_t *pOutputCapacity) {
+	uint32_t formatCount = 0;
 	vkGetPhysicalDeviceSurfaceFormatsKHR(pSwapChain->_device._physical_device_vk, pSwapChain->_surface_vk, &formatCount,
 	                                     NULL);
-	*ppOutput = malloc(sizeof(VkSurfaceFormatKHR) * formatCount);
-	*pOutputCount = formatCount;
+	*ppOutput = SPUD_NEW_ARRAY(&pSwapChain->head.allocator, VkSurfaceFormatKHR, formatCount);
+	if (!*ppOutput) return false;
+	*pOutputCapacity = formatCount;
 	vkGetPhysicalDeviceSurfaceFormatsKHR(pSwapChain->_device._physical_device_vk, pSwapChain->_surface_vk, &formatCount,
 	                                     *ppOutput);
+	*pOutputCount = formatCount;
+	return true;
 }
 
-void spudgpuvulkan___get_available_present_modes_internal(
+// The surface's present modes, as spudgpuvulkan___get_available_formats_internal.
+bool spudgpuvulkan___get_available_present_modes_internal(
 	spudgpu_swap_chain_vulkan *pSwapChain,
 	VkPresentModeKHR **ppOutput,
-	uint32_t *pOutputCount) {
-	uint32_t presentModeCount;
+	uint32_t *pOutputCount,
+	uint32_t *pOutputCapacity) {
+	uint32_t presentModeCount = 0;
 	vkGetPhysicalDeviceSurfacePresentModesKHR(pSwapChain->_device._physical_device_vk, pSwapChain->_surface_vk,
 	                                          &presentModeCount, NULL);
-	*ppOutput = malloc(sizeof(VkPresentModeKHR) * presentModeCount);
-	*pOutputCount = presentModeCount;
+	*ppOutput = SPUD_NEW_ARRAY(&pSwapChain->head.allocator, VkPresentModeKHR, presentModeCount);
+	if (!*ppOutput) return false;
+	*pOutputCapacity = presentModeCount;
 	vkGetPhysicalDeviceSurfacePresentModesKHR(pSwapChain->_device._physical_device_vk, pSwapChain->_surface_vk,
 	                                          &presentModeCount, *ppOutput);
+	*pOutputCount = presentModeCount;
+	return true;
 }
 
 VkSurfaceFormatKHR spudgpuvulkan___choose_surface_format_internal(
@@ -118,12 +130,17 @@ VkExtent2D spudgpuvulkan___choose_extent_internal(
 }
 
 
-VkResult spudgpuvulkan___create_swapchain_internal(
+// SPUD_SUCCESS, SPUDRESULT_OUT_OF_MEMORY when an array of SpudGPU's own
+// can't be made, SPUDRESULT_API_SPECIFIC_FAILURE when Vulkan fails. What it
+// made before failing stays in [pSwapChain], for
+// spudgpuvulkan___release_swap_chain_internal.
+SPUDRESULT spudgpuvulkan___create_swapchain_internal(
 	spudgpu_swap_chain_vulkan *pSwapChain,
 	uint32_t width,
 	uint32_t height,
 	VkSwapchainKHR oldHandle) {
 	VkResult result = VK_SUCCESS;
+	const SPUD_ALLOCATOR *allocator = &pSwapChain->head.allocator;
 	VkPhysicalDevice physicalDevice = pSwapChain->_device._physical_device_vk;
 	VkDevice logicalDevice = pSwapChain->_device._logical_device_vk;
 	// Query capabilities
@@ -132,21 +149,25 @@ VkResult spudgpuvulkan___create_swapchain_internal(
 	VkPresentModeKHR presentMode;
 	{
 		result = vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physicalDevice, pSwapChain->_surface_vk, &capabilities);
-		if (result != VK_SUCCESS) return result;
+		if (result != VK_SUCCESS) return SPUDRESULT_API_SPECIFIC_FAILURE;
 
 		VkSurfaceFormatKHR *pSurfaceFormats = NULL;
 		uint32_t surfaceFormatCount = 0;
-		spudgpuvulkan___get_available_formats_internal(pSwapChain, &pSurfaceFormats, &surfaceFormatCount);
+		uint32_t surfaceFormatCapacity = 0;
+		if (!spudgpuvulkan___get_available_formats_internal(pSwapChain, &pSurfaceFormats, &surfaceFormatCount, &surfaceFormatCapacity))
+			return SPUDRESULT_OUT_OF_MEMORY;
 		surfaceFormat = spudgpuvulkan___choose_surface_format_internal(
 			pSurfaceFormats, surfaceFormatCount,
 			convert_spud_to_vulkan_format(pSwapChain->_desc.format));
-		free(pSurfaceFormats);
+		SPUD_DELETE_ARRAY(allocator, VkSurfaceFormatKHR, pSurfaceFormats, surfaceFormatCapacity);
 
 		VkPresentModeKHR *pPresentModes = NULL;
 		uint32_t presentModeCount = 0;
-		spudgpuvulkan___get_available_present_modes_internal(pSwapChain, &pPresentModes, &presentModeCount);
+		uint32_t presentModeCapacity = 0;
+		if (!spudgpuvulkan___get_available_present_modes_internal(pSwapChain, &pPresentModes, &presentModeCount, &presentModeCapacity))
+			return SPUDRESULT_OUT_OF_MEMORY;
 		presentMode = spudgpuvulkan___choose_present_mode_internal(pPresentModes, presentModeCount, pSwapChain->_desc.present_mode);
-		free(pPresentModes);
+		SPUD_DELETE_ARRAY(allocator, VkPresentModeKHR, pPresentModes, presentModeCapacity);
 		pSwapChain->_extent_vk = spudgpuvulkan___choose_extent_internal(capabilities, width, height);
 		// The surface can dictate the extent (currentExtent), overriding the
 		// requested size - report what the back buffers really are.
@@ -200,7 +221,7 @@ VkResult spudgpuvulkan___create_swapchain_internal(
 			createInfo.imageUsage |= VK_IMAGE_USAGE_STORAGE_BIT;
 		// The caller asked for these; fail rather than silently drop one.
 		if ((createInfo.imageUsage & capabilities.supportedUsageFlags) != createInfo.imageUsage)
-			return VK_ERROR_FEATURE_NOT_PRESENT;
+			return SPUDRESULT_API_SPECIFIC_FAILURE;
 	}
 	createInfo.preTransform = capabilities.currentTransform;
 	createInfo.compositeAlpha = compositeAlpha;
@@ -217,24 +238,29 @@ VkResult spudgpuvulkan___create_swapchain_internal(
 	result = vkCreateSwapchainKHR(logicalDevice, &createInfo, NULL, &pSwapChain->_swapchain_vk);
 	if (result != VK_SUCCESS) {
 		//throw std::runtime_error("failed to create swap chain!");
-		return result;
+		pSwapChain->_swapchain_vk = VK_NULL_HANDLE;
+		return SPUDRESULT_API_SPECIFIC_FAILURE;
 	}
 
 	// Retrieve handles to the images
 	result = vkGetSwapchainImagesKHR(logicalDevice, pSwapChain->_swapchain_vk, &imageCount, NULL);
-	if (result != VK_SUCCESS) return result;
+	if (result != VK_SUCCESS) return SPUDRESULT_API_SPECIFIC_FAILURE;
 
-	pSwapChain->_swapchain_images_count = imageCount; // Set the image count before malloc()
-	pSwapChain->_swapchain_images_vk = malloc(pSwapChain->_swapchain_images_count * sizeof(VkImage));
+	// The count the array is made and freed with; the images past what the
+	// second call fills, if any, are never read.
+	pSwapChain->_swapchain_images_vk = SPUD_NEW_ARRAY_ZEROED(allocator, VkImage, imageCount);
+	if (!pSwapChain->_swapchain_images_vk) return SPUDRESULT_OUT_OF_MEMORY;
+	pSwapChain->_swapchain_images_count = imageCount; // Set once the array exists
 	result = vkGetSwapchainImagesKHR(
 		logicalDevice, pSwapChain->_swapchain_vk, &imageCount,
 		pSwapChain->_swapchain_images_vk);
-	if (result != VK_SUCCESS) return result;
+	if (result != VK_SUCCESS) return SPUDRESULT_API_SPECIFIC_FAILURE;
 
-	return result;
+	return SPUD_SUCCESS;
 }
 
-void spudgpuvulkan___fences_semaphores_swapchain_creation_internal(
+// SPUD_SUCCESS, or SPUDRESULT_OUT_OF_MEMORY with nothing of its own left made.
+SPUDRESULT spudgpuvulkan___fences_semaphores_swapchain_creation_internal(
 	spudgpu_swap_chain_vulkan *pSwapChain) {
 	// This is the CPU-GPU pipelining depth, not the swapchain image count —
 	// deliberately independent of desc.buffer_count. The caller records into
@@ -248,7 +274,6 @@ void spudgpuvulkan___fences_semaphores_swapchain_creation_internal(
 	// executing it from the previous frame — see app_render (main.cpp),
 	// which resets app.cmd_allocator/app.cmd_list right after acquire.
 	uint32_t max_frames = 1;
-	pSwapChain->_max_frames_in_flight = max_frames;
 	pSwapChain->_current_frame = 0;
 
 	// render_finished_semaphores is sized/indexed by swapchain IMAGE index
@@ -261,9 +286,23 @@ void spudgpuvulkan___fences_semaphores_swapchain_creation_internal(
 	// be consuming it for image 0 (VUID-vkQueueSubmit-pSignalSemaphores-00067).
 	uint32_t image_count = pSwapChain->_swapchain_images_count > 0 ? pSwapChain->_swapchain_images_count : max_frames;
 
-	pSwapChain->_image_available_semaphores = calloc(max_frames, sizeof(spudgpu_semaphore_vulkan));
-	pSwapChain->_render_finished_semaphores = calloc(image_count, sizeof(spudgpu_semaphore_vulkan));
-	pSwapChain->_in_flight_fences_vk        = calloc(max_frames, sizeof(VkFence));
+	// All three arrays or none; the counts are set once all three exist, and
+	// are what they are freed with.
+	const SPUD_ALLOCATOR *allocator = &pSwapChain->head.allocator;
+	spudgpu_semaphore_vulkan *image_available = SPUD_NEW_ARRAY_ZEROED(allocator, spudgpu_semaphore_vulkan, max_frames);
+	spudgpu_semaphore_vulkan *render_finished = SPUD_NEW_ARRAY_ZEROED(allocator, spudgpu_semaphore_vulkan, image_count);
+	VkFence *in_flight                        = SPUD_NEW_ARRAY_ZEROED(allocator, VkFence, max_frames);
+	if (!image_available || !render_finished || !in_flight) {
+		SPUD_DELETE_ARRAY(allocator, spudgpu_semaphore_vulkan, image_available, max_frames);
+		SPUD_DELETE_ARRAY(allocator, spudgpu_semaphore_vulkan, render_finished, image_count);
+		SPUD_DELETE_ARRAY(allocator, VkFence, in_flight, max_frames);
+		return SPUDRESULT_OUT_OF_MEMORY;
+	}
+	pSwapChain->_image_available_semaphores       = image_available;
+	pSwapChain->_render_finished_semaphores       = render_finished;
+	pSwapChain->_in_flight_fences_vk              = in_flight;
+	pSwapChain->_max_frames_in_flight             = max_frames;
+	pSwapChain->_render_finished_semaphores_count = image_count;
 
 	VkDevice vk_device = pSwapChain->_device._logical_device_vk;
 
@@ -274,16 +313,21 @@ void spudgpuvulkan___fences_semaphores_swapchain_creation_internal(
 	fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
 	fenceInfo.flags = VK_FENCE_CREATE_SIGNALED_BIT; // <-- CRITICAL: first frame must not block
 
+	// The semaphores are handles the caller can name (the swap chain's
+	// semaphore getters), so each has the swap chain's allocator.
 	for (uint32_t i = 0; i < max_frames; i++) {
+		pSwapChain->_image_available_semaphores[i].head.allocator = pSwapChain->head.allocator;
 		pSwapChain->_image_available_semaphores[i]._device_vk = vk_device;
 		vkCreateSemaphore(vk_device, &semInfo, NULL, &pSwapChain->_image_available_semaphores[i]._semaphore_vk);
 		vkCreateFence(vk_device, &fenceInfo, NULL, &pSwapChain->_in_flight_fences_vk[i]);
 	}
 
 	for (uint32_t i = 0; i < image_count; i++) {
+		pSwapChain->_render_finished_semaphores[i].head.allocator = pSwapChain->head.allocator;
 		pSwapChain->_render_finished_semaphores[i]._device_vk = vk_device;
 		vkCreateSemaphore(vk_device, &semInfo, NULL, &pSwapChain->_render_finished_semaphores[i]._semaphore_vk);
 	}
+	return SPUD_SUCCESS;
 }
 
 /*
@@ -310,12 +354,16 @@ VkExtent2D swap_chain_vulkan::choose_extent(const VkSurfaceCapabilitiesKHR& capa
 	}
 }*/
 
-VkResult spudgpuvulkan_create_image_views_internal(
+// As spudgpuvulkan___create_swapchain_internal: what it made before failing
+// stays in [pSwapChain].
+SPUDRESULT spudgpuvulkan_create_image_views_internal(
 	spudgpu_swap_chain_vulkan *pSwapChain,
 	uint32_t swap_chain_image_view_count) {
-	pSwapChain->_swapchain_image_views_count = swap_chain_image_view_count; // Set image view count before malloc()
-	pSwapChain->_swapchain_image_views_vk = calloc(pSwapChain->_swapchain_image_views_count,
-	                                               sizeof(spudgpu_image_view_vulkan));
+	const SPUD_ALLOCATOR *allocator = &pSwapChain->head.allocator;
+	pSwapChain->_swapchain_image_views_vk = SPUD_NEW_ARRAY_ZEROED(allocator, spudgpu_image_view_vulkan,
+	                                                              swap_chain_image_view_count);
+	if (!pSwapChain->_swapchain_image_views_vk) return SPUDRESULT_OUT_OF_MEMORY;
+	pSwapChain->_swapchain_image_views_count = swap_chain_image_view_count; // Set once the array exists
 
 	VkResult result = VK_SUCCESS;
 	for (size_t i = 0; i < pSwapChain->_swapchain_images_count; i++) {
@@ -343,7 +391,12 @@ VkResult spudgpuvulkan_create_image_views_internal(
 		createInfo.subresourceRange.layerCount = 1;
 
 		spudgpu_image_view_vulkan *view = &pSwapChain->_swapchain_image_views_vk[i];
-		spudgpu_image_vulkan *img = calloc(1, sizeof(spudgpu_image_vulkan));
+		// The view and its image are handles the caller can name, so each
+		// has the swap chain's allocator.
+		view->head.allocator = pSwapChain->head.allocator;
+		spudgpu_image_vulkan *img = SPUD_NEW_ZEROED(allocator, spudgpu_image_vulkan);
+		if (!img) return SPUDRESULT_OUT_OF_MEMORY;
+		img->head.allocator = pSwapChain->head.allocator;
 		img->_device = pSwapChain->_device;
 		img->_image_vk = pSwapChain->_swapchain_images_vk[i];
 		img->_format_vk = pSwapChain->_format_vk;
@@ -352,12 +405,55 @@ VkResult spudgpuvulkan_create_image_views_internal(
 		                           &pSwapChain->_swapchain_image_views_vk[i]._image_view_vk);
 		if (result != VK_SUCCESS) {
 			//throw std::runtime_error("failed to create image views!");
-			return result;
+			pSwapChain->_swapchain_image_views_vk[i]._image_view_vk = VK_NULL_HANDLE;
+			return SPUDRESULT_API_SPECIFIC_FAILURE;
 		}
 
 
 	}
-	return result;
+	return SPUD_SUCCESS;
+}
+
+
+// Releases everything [swap_chain] holds but itself and its name: what a
+// failed creation made so far, or all of it. Arrays not yet made are NULL
+// with a count of 0, and Vulkan objects not made are VK_NULL_HANDLE, which
+// Vulkan's destroy calls take.
+static void spudgpuvulkan___release_swap_chain_internal(spudgpu_swap_chain_vulkan *swap_chain) {
+	const SPUD_ALLOCATOR *allocator = &swap_chain->head.allocator;
+	VkDevice dev = swap_chain->_device._logical_device_vk;
+
+	for (uint32_t i = 0; i < swap_chain->_max_frames_in_flight; i++) {
+		vkDestroySemaphore(dev, swap_chain->_image_available_semaphores[i]._semaphore_vk, NULL);
+		vkDestroyFence(dev, swap_chain->_in_flight_fences_vk[i], NULL);
+		spud_string_free(allocator, swap_chain->_image_available_semaphores[i].head.debug_name);
+	}
+	// render_finished_semaphores is sized/indexed by swapchain image count, not
+	// _max_frames_in_flight — see spudgpuvulkan___fences_semaphores_swapchain_creation_internal.
+	for (uint32_t i = 0; i < swap_chain->_render_finished_semaphores_count; i++) {
+		vkDestroySemaphore(dev, swap_chain->_render_finished_semaphores[i]._semaphore_vk, NULL);
+		spud_string_free(allocator, swap_chain->_render_finished_semaphores[i].head.debug_name);
+	}
+	SPUD_DELETE_ARRAY(allocator, spudgpu_semaphore_vulkan, swap_chain->_image_available_semaphores, swap_chain->_max_frames_in_flight);
+	SPUD_DELETE_ARRAY(allocator, spudgpu_semaphore_vulkan, swap_chain->_render_finished_semaphores, swap_chain->_render_finished_semaphores_count);
+	SPUD_DELETE_ARRAY(allocator, VkFence, swap_chain->_in_flight_fences_vk, swap_chain->_max_frames_in_flight);
+
+	for (uint32_t i = 0; i < swap_chain->_swapchain_image_views_count; i++) {
+		spudgpu_image_vulkan *image = swap_chain->_swapchain_image_views_vk[i]._desc.parent_image;
+		if (image) {
+			spud_string_free(allocator, image->head.debug_name);
+			SPUD_DELETE(allocator, spudgpu_image_vulkan, image);
+		}
+		spud_string_free(allocator, swap_chain->_swapchain_image_views_vk[i].head.debug_name);
+		vkDestroyImageView(dev, swap_chain->_swapchain_image_views_vk[i]._image_view_vk, NULL);
+	}
+	SPUD_DELETE_ARRAY(allocator, spudgpu_image_view_vulkan, swap_chain->_swapchain_image_views_vk, swap_chain->_swapchain_image_views_count);
+	SPUD_DELETE_ARRAY(allocator, VkImage, swap_chain->_swapchain_images_vk, swap_chain->_swapchain_images_count);
+
+	// The surface is owned by the caller — do not destroy it here.
+	// The caller is responsible for calling spudgpu_destroy_surface separately.
+	if (swap_chain->_swapchain_vk != VK_NULL_HANDLE)
+		vkDestroySwapchainKHR(dev, swap_chain->_swapchain_vk, NULL);
 }
 
 
@@ -376,6 +472,7 @@ SPUDRESULT spudgpu_create_surface(
 	if (!out_surface) return SPUDRESULT_NULL_OUTPUT_PARAMETER;
 
 	spudgpu_surface_vulkan result = {0};
+	result.head.allocator = instance->head.allocator;
 	result._instance = *instance;
 
 	VkResult r = VK_SUCCESS;
@@ -407,7 +504,11 @@ SPUDRESULT spudgpu_create_surface(
 
 	if (r != VK_SUCCESS) return SPUDRESULT_API_SPECIFIC_FAILURE;
 
-	spudgpu_surface_vulkan *pResult = malloc(sizeof(spudgpu_surface_vulkan));
+	spudgpu_surface_vulkan *pResult = SPUD_NEW(&result.head.allocator, spudgpu_surface_vulkan);
+	if (!pResult) {
+		vkDestroySurfaceKHR(instance->_instance_vk, result._surface_vk, NULL);
+		return SPUDRESULT_OUT_OF_MEMORY;
+	}
 	memcpy(pResult, &result, sizeof(spudgpu_surface_vulkan));
 	*out_surface = pResult;
 	return SPUD_SUCCESS;
@@ -418,8 +519,9 @@ void spudgpu_destroy_surface(spudgpu_surface surface) {
 	vkDestroySurfaceKHR(
 		surface->_instance._instance_vk,
 		surface->_surface_vk, NULL);
-	free((void *)surface->_debug_name);
-	free(surface);
+	const SPUD_ALLOCATOR allocator = surface->head.allocator;
+	spud_string_free(&allocator, surface->head.debug_name);
+	SPUD_DELETE(&allocator, spudgpu_surface_vulkan, surface);
 }
 
 spudgpu_surface spudgpu_create_surface_from_callback(
@@ -428,9 +530,10 @@ spudgpu_surface spudgpu_create_surface_from_callback(
 	spudgpu_surface_create_fn create_fn) {
 	if (!instance || !create_fn) return NULL;
 
-	spudgpu_surface_vulkan *result = calloc(1, sizeof(spudgpu_surface_vulkan));
+	spudgpu_surface_vulkan *result = SPUD_NEW_ZEROED(&instance->head.allocator, spudgpu_surface_vulkan);
 	if (!result) return NULL;
 
+	result->head.allocator = instance->head.allocator;
 	result->_instance = *instance;
 
 	bool ok = create_fn(
@@ -439,7 +542,7 @@ spudgpu_surface spudgpu_create_surface_from_callback(
 		(void *) &result->_surface_vk);
 
 	if (!ok) {
-		free(result);
+		SPUD_DELETE(&instance->head.allocator, spudgpu_surface_vulkan, result);
 		return NULL;
 	}
 
@@ -460,9 +563,9 @@ SPUDRESULT spudgpu_create_swap_chain(
 	if (!desc->queue) return SPUDRESULT_GPU_INVALID_COMMAND_QUEUE;
 
 	spudgpu_swap_chain_vulkan result = {0};
+	result.head.allocator = device->head.allocator;
 	result._device = *((spudgpu_device_vulkan *) device);
 	memcpy(&result._desc, desc, sizeof(spudgpu_swap_chain_desc));
-	result._swapchain_images_count = result._desc.buffer_count;
 	result._present_queue_vk = ((spudgpu_command_queue_vulkan *) desc->queue)->_queue_vk;
 
 	if (desc->surface) {
@@ -473,15 +576,21 @@ SPUDRESULT spudgpu_create_swap_chain(
 	if (r != VK_SUCCESS) return SPUDRESULT_API_SPECIFIC_FAILURE;
 
 	//result._desc = desc; Can't do this because of 'const'
-	r = spudgpuvulkan___create_swapchain_internal(&result, desc->width, desc->height, NULL);
-	if (r != VK_SUCCESS) return SPUDRESULT_API_SPECIFIC_FAILURE;
+	SPUDRESULT sr = spudgpuvulkan___create_swapchain_internal(&result, desc->width, desc->height, NULL);
+	if (sr == SPUD_SUCCESS)
+		sr = spudgpuvulkan_create_image_views_internal(&result, result._swapchain_images_count);
+	if (sr == SPUD_SUCCESS)
+		sr = spudgpuvulkan___fences_semaphores_swapchain_creation_internal(&result);
+	if (sr != SPUD_SUCCESS) {
+		spudgpuvulkan___release_swap_chain_internal(&result);
+		return sr;
+	}
 
-	r = spudgpuvulkan_create_image_views_internal(&result, result._swapchain_images_count);
-	if (r != VK_SUCCESS) return SPUDRESULT_API_SPECIFIC_FAILURE;
-
-	spudgpuvulkan___fences_semaphores_swapchain_creation_internal(&result);
-
-	spudgpu_swap_chain_vulkan *pResult = malloc(sizeof(spudgpu_swap_chain_vulkan));
+	spudgpu_swap_chain_vulkan *pResult = SPUD_NEW(&result.head.allocator, spudgpu_swap_chain_vulkan);
+	if (!pResult) {
+		spudgpuvulkan___release_swap_chain_internal(&result);
+		return SPUDRESULT_OUT_OF_MEMORY;
+	}
 	memcpy(pResult, &result, sizeof(spudgpu_swap_chain_vulkan));
 	*out_swap_chain = pResult;
 	return SPUD_SUCCESS;
@@ -489,40 +598,10 @@ SPUDRESULT spudgpu_create_swap_chain(
 
 void spudgpu_destroy_swap_chain(spudgpu_swap_chain swap_chain) {
 	if (!swap_chain) return;
-	VkDevice dev = swap_chain->_device._logical_device_vk;
-
-	for (uint32_t i = 0; i < swap_chain->_max_frames_in_flight; i++) {
-		vkDestroySemaphore(dev, swap_chain->_image_available_semaphores[i]._semaphore_vk, NULL);
-		vkDestroyFence(dev, swap_chain->_in_flight_fences_vk[i], NULL);
-		free((void *)swap_chain->_image_available_semaphores[i]._debug_name);
-	}
-	// render_finished_semaphores is sized/indexed by swapchain image count, not
-	// _max_frames_in_flight — see spudgpuvulkan___fences_semaphores_swapchain_creation_internal.
-	for (uint32_t i = 0; i < swap_chain->_swapchain_images_count; i++) {
-		vkDestroySemaphore(dev, swap_chain->_render_finished_semaphores[i]._semaphore_vk, NULL);
-		free((void *)swap_chain->_render_finished_semaphores[i]._debug_name);
-	}
-	free(swap_chain->_image_available_semaphores);
-	free(swap_chain->_render_finished_semaphores);
-	free(swap_chain->_in_flight_fences_vk);
-
-	for (uint32_t i = 0; i < swap_chain->_swapchain_image_views_count; i++) {
-		if (swap_chain->_swapchain_image_views_vk[i]._desc.parent_image)
-			free((void *)swap_chain->_swapchain_image_views_vk[i]._desc.parent_image->_debug_name);
-		free((void *)swap_chain->_swapchain_image_views_vk[i]._debug_name);
-		free(swap_chain->_swapchain_image_views_vk[i]._desc.parent_image);
-		vkDestroyImageView(dev, swap_chain->_swapchain_image_views_vk[i]._image_view_vk, NULL);
-	}
-	free(swap_chain->_swapchain_image_views_vk);
-	free(swap_chain->_swapchain_images_vk);
-
-	// The surface is owned by the caller — do not destroy it here.
-	// The caller is responsible for calling spudgpu_destroy_surface separately.
-	if (swap_chain->_swapchain_vk != VK_NULL_HANDLE)
-		vkDestroySwapchainKHR(dev, swap_chain->_swapchain_vk, NULL);
-
-	free((void *)swap_chain->_debug_name);
-	free(swap_chain);
+	spudgpuvulkan___release_swap_chain_internal(swap_chain);
+	const SPUD_ALLOCATOR allocator = swap_chain->head.allocator;
+	spud_string_free(&allocator, swap_chain->head.debug_name);
+	SPUD_DELETE(&allocator, spudgpu_swap_chain_vulkan, swap_chain);
 }
 
 

@@ -4,25 +4,27 @@
 #include "spudgpud3d12.hpp"
 #include "../../../spudstructbase.h"
 
-// Releases a swap chain and its back buffer arrays. Either array may still
-// be null, which is how a swap chain that failed part-way through creation
-// arrives here.
+// Releases a swap chain and its back buffer arrays, each of
+// _desc.buffer_count elements. Either array may still be null, which is how
+// a swap chain that failed part-way through creation arrives here.
 static void spudgpu_d3d12___release_swap_chain(spudgpu_swap_chain_d3d12 *swap_chain) {
+	const SPUD_ALLOCATOR allocator = swap_chain->head.allocator;
+	const uint32_t count           = swap_chain->_desc.buffer_count;
 	if (swap_chain->_back_buffer_images) {
-		for (uint32_t i = 0; i < swap_chain->_desc.buffer_count; ++i) {
-			free((void *)swap_chain->_back_buffer_images[i]._debug_name);
+		for (uint32_t i = 0; i < count; ++i) {
+			spud_string_free(&allocator, swap_chain->_back_buffer_images[i].head.debug_name);
 			swap_chain->_back_buffer_images[i].~spudgpu_image_d3d12();
 		}
-		free(swap_chain->_back_buffer_images);
+		SPUD_DELETE_ARRAY(&allocator, spudgpu_image_d3d12, swap_chain->_back_buffer_images, count);
 	}
 	if (swap_chain->_back_buffer_image_views) {
-		for (uint32_t i = 0; i < swap_chain->_desc.buffer_count; ++i)
-			free((void *)swap_chain->_back_buffer_image_views[i]._debug_name);
+		for (uint32_t i = 0; i < count; ++i)
+			spud_string_free(&allocator, swap_chain->_back_buffer_image_views[i].head.debug_name);
 	}
-	free(swap_chain->_back_buffer_image_views);
-	free((void *)swap_chain->_debug_name);
+	SPUD_DELETE_ARRAY(&allocator, spudgpu_image_view_d3d12, swap_chain->_back_buffer_image_views, count);
+	spud_string_free(&allocator, swap_chain->head.debug_name);
 	swap_chain->~spudgpu_swap_chain_d3d12();
-	free(swap_chain);
+	SPUD_DELETE(&allocator, spudgpu_swap_chain_d3d12, swap_chain);
 }
 
 extern "C" {
@@ -46,12 +48,13 @@ SPUDRESULT spudgpu_create_swap_chain(
 		return SPUDRESULT_GPU_INVALID_COMMAND_QUEUE;
 
 	spudgpu_swap_chain_d3d12 *pResult =
-	    (spudgpu_swap_chain_d3d12 *)malloc(sizeof(spudgpu_swap_chain_d3d12));
+	    SPUD_NEW(&device->head.allocator, spudgpu_swap_chain_d3d12);
 	if (!pResult)
 		return SPUDRESULT_OUT_OF_MEMORY;
-	pResult          = new (pResult) spudgpu_swap_chain_d3d12();
-	pResult->_device = device;
-	pResult->_desc   = *desc;
+	pResult                 = new (pResult) spudgpu_swap_chain_d3d12();
+	pResult->head.allocator = device->head.allocator;
+	pResult->_device        = device;
+	pResult->_desc          = *desc;
 
 	HWND hwnd = desc->surface->_hwnd;
 	// The DXGI swap chain is bound to this specific queue for its lifetime -
@@ -103,23 +106,30 @@ SPUDRESULT spudgpu_create_swap_chain(
 	// The image holds a ComPtr, so each element is constructed in place; the
 	// image view is plain and zeroed memory is its initial state. Every
 	// image is constructed before the first GetBuffer so that a failure
-	// below always finds buffer_count constructed images to release.
-	spudgpu_image_d3d12 *images = (spudgpu_image_d3d12 *)malloc(
-	    sizeof(spudgpu_image_d3d12) * desc->buffer_count);
+	// below always finds buffer_count constructed images to release. Both
+	// arrays are of buffer_count, which is what they are freed with; each
+	// element's allocator is the swap chain's, which frees the names a
+	// caller gives them.
+	spudgpu_image_d3d12 *images = SPUD_NEW_ARRAY(
+	    &pResult->head.allocator, spudgpu_image_d3d12, desc->buffer_count);
 	if (!images) {
 		spudgpu_d3d12___release_swap_chain(pResult);
 		return SPUDRESULT_OUT_OF_MEMORY;
 	}
-	for (uint32_t i = 0; i < desc->buffer_count; ++i)
+	for (uint32_t i = 0; i < desc->buffer_count; ++i) {
 		new (&images[i]) spudgpu_image_d3d12();
+		images[i].head.allocator = pResult->head.allocator;
+	}
 	pResult->_back_buffer_images = images;
 
-	pResult->_back_buffer_image_views = (spudgpu_image_view_d3d12 *)calloc(
-	    desc->buffer_count, sizeof(spudgpu_image_view_d3d12));
+	pResult->_back_buffer_image_views = SPUD_NEW_ARRAY_ZEROED(
+	    &pResult->head.allocator, spudgpu_image_view_d3d12, desc->buffer_count);
 	if (!pResult->_back_buffer_image_views) {
 		spudgpu_d3d12___release_swap_chain(pResult);
 		return SPUDRESULT_OUT_OF_MEMORY;
 	}
+	for (uint32_t i = 0; i < desc->buffer_count; ++i)
+		pResult->_back_buffer_image_views[i].head.allocator = pResult->head.allocator;
 
 	DXGI_FORMAT fmt = spudgpu_d3d12_get_dxgi_format(desc->format);
 

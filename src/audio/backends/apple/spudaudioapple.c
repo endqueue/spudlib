@@ -4,7 +4,7 @@
 
 #include "spudaudioapple.h"
 
-#include <stdlib.h>
+#include "../../../spudallocator.h"
 #include <string.h>
 
 #if __cplusplus
@@ -114,7 +114,10 @@ static void apple_labels_to_positions(const AudioChannelLabel *labels, uint32_t 
 	}
 }
 
-void spudaudio_apple_layout_to_positions(const AudioChannelLayout *layout, SPUDAUDIO_FORMAT *out) {
+void spudaudio_apple_layout_to_positions(
+    const SPUD_ALLOCATOR *allocator,
+    const AudioChannelLayout *layout,
+    SPUDAUDIO_FORMAT *out) {
 	memset(out->positions, 0, sizeof(out->positions));
 	const uint32_t n = out->channel_count;
 	if (!layout || n == 0 || n > SPUDAUDIO_MAX_CHANNELS)
@@ -150,7 +153,9 @@ void spudaudio_apple_layout_to_positions(const AudioChannelLayout *layout, SPUDA
 	UInt32 size = 0;
 	if (AudioFormatGetPropertyInfo(kAudioFormatProperty_ChannelLayoutForTag, sizeof(tag), &tag, &size) != noErr || size == 0)
 		return;
-	AudioChannelLayout *expanded = (AudioChannelLayout *)malloc(size);
+	// Freed with the size it was allocated with: the call below may lower `size`.
+	const UInt32 capacity        = size;
+	AudioChannelLayout *expanded = (AudioChannelLayout *)spud_allocate(allocator, capacity, SPUD_ALIGNOF(AudioChannelLayout));
 	if (!expanded)
 		return;
 	if (AudioFormatGetProperty(kAudioFormatProperty_ChannelLayoutForTag, sizeof(tag), &tag, &size, expanded) == noErr &&
@@ -159,7 +164,9 @@ void spudaudio_apple_layout_to_positions(const AudioChannelLayout *layout, SPUDA
 			labels[i] = expanded->mChannelDescriptions[i].mChannelLabel;
 		apple_labels_to_positions(labels, n, out);
 	}
-	free(expanded);
+	spud_free(allocator, expanded, capacity, SPUD_ALIGNOF(AudioChannelLayout));
+#else
+	(void)allocator;
 #endif
 }
 

@@ -261,11 +261,12 @@ SPUDRESULT spudgpu_create_image(
 	spudgpu_device_metal *device_metal = (spudgpu_device_metal *)device;
 	SPUDRESULT sr                      = SPUD_SUCCESS;
 
-	spudgpu_image_metal *image_metal = (spudgpu_image_metal *)calloc(1, sizeof(spudgpu_image_metal));
+	spudgpu_image_metal *image_metal = SPUD_NEW_ZEROED(&device_metal->head.allocator, spudgpu_image_metal);
 	if (!image_metal) {
 		sr = SPUDRESULT_GENERAL_FAILURE;
 		goto failedattempt;
 	}
+	image_metal->head.allocator = device_metal->head.allocator;
 	image_metal->_parent_device = device_metal;
 	image_metal->_desc          = *desc;
 
@@ -283,14 +284,14 @@ SPUDRESULT spudgpu_create_image(
 		spudgpu_destroy_image((spudgpu_image)image_metal);
 		return SPUDRESULT_OUT_OF_MEMORY;
 	}
-	image_metal->_desc.debug_name = image_metal->_debug_name;
+	image_metal->_desc.debug_name = image_metal->head.debug_name;
 
 	*out_image = (spudgpu_image)image_metal;
 
 	return sr;
 
 failedattempt:
-	free(image_metal);
+	SPUD_DELETE(&device_metal->head.allocator, spudgpu_image_metal, image_metal);
 	return sr;
 }
 
@@ -304,8 +305,9 @@ void spudgpu_destroy_image(spudgpu_image image) {
 		if (image_metal->_heap)
 			image_metal->_heap->_placed_count--;
 #endif
-		free((void *)image_metal->_debug_name);
-		free(image_metal);
+		const SPUD_ALLOCATOR allocator = image_metal->head.allocator;
+		spud_string_free(&allocator, image_metal->head.debug_name);
+		SPUD_DELETE(&allocator, spudgpu_image_metal, image_metal);
 	}
 }
 
@@ -400,11 +402,12 @@ SPUDRESULT spudgpu_create_image_view(
 
 	SPUDRESULT sr = SPUD_SUCCESS;
 
-	spudgpu_image_view_metal *view_metal = (spudgpu_image_view_metal *)calloc(1, sizeof(spudgpu_image_view_metal));
+	spudgpu_image_view_metal *view_metal = SPUD_NEW_ZEROED(&parent_image_metal->head.allocator, spudgpu_image_view_metal);
 	if (!view_metal) {
 		sr = SPUDRESULT_GENERAL_FAILURE;
 		goto failedattempt;
 	}
+	view_metal->head.allocator     = parent_image_metal->head.allocator;
 	view_metal->_parent_image      = parent_image_metal;
 	view_metal->_desc              = *desc;
 	view_metal->_desc.parent_image = image; // Authoritative - same reasoning as spudgpu_buffer_view_metal.
@@ -439,7 +442,7 @@ SPUDRESULT spudgpu_create_image_view(
 	return sr;
 
 failedattempt:
-	free(view_metal);
+	SPUD_DELETE(&parent_image_metal->head.allocator, spudgpu_image_view_metal, view_metal);
 	return sr;
 }
 
@@ -449,8 +452,9 @@ void spudgpu_destroy_image_view(spudgpu_image_view image_view) {
 		if (view_metal->_texture_view_mtl) {
 			[view_metal->_texture_view_mtl release];
 		}
-		free((void *)view_metal->_debug_name);
-		free(view_metal);
+		const SPUD_ALLOCATOR allocator = view_metal->head.allocator;
+		spud_string_free(&allocator, view_metal->head.debug_name);
+		SPUD_DELETE(&allocator, spudgpu_image_view_metal, view_metal);
 	}
 }
 

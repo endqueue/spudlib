@@ -223,12 +223,12 @@ SPUDRESULT spudgpu_create_shader_module(
 	spudgpu_device_metal *device_metal = (spudgpu_device_metal *)device;
 	SPUDRESULT sr                      = SPUD_SUCCESS;
 
-	spudgpu_shader_module_metal *module_metal =
-	    (spudgpu_shader_module_metal *)calloc(1, sizeof(spudgpu_shader_module_metal));
+	spudgpu_shader_module_metal *module_metal = SPUD_NEW_ZEROED(&device_metal->head.allocator, spudgpu_shader_module_metal);
 	if (!module_metal) {
 		sr = SPUDRESULT_GENERAL_FAILURE;
 		goto failedattempt;
 	}
+	module_metal->head.allocator = device_metal->head.allocator;
 	module_metal->_parent_device = device_metal;
 	module_metal->_desc          = *desc;
 
@@ -271,7 +271,7 @@ SPUDRESULT spudgpu_create_shader_module(
 		spudgpu_destroy_shader_module((spudgpu_shader_module)module_metal);
 		return SPUDRESULT_OUT_OF_MEMORY;
 	}
-	module_metal->_desc.debug_name = module_metal->_debug_name;
+	module_metal->_desc.debug_name = module_metal->head.debug_name;
 
 	*out_module = (spudgpu_shader_module)module_metal;
 
@@ -285,7 +285,7 @@ failedattempt:
 		if (module_metal->_library_mtl) {
 			[module_metal->_library_mtl release];
 		}
-		free(module_metal);
+		SPUD_DELETE(&device_metal->head.allocator, spudgpu_shader_module_metal, module_metal);
 	}
 	return sr;
 }
@@ -299,8 +299,9 @@ void spudgpu_destroy_shader_module(spudgpu_shader_module shader_module) {
 		if (module_metal->_library_mtl) {
 			[module_metal->_library_mtl release];
 		}
-		free((void *)module_metal->_debug_name);
-		free(module_metal);
+		const SPUD_ALLOCATOR allocator = module_metal->head.allocator;
+		spud_string_free(&allocator, module_metal->head.debug_name);
+		SPUD_DELETE(&allocator, spudgpu_shader_module_metal, module_metal);
 	}
 }
 
@@ -483,12 +484,12 @@ SPUDRESULT spudgpu_create_shader_pipeline(
 	spudgpu_device_metal *device_metal = (spudgpu_device_metal *)device;
 	SPUDRESULT sr                      = SPUD_SUCCESS;
 
-	spudgpu_shader_pipeline_metal *pipeline_metal =
-	    (spudgpu_shader_pipeline_metal *)calloc(1, sizeof(spudgpu_shader_pipeline_metal));
+	spudgpu_shader_pipeline_metal *pipeline_metal = SPUD_NEW_ZEROED(&device_metal->head.allocator, spudgpu_shader_pipeline_metal);
 	if (!pipeline_metal) {
 		sr = SPUDRESULT_GENERAL_FAILURE;
 		goto failedattempt;
 	}
+	pipeline_metal->head.allocator = device_metal->head.allocator;
 	pipeline_metal->_parent_device = device_metal;
 	pipeline_metal->_desc          = *desc;
 
@@ -619,7 +620,7 @@ SPUDRESULT spudgpu_create_shader_pipeline(
 		spudgpu_destroy_shader_pipeline((spudgpu_shader_pipeline)pipeline_metal);
 		return SPUDRESULT_OUT_OF_MEMORY;
 	}
-	pipeline_metal->_desc.debug_name = pipeline_metal->_debug_name;
+	pipeline_metal->_desc.debug_name = pipeline_metal->head.debug_name;
 
 	*out_pipeline = (spudgpu_shader_pipeline)pipeline_metal;
 
@@ -633,7 +634,7 @@ failedattempt:
 		if (pipeline_metal->_render_pipeline_state_mtl) {
 			[pipeline_metal->_render_pipeline_state_mtl release];
 		}
-		free(pipeline_metal);
+		SPUD_DELETE(&device_metal->head.allocator, spudgpu_shader_pipeline_metal, pipeline_metal);
 	}
 	return sr;
 }
@@ -647,8 +648,9 @@ void spudgpu_destroy_shader_pipeline(spudgpu_shader_pipeline pipeline) {
 		if (pipeline_metal->_render_pipeline_state_mtl) {
 			[pipeline_metal->_render_pipeline_state_mtl release];
 		}
-		free((void *)pipeline_metal->_debug_name);
-		free(pipeline_metal);
+		const SPUD_ALLOCATOR allocator = pipeline_metal->head.allocator;
+		spud_string_free(&allocator, pipeline_metal->head.debug_name);
+		SPUD_DELETE(&allocator, spudgpu_shader_pipeline_metal, pipeline_metal);
 	}
 }
 
@@ -734,12 +736,12 @@ SPUDRESULT spudgpu_create_compute_pipeline(
 	spudgpu_device_metal *device_metal = (spudgpu_device_metal *)device;
 	SPUDRESULT sr                      = SPUD_SUCCESS;
 
-	spudgpu_compute_pipeline_metal *pipeline_metal =
-	    (spudgpu_compute_pipeline_metal *)calloc(1, sizeof(spudgpu_compute_pipeline_metal));
+	spudgpu_compute_pipeline_metal *pipeline_metal = SPUD_NEW_ZEROED(&device_metal->head.allocator, spudgpu_compute_pipeline_metal);
 	if (!pipeline_metal) {
 		sr = SPUDRESULT_GENERAL_FAILURE;
 		goto failedattempt;
 	}
+	pipeline_metal->head.allocator = device_metal->head.allocator;
 	pipeline_metal->_parent_device = device_metal;
 	pipeline_metal->_desc          = *desc;
 	pipeline_metal->_local_size_x  = compute_module_metal->_local_size_x;
@@ -767,7 +769,7 @@ SPUDRESULT spudgpu_create_compute_pipeline(
 		spudgpu_destroy_compute_pipeline((spudgpu_compute_pipeline)pipeline_metal);
 		return SPUDRESULT_OUT_OF_MEMORY;
 	}
-	pipeline_metal->_desc.debug_name = pipeline_metal->_debug_name;
+	pipeline_metal->_desc.debug_name = pipeline_metal->head.debug_name;
 
 	*out_pipeline = (spudgpu_compute_pipeline)pipeline_metal;
 
@@ -778,7 +780,7 @@ failedattempt:
 		if (pipeline_metal->_compute_pipeline_state_mtl) {
 			[pipeline_metal->_compute_pipeline_state_mtl release];
 		}
-		free(pipeline_metal);
+		SPUD_DELETE(&device_metal->head.allocator, spudgpu_compute_pipeline_metal, pipeline_metal);
 	}
 	return sr;
 }
@@ -789,8 +791,9 @@ void spudgpu_destroy_compute_pipeline(spudgpu_compute_pipeline pipeline) {
 		if (pipeline_metal->_compute_pipeline_state_mtl) {
 			[pipeline_metal->_compute_pipeline_state_mtl release];
 		}
-		free((void *)pipeline_metal->_debug_name);
-		free(pipeline_metal);
+		const SPUD_ALLOCATOR allocator = pipeline_metal->head.allocator;
+		spud_string_free(&allocator, pipeline_metal->head.debug_name);
+		SPUD_DELETE(&allocator, spudgpu_compute_pipeline_metal, pipeline_metal);
 	}
 }
 

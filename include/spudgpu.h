@@ -267,30 +267,56 @@ enum {
 /** @} */
 
 /**
+ * @brief What the caller decides when creating a SpudGPU instance. No field
+ * has a default: a zeroed desc is refused, for its `base`, and one with only
+ * its `base` set is refused for its `allocator`.
+ */
+typedef struct spudgpu_instance_desc {
+	/** `type` is SPUD_STRUCT_TYPE_GPU_INSTANCE_DESC; `next` is NULL (nothing
+	 * is chained onto this struct yet). Set by the caller. See
+	 * SPUD_STRUCT_BASE. */
+	SPUD_STRUCT_BASE base;
+	/** Where the memory of the instance, and of every object made from it,
+	 * comes from (SPUD_ALLOCATOR). Copied, so the struct need not outlive
+	 * the call; its functions and `user_data` must outlive the instance and
+	 * every object made from it. */
+	const SPUD_ALLOCATOR *allocator;
+	/** Null-terminated name of the application. */
+	const char *application_name;
+	/** Packed 32-bit application version. */
+	uint32_t application_version;
+	/** Null-terminated name of the engine. */
+	const char *engine_name;
+	/** Packed 32-bit engine version. */
+	uint32_t engine_version;
+} spudgpu_instance_desc;
+
+/**
  * @brief Creates a SpudGPU instance on the graphics API this build was
  * compiled for.
  *
  * Call this before any other SpudGPU function, then
  * spudgpu_enumerate_devices() to find the devices to work with.
  *
- * @param[in]  application_name    Null-terminated name of the application.
- * @param[in]  application_version Packed 32-bit application version.
- * @param[in]  engine_name         Null-terminated name of the engine.
- * @param[in]  engine_version      Packed 32-bit engine version.
- * @param[out] out_instance        Receives the new instance on success.
+ * @param[in]  desc         What the caller decides.
+ * @param[out] out_instance Receives the new instance on success; NULL on
+ *                          failure.
  *
  * @retval SPUD_SUCCESS The instance was created.
+ * @retval SPUDRESULT_NULL_DESC `desc` is NULL.
+ * @retval SPUDRESULT_STRUCT_WRONG_TYPE `desc->base.type` is not
+ *         SPUD_STRUCT_TYPE_GPU_INSTANCE_DESC.
+ * @retval SPUDRESULT_STRUCT_UNKNOWN_IN_CHAIN `desc->base.next` is not NULL.
  * @retval SPUDRESULT_NULL_OUTPUT_PARAMETER `out_instance` is NULL.
+ * @retval SPUDRESULT_NULL_ALLOCATOR `desc->allocator` is NULL.
+ * @retval SPUDRESULT_INVALID_ALLOCATOR `desc->allocator` lacks a function.
  * @return Another SPUDRESULT if the backend fails, such as
  *         SPUDRESULT_OUT_OF_MEMORY or SPUDRESULT_API_SPECIFIC_FAILURE.
  *
  * @see spudgpu_destroy_instance()
  */
 SPUDRESULT spudgpu_create_instance(
-    const char *application_name,
-    uint32_t application_version,
-    const char *engine_name,
-    uint32_t engine_version,
+    const spudgpu_instance_desc *desc,
     spudgpu_instance *out_instance);
 
 /**

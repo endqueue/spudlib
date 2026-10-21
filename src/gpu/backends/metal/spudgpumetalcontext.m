@@ -6,26 +6,21 @@
 #include <stdlib.h>
 
 #include "spudgpumetal.h"
+#include "../../spudgpushared.h"
 #include "../../../spudstructbase.h"
 
 SPUDRESULT spudgpu_create_instance(
-    const char *application_name,
-    uint32_t application_version,
-    const char *engine_name,
-    uint32_t engine_version,
+    const spudgpu_instance_desc *desc,
     spudgpu_instance *out_instance) {
+	const SPUDRESULT desc_sr = spudgpu___internal_check_instance_desc(desc, out_instance);
+	if (desc_sr != SPUD_SUCCESS) return desc_sr;
 	// Metal has no application/engine name or instance-level version info to
-	// hand anywhere (unlike VkApplicationInfo) - accepted for API symmetry
-	// with the Vulkan/D3D12 backends and otherwise unused.
-	(void) application_name;
-	(void) application_version;
-	(void) engine_name;
-	(void) engine_version;
+	// hand anywhere (unlike VkApplicationInfo) - desc's are accepted for API
+	// symmetry with the Vulkan/D3D12 backends and otherwise unused.
 
-	if (!out_instance) return SPUDRESULT_NULL_OUTPUT_PARAMETER;
-
-	spudgpu_instance_metal *instance = calloc(1, sizeof(spudgpu_instance_metal));
+	spudgpu_instance_metal *instance = SPUD_NEW_ZEROED(desc->allocator, spudgpu_instance_metal);
 	if (!instance) return SPUDRESULT_OUT_OF_MEMORY;
+	instance->head.allocator = *desc->allocator;
 
 	*out_instance = instance;
 	return SPUD_SUCCESS;
@@ -39,9 +34,35 @@ static void spudgpumetal___internal_destroy_command_queue_family(
 		if (queue->_command_queue_mtl) {
 			[queue->_command_queue_mtl release];
 		}
-		free((void *)queue->_debug_name);
-		free(queue);
+		const SPUD_ALLOCATOR allocator = queue->head.allocator;
+		spud_string_free(&allocator, queue->head.debug_name);
+		SPUD_DELETE(&allocator, spudgpu_command_queue_metal, queue);
 	}
+}
+
+// Frees [device], its queues included, through its own allocator. Every
+// queue slot is a queue or NULL.
+static void spudgpumetal___internal_destroy_device(spudgpu_device_metal *device) {
+	spudgpumetal___internal_destroy_command_queue_family(device->_cmd_queues_direct);
+	spudgpumetal___internal_destroy_command_queue_family(device->_cmd_queues_copy);
+	spudgpumetal___internal_destroy_command_queue_family(device->_cmd_queues_compute);
+	[device->_device_mtl release];
+	const SPUD_ALLOCATOR allocator = device->head.allocator;
+	spud_string_free(&allocator, device->head.debug_name);
+	SPUD_DELETE(&allocator, spudgpu_device_metal, device);
+}
+
+// Frees the devices spudgpu_enumerate_devices made and their array, leaving
+// the instance with none.
+static void spudgpumetal___internal_destroy_devices(spudgpu_instance_metal *instance) {
+	for (uint32_t i = 0; i < instance->_devices_count; i++) {
+		spudgpu_device_metal *device = (spudgpu_device_metal *) instance->_devices[i];
+		if (!device) continue;
+		spudgpumetal___internal_destroy_device(device);
+	}
+	SPUD_DELETE_ARRAY(&instance->head.allocator, spudgpu_device, instance->_devices, instance->_devices_count);
+	instance->_devices       = NULL;
+	instance->_devices_count = 0;
 }
 
 SPUDRESULT spudgpu_destroy_instance(spudgpu_instance instance) {
@@ -49,19 +70,10 @@ SPUDRESULT spudgpu_destroy_instance(spudgpu_instance instance) {
 
 	// instance owns every spudgpu_device handed out by spudgpu_enumerate_devices
 	// (there is no public spudgpu_destroy_device) - mirrors the Vulkan backend.
-	for (uint32_t i = 0; i < instance->_devices_count; i++) {
-		spudgpu_device_metal *device = (spudgpu_device_metal *) instance->_devices[i];
-		if (!device) continue;
-		spudgpumetal___internal_destroy_command_queue_family(device->_cmd_queues_direct);
-		spudgpumetal___internal_destroy_command_queue_family(device->_cmd_queues_copy);
-		spudgpumetal___internal_destroy_command_queue_family(device->_cmd_queues_compute);
-		[device->_device_mtl release];
-		free((void *)device->_debug_name);
-		free(device);
-	}
-	free(instance->_devices);
-	free((void *)instance->_debug_name);
-	free(instance);
+	spudgpumetal___internal_destroy_devices(instance);
+	const SPUD_ALLOCATOR allocator = instance->head.allocator;
+	spud_string_free(&allocator, instance->head.debug_name);
+	SPUD_DELETE(&allocator, spudgpu_instance_metal, instance);
 	return SPUD_SUCCESS;
 }
 
@@ -131,11 +143,12 @@ static SPUDRESULT spudgpumetal___internal_create_command_queue_family(
     spudgpu_device_metal *device,
     spudgpu_command_queue *out_family) {
 	for (uint32_t i = 0; i < SPUD_METAL_COMMAND_QUEUE_COUNT_PER_FAMILY; i++) {
-		spudgpu_command_queue_metal *queue = calloc(1, sizeof(spudgpu_command_queue_metal));
+		spudgpu_command_queue_metal *queue = SPUD_NEW_ZEROED(&device->head.allocator, spudgpu_command_queue_metal);
 		if (!queue) return SPUDRESULT_OUT_OF_MEMORY;
+		queue->head.allocator     = device->head.allocator;
 		queue->_command_queue_mtl = [device->_device_mtl newCommandQueue];
 		if (!queue->_command_queue_mtl) {
-			free(queue);
+			SPUD_DELETE(&device->head.allocator, spudgpu_command_queue_metal, queue);
 			return SPUDRESULT_API_SPECIFIC_FAILURE;
 		}
 		queue->_parent_device = device;
@@ -182,18 +195,25 @@ SPUDRESULT spudgpu_enumerate_devices(
 
 	// The array is the instance's, and the caller is handed it: the
 	// devices and the array are freed by spudgpu_destroy_instance.
-	instance->_devices = calloc(deviceCount, sizeof(spudgpu_device));
+	instance->_devices = SPUD_NEW_ARRAY_ZEROED(&instance->head.allocator, spudgpu_device, deviceCount);
 	if (!instance->_devices) {
 		[mtlDevices release];
 		return SPUDRESULT_OUT_OF_MEMORY;
 	}
 	instance->_devices_count = deviceCount;
-	*out_devices             = instance->_devices;
-	*out_devices_count       = deviceCount;
 
 	for (uint32_t i = 0; i < deviceCount; i++) {
-		spudgpu_device_metal *device = calloc(1, sizeof(spudgpu_device_metal));
-		device->_device_mtl = [mtlDevices[i] retain];
+		spudgpu_device_metal *device = SPUD_NEW_ZEROED(&instance->head.allocator, spudgpu_device_metal);
+		if (!device) {
+			// Nothing is handed out: a later call starts over.
+			spudgpumetal___internal_destroy_devices(instance);
+			[mtlDevices release];
+			return SPUDRESULT_OUT_OF_MEMORY;
+		}
+		device->head.allocator = instance->head.allocator;
+		// In the array from here, so a failure below frees it with the rest.
+		instance->_devices[i] = (spudgpu_device) device;
+		device->_device_mtl   = [mtlDevices[i] retain];
 #if SPUDGPU_EXT_DEPTH_BOUNDS_TEST
 		device->_depth_bounds_test_supported =
 		    [device->_device_mtl supportsFamily:MTLGPUFamilyApple10];
@@ -203,14 +223,15 @@ SPUDRESULT spudgpu_enumerate_devices(
 		SPUDRESULT queue_sr = spudgpumetal___internal_create_device_command_queues(device);
 		if (queue_sr != SPUD_SUCCESS) {
 			printf("spudgpu: failed to create Metal command queues for device\n");
+			spudgpumetal___internal_destroy_devices(instance);
 			[mtlDevices release];
 			return queue_sr;
 		}
-
-		instance->_devices[i] = (spudgpu_device) device;
 	}
 
 	[mtlDevices release];
+	*out_devices       = instance->_devices;
+	*out_devices_count = deviceCount;
 	return SPUD_SUCCESS;
 }
 

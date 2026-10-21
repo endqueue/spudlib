@@ -35,13 +35,14 @@ SPUDRESULT spudgpu_create_fence(
     info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
     info.pNext = &type;
 
-    spudgpu_fence_vulkan *fence = calloc(1, sizeof(spudgpu_fence_vulkan));
+    spudgpu_fence_vulkan *fence = SPUD_NEW_ZEROED(&device->head.allocator, spudgpu_fence_vulkan);
     if (!fence) return SPUDRESULT_OUT_OF_MEMORY;
+    fence->head.allocator = device->head.allocator;
 
     VkResult r = vkCreateSemaphore(device->_logical_device_vk, &info, NULL, &fence->_semaphore_vk);
     if (r != VK_SUCCESS) {
         printf("spudgpu: vkCreateSemaphore (fence) failed (%d)\n", r);
-        free(fence);
+        SPUD_DELETE(&device->head.allocator, spudgpu_fence_vulkan, fence);
         return SPUDRESULT_API_SPECIFIC_FAILURE;
     }
     fence->_device_vk = device->_logical_device_vk;
@@ -52,8 +53,9 @@ SPUDRESULT spudgpu_create_fence(
 void spudgpu_destroy_fence(spudgpu_fence fence) {
     if (!fence) return;
     vkDestroySemaphore(fence->_device_vk, fence->_semaphore_vk, NULL);
-    free((void *)fence->_debug_name);
-    free(fence);
+    const SPUD_ALLOCATOR allocator = fence->head.allocator;
+    spud_string_free(&allocator, fence->head.debug_name);
+    SPUD_DELETE(&allocator, spudgpu_fence_vulkan, fence);
 }
 
 uint64_t spudgpu_get_fence_value(spudgpu_fence fence) {
@@ -123,13 +125,14 @@ SPUDRESULT spudgpu_create_semaphore(
     VkSemaphoreCreateInfo info = {0};
     info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
 
-    spudgpu_semaphore_vulkan *sem = calloc(1, sizeof(spudgpu_semaphore_vulkan));
+    spudgpu_semaphore_vulkan *sem = SPUD_NEW_ZEROED(&device->head.allocator, spudgpu_semaphore_vulkan);
     if (!sem) return SPUDRESULT_GENERAL_FAILURE;
+    sem->head.allocator = device->head.allocator;
 
     VkResult r = vkCreateSemaphore(device->_logical_device_vk, &info, NULL, &sem->_semaphore_vk);
     if (r != VK_SUCCESS) {
         printf("spudgpu: vkCreateSemaphore failed (%d)\n", r);
-        free(sem);
+        SPUD_DELETE(&device->head.allocator, spudgpu_semaphore_vulkan, sem);
         return SPUDRESULT_API_SPECIFIC_FAILURE;
     }
     sem->_device_vk = device->_logical_device_vk;
@@ -140,8 +143,9 @@ SPUDRESULT spudgpu_create_semaphore(
 void spudgpu_destroy_semaphore(spudgpu_semaphore semaphore) {
     if (!semaphore) return;
     vkDestroySemaphore(semaphore->_device_vk, semaphore->_semaphore_vk, NULL);
-    free((void *)semaphore->_debug_name);
-    free(semaphore);
+    const SPUD_ALLOCATOR allocator = semaphore->head.allocator;
+    spud_string_free(&allocator, semaphore->head.debug_name);
+    SPUD_DELETE(&allocator, spudgpu_semaphore_vulkan, semaphore);
 }
 
 #if __cplusplus

@@ -1,4 +1,5 @@
 #include "input/spudinputshared.h"
+#include "spudallocator.h"
 #include "spudstructbase.h"
 
 #include <stdlib.h>
@@ -297,18 +298,26 @@ SPUDRESULT spudinput_shared_reserve(
 	if (needed > UINT32_MAX)
 		return SPUDRESULT_OUT_OF_MEMORY;
 
-	/* Both arrays or neither: the ids first, since having more room for
-	 * ids than for records does no harm if the second allocation fails. */
-	spudinput_gamepad_id *ids = (spudinput_gamepad_id *)realloc(instance->ids, (size_t)needed * sizeof(spudinput_gamepad_id));
+	/* Both arrays or neither, so that both stay `record_capacity` long,
+	 * which is the count each is freed with. */
+	const SPUD_ALLOCATOR *allocator = &instance->allocator;
+	spudinput_gamepad_id *ids       = SPUD_NEW_ARRAY(allocator, spudinput_gamepad_id, (size_t)needed);
 	if (!ids)
 		return SPUDRESULT_OUT_OF_MEMORY;
-	instance->ids = ids;
-
-	spudinput_gamepad_record *records = (spudinput_gamepad_record *)realloc(instance->records, (size_t)needed * sizeof(spudinput_gamepad_record));
-	if (!records)
+	spudinput_gamepad_record *records = SPUD_NEW_ARRAY(allocator, spudinput_gamepad_record, (size_t)needed);
+	if (!records) {
+		SPUD_DELETE_ARRAY(allocator, spudinput_gamepad_id, ids, (size_t)needed);
 		return SPUDRESULT_OUT_OF_MEMORY;
-	instance->records = records;
+	}
 
+	if (instance->id_count)
+		memcpy(ids, instance->ids, (size_t)instance->id_count * sizeof(spudinput_gamepad_id));
+	if (instance->record_count)
+		memcpy(records, instance->records, (size_t)instance->record_count * sizeof(spudinput_gamepad_record));
+	SPUD_DELETE_ARRAY(allocator, spudinput_gamepad_id, instance->ids, instance->record_capacity);
+	SPUD_DELETE_ARRAY(allocator, spudinput_gamepad_record, instance->records, instance->record_capacity);
+	instance->ids             = ids;
+	instance->records         = records;
 	instance->record_capacity = (uint32_t)needed;
 	return SPUD_SUCCESS;
 }
@@ -384,20 +393,27 @@ SPUDRESULT spudinput_instance_create(
 	if (!out_instance)
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
 	*out_instance = NULL;
+	const SPUDRESULT allocator_result = spud_allocator_check(desc->allocator);
+	if (allocator_result != SPUD_SUCCESS)
+		return allocator_result;
 	if (!spudinput_has_api(desc->native_api))
 		return SPUDRESULT_INVALID_API;
 
-	spudinput_instance instance = (spudinput_instance)calloc(1, sizeof(struct spudinput_instance_t));
+	spudinput_instance instance = SPUD_NEW_ZEROED(desc->allocator, struct spudinput_instance_t);
 	if (!instance)
 		return SPUDRESULT_OUT_OF_MEMORY;
-	instance->desc = *desc;
-	/* The caller's chain needn't outlive this call; nothing is chained yet. */
+	instance->allocator = *desc->allocator;
+	instance->desc      = *desc;
+	/* The caller's chain and allocator struct needn't outlive this call;
+	 * nothing is chained yet. */
 	instance->desc.base.next = NULL;
+	instance->desc.allocator = &instance->allocator;
 	instance->next_id        = 1;
 
 	const SPUDRESULT result = spudinput_backend_create(instance);
 	if (result != SPUD_SUCCESS) {
-		free(instance);
+		const SPUD_ALLOCATOR allocator = instance->allocator;
+		SPUD_DELETE(&allocator, struct spudinput_instance_t, instance);
 		return result;
 	}
 
@@ -409,15 +425,16 @@ void spudinput_instance_destroy(spudinput_instance instance) {
 	if (!instance)
 		return;
 
+	const SPUD_ALLOCATOR allocator = instance->allocator;
 	for (uint32_t i = 0; i < instance->record_count; ++i) {
 		spudinput_backend_release_gamepad(instance, &instance->records[i]);
-		free(instance->records[i].motion_samples);
+		SPUD_DELETE_ARRAY(&allocator, SPUDINPUT_GAMEPAD_MOTION_SAMPLE, instance->records[i].motion_samples, instance->desc.motion_sample_capacity);
 	}
 	spudinput_backend_destroy(instance);
 
-	free(instance->records);
-	free(instance->ids);
-	free(instance);
+	SPUD_DELETE_ARRAY(&allocator, spudinput_gamepad_record, instance->records, instance->record_capacity);
+	SPUD_DELETE_ARRAY(&allocator, spudinput_gamepad_id, instance->ids, instance->record_capacity);
+	SPUD_DELETE(&allocator, struct spudinput_instance_t, instance);
 }
 
 SPUDINPUT_NATIVE_API spudinput_instance_get_native_api(spudinput_instance instance) {
@@ -445,7 +462,7 @@ SPUDRESULT spudinput_instance_poll(spudinput_instance instance) {
 		spudinput_gamepad_record *record = &instance->records[i];
 		if (!record->seen) {
 			spudinput_backend_release_gamepad(instance, record);
-			free(record->motion_samples);
+			SPUD_DELETE_ARRAY(&instance->allocator, SPUDINPUT_GAMEPAD_MOTION_SAMPLE, record->motion_samples, instance->desc.motion_sample_capacity);
 			continue;
 		}
 
@@ -592,7 +609,7 @@ SPUDRESULT spudinput_gamepad_set_motion_enabled(
 
 	if (enabled && !record->motion_samples) {
 		record->motion_samples =
-		    (SPUDINPUT_GAMEPAD_MOTION_SAMPLE *)calloc(instance->desc.motion_sample_capacity, sizeof(SPUDINPUT_GAMEPAD_MOTION_SAMPLE));
+		    SPUD_NEW_ARRAY_ZEROED(&instance->allocator, SPUDINPUT_GAMEPAD_MOTION_SAMPLE, instance->desc.motion_sample_capacity);
 		if (!record->motion_samples)
 			return SPUDRESULT_OUT_OF_MEMORY;
 	}

@@ -6,8 +6,8 @@ not a GPU library with utilities bolted on. See `../CLAUDE.md` (the `eqdev` work
 root) for how this repo fits into the workspace; this file covers
 conventions specific to working inside `spudlib` itself. `MATURITY_TODO.md`
 is the plan for bringing the parts written before these rules up to them
-(a version, result names, the caller's allocator and a stability policy
-for every module; a rework of SpudFiles; `bindings/` is removed and
+(a version, result names, the caller's allocator (done, but for SpudFiles)
+and a stability policy for every module; a rework of SpudFiles; `bindings/` is removed and
 SpudInput's struct bases are in).
 
 ## The one rule everything else follows
@@ -499,33 +499,55 @@ GameInput and evdev builds were not run.
   the D3D12 backend: `_rtv_heap`, `_dsv_heap`, `_bindless`, the indirect command
   signatures). Null is a valid state for those, so the function that uses one
   checks it and creates it there.
-- **No allocating `new` and no `delete` in the C++ backends: allocate and free by
-  hand.** Which allocator depends on whether the object's type has a constructor.
-- **A type with a constructor:** `malloc`, check the pointer, then construct the
-  object in place in that memory. `malloc`, not `calloc`, because the constructor
-  is what initialises it. The in-place form needs `<new>`.
+- **All of SpudLib's own memory comes from the caller's allocator** (`SPUD_ALLOCATOR`,
+  `spudcore.h`, since 2026-10-21). A module's instance desc takes it, the
+  instance keeps a copy, and every object made from the instance keeps a copy of
+  its parent's in its head, so it frees through its own copy and no destroy call
+  takes an allocator. Never `malloc`, `calloc`, `realloc`, `free` or `strdup`
+  SpudLib's own memory, and no allocating `new` or `delete` in the C++ backends.
+  The helpers are in `src/spudallocator.h`: `SPUD_NEW`, `SPUD_NEW_ZEROED`,
+  `SPUD_DELETE`, `SPUD_NEW_ARRAY`, `SPUD_NEW_ARRAY_ZEROED`, `SPUD_DELETE_ARRAY`,
+  `SPUD_RESIZE_ARRAY`, `spud_string_copy`/`spud_string_free`, and
+  `spud_allocate`/`spud_free` for an untyped blob.
+- **A block is freed with the size and alignment it was allocated with.** The
+  allocator is told both, so that a pool or an arena needs no header. Keep a
+  capacity beside every array whose length isn't otherwise known when it is
+  freed, and free it with that capacity; a realloc becomes `SPUD_RESIZE_ARRAY`
+  with the old and new capacity. Two arrays that share one capacity are grown
+  both or neither. A size of 0 is asked for and freed as 1 by the helpers, so a
+  count that may be 0 needs no case of its own. `tests/spudtest_allocator.h`
+  checks all of this in a test.
+- **Every handle starts with a `spud_object_head`** (`src/spudallocator.h`): its
+  debug name, then its copy of the allocator. A handle is freed by copying the
+  allocator out of its head first, since the head is inside the memory being
+  freed:
+
+  ```c
+  	const SPUD_ALLOCATOR allocator = buffer->head.allocator;
+  	spud_string_free(&allocator, buffer->head.debug_name);
+  	SPUD_DELETE(&allocator, spudgpu_buffer_vulkan, buffer);
+  ```
+- **Memory the platform allocates stays the platform's.** What `realpath`,
+  CoreFoundation, COM, libcurl, ALSA's `snd_*_malloc` or `getaddrinfo` give is
+  freed the way the platform says; Objective-C and COM reference counts are left
+  alone. So is memory a graphics driver allocates: SpudGPU passes Vulkan no
+  `VkAllocationCallbacks`, and D3D12 and Metal take none.
+- **A C++ type with a constructor:** `SPUD_NEW`, check the pointer, then
+  construct the object in place in that memory. `SPUD_NEW`, not
+  `SPUD_NEW_ZEROED`, because the constructor is what initialises it. The
+  in-place form needs `<new>`.
 
   ```cpp
-  spudgpu_buffer_d3d12 *object = (spudgpu_buffer_d3d12 *)malloc(sizeof(spudgpu_buffer_d3d12));
+  spudgpu_buffer_d3d12 *object = SPUD_NEW(&device->head.allocator, spudgpu_buffer_d3d12);
   if (!object) return SPUDRESULT_OUT_OF_MEMORY;
   object = new (object) spudgpu_buffer_d3d12();
   ```
 
   It is destroyed the same two steps in reverse: the destructor called explicitly,
-  then `free`.
-
-  ```cpp
-  object->~spudgpu_buffer_d3d12();
-  free(object);
-  ```
-- **A type with no constructor:** `calloc`, check the pointer, and that is all.
-  The zeroed memory is its initial state, and nothing is constructed. It is
-  destroyed with `free` alone.
-
-  ```cpp
-  spudgpu_buffer_view_d3d12 *object = (spudgpu_buffer_view_d3d12 *)calloc(1, sizeof(spudgpu_buffer_view_d3d12));
-  if (!object) return SPUDRESULT_OUT_OF_MEMORY;
-  ```
+  then `SPUD_DELETE`, with the allocator copied out first.
+- **A type with no constructor:** `SPUD_NEW_ZEROED`, check the pointer, and that
+  is all. The zeroed memory is its initial state, and nothing is constructed. It
+  is destroyed with `SPUD_DELETE` alone.
 - "Has a constructor" includes a type that only has members which do: a struct
   holding a `std::vector` or a `ComPtr` must be constructed in place and have its
   destructor called, or those members are never set up or released. In the D3D12
@@ -536,12 +558,8 @@ GameInput and evdev builds were not run.
 - Every allocation has exactly one matching release, on every failure path as well
   as in the destroy call.
 - A failed allocation is then a null pointer the function turns into a
-  `SPUDRESULT`, where an allocating `new` would throw, and no exception may cross
-  SpudLib's C boundary.
-- The D3D12 backend follows this throughout: no allocating `new`, `delete` or
-  `delete[]` is left in it, and every `malloc`/`calloc` is checked. Keep both ends
-  of an allocation in step - memory from an allocating `new` must never reach
-  `free`, nor `malloc` memory reach `delete`.
+  `SPUDRESULT_OUT_OF_MEMORY`, where an allocating `new` would throw, and no
+  exception may cross SpudLib's C boundary.
 - Objects with no destroy call of their own are released by their owner: a
   device, its command queues and its bindless state by `spudgpu_destroy_instance`;
   descriptor sets by their pool, on reset and on destroy; a swap chain's back
@@ -549,29 +567,32 @@ GameInput and evdev builds were not run.
 - What is left: `std::vector` and `std::string` (function locals in
   `spudgpud3d12context.cpp`, `spudgpud3d12command.cpp`, `spudgpud3d12renderpass.cpp`
   and `spudgpud3d12shader.cpp`, and the bindless free stacks) still allocate
-  through the standard allocator, which reports failure by throwing.
+  through the standard allocator, which reports failure by throwing; and SpudFiles,
+  which has no instance yet, uses the system heap (`spud_allocator_system()` in
+  each `sfs_file`'s head) until `SPUDFILES_TODO.md`'s rework gives it one.
 - **A debug name is copied, never kept as the caller's pointer, in every
   build.** `debug_name` fields and the name member of a handle exist in
   Debug and Release alike (since 2026-10-18; before, only under
   `#if _DEBUG`, which made a desc's layout differ between the two). A
   build switch never changes a public struct's layout or which functions
-  exist. Every handle that carries a name has it as its first
-  member (`_debug_name` in SpudGPU, `debug_name` in SpudAudio, SpudNet and
-  SpudFiles), and that member is either null or a copy SpudLib allocated. The
-  caller may free or reuse its own string as soon as the call that took it
-  returns. Storing the pointer (`pResult->_debug_name = desc->debug_name;`)
-  ties the object to memory SpudLib does not own.
+  exist. Every handle that carries a name has it in its head
+  (`head.debug_name`), and that member is either null or a copy SpudLib made
+  through the handle's allocator. The caller may free or reuse its own string
+  as soon as the call that took it returns. Storing the pointer
+  (`pResult->head.debug_name = desc->debug_name;`) ties the object to memory
+  SpudLib does not own.
 - **`spud_debug_name_set` (`spudcore.c`) is the one place a name is copied.**
-  It frees the name the object had, stores a copy of the new one, and returns
-  `SPUDRESULT_OUT_OF_MEMORY` if the copy fails. A create call whose desc has a
-  `debug_name` calls it; so does a caller renaming an object later.
+  It frees the name the object had, stores a copy of the new one made through
+  the head's allocator, and returns `SPUDRESULT_OUT_OF_MEMORY` if the copy
+  fails. A create call whose desc has a `debug_name` calls it, after the head's
+  allocator is set; so does a caller renaming an object later.
 
   ```c
   	if (spud_debug_name_set(pResult, desc->debug_name) != SPUD_SUCCESS) {
   		spudgpu_destroy_buffer(pResult);
   		return SPUDRESULT_OUT_OF_MEMORY;
   	}
-  	pResult->_desc.debug_name = pResult->_debug_name;
+  	pResult->_desc.debug_name = pResult->head.debug_name;
   ```
 - A null `debug_name` stays null: there is nothing to copy and it is not an
   error.
@@ -581,10 +602,10 @@ GameInput and evdev builds were not run.
 - A handle that also keeps the caller's desc (`_desc = *desc`) points
   `_desc.debug_name` at the handle's copy. The struct copy alone still carries
   the caller's pointer, and a `spudgpu_get_*_desc` call would hand it back.
-- **Because the setter frees the old name, a handle's name member must be null
-  from the moment the handle exists.** Allocate with `calloc`, or copy from a
-  zeroed struct, or value-initialise (`new (p) T()`); a handle from a bare
-  `malloc` sets the member to null itself.
+- **Because the setter frees the old name, a handle's name must be null from
+  the moment the handle exists.** Allocate with `SPUD_NEW_ZEROED`, or copy from
+  a zeroed struct, or value-initialise (`new (p) T()`); a handle from a bare
+  `SPUD_NEW` sets it to null itself.
 - **Whatever frees a handle frees its name first:** the destroy call, or the
   owner for a handle with no destroy call of its own (a device and its queues,
   descriptor sets, a swap chain's images, views, semaphores and fences). In C++
@@ -782,10 +803,11 @@ printed its 6 warnings on each.
   and Metal). A larger count records nothing, on every backend.
 
 - The debug name rule (see "A debug name is copied") was
-  applied to every module on 2026-10-09. Two kinds of Vulkan handle have no
-  release path at all, so a name given to one is never freed either: the queue
-  `spudgpu_get_graphics_queue` returns, and the sets from
-  `spudgpu_create_descriptor_sets`.
+  applied to every module on 2026-10-09. One kind of Vulkan handle has no
+  release path at all, so it and a name given to it are never freed: the queue
+  `spudgpu_get_graphics_queue` returns, a new one on each call. Descriptor sets
+  had none either until 2026-10-21; a Vulkan pool now keeps its sets in a list
+  and frees them on reset and destroy, as D3D12's does.
 - Cross-backend return values (see "A function returns the same value for the
   same condition in every backend") were aligned across SpudGPU and SpudAudio on
   2026-10-09; SpudFiles, SpudMemory and SpudNet already matched. What still
@@ -827,7 +849,7 @@ printed its 6 warnings on each.
   descs, error detail, a resolver, a wait set. The Apple side compiles clean
   with the `macos-metal` preset and passes `tests/spudnet_test` (run it with
   `tests/run_spudnet_test.sh build-macos-metal/Debug/spudnet_test`; it needs Python 3
-  and `openssl`; 279 checks since 2026-10-19, with the struct-base part). Linux (libcurl + BSD sockets) built with the
+  and `openssl`; 318 checks since 2026-10-21, with the struct-base and allocator parts). Linux (libcurl + BSD sockets) built with the
   `linux-vulkan` preset and passed it on 2026-10-14. Windows (WinHTTP +
   Winsock2) built with MSVC under the `windows-d3d12` preset and passed all
   261 checks on 2026-10-14, Windows 11 (`tests/run_spudnet_test.sh

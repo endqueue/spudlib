@@ -11,10 +11,12 @@
 #include <sched.h>
 #include <semaphore.h>
 #include <stdatomic.h>
+#include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/eventfd.h>
 #include <unistd.h>
+#include "../../../spudallocator.h"
 #include "../../../spudstructbase.h"
 
 #if __cplusplus
@@ -34,7 +36,7 @@ extern "C" {
  */
 
 struct spudaudio_device_t {
-	const char *debug_name;
+	spud_object_head head; // allocator: a copy of its instance's
 	SPUDAUDIO_DIRECTION direction;
 	char persistent_id[256]; // the ALSA PCM name, e.g. "hw:CARD=PCH,DEV=0"
 	char name[128];          // DESC hint, lines joined; else the PCM name
@@ -47,11 +49,12 @@ struct spudaudio_device_t {
  * (once it exists) and read from any thread, hence C11 atomics.
  */
 struct spudaudio_stream_t {
-	const char *debug_name;
+	spud_object_head head; // allocator: a copy of its device's
 	snd_pcm_t *pcm;
 	// The PCM's channel map before this stream applied its layout (NULL if
 	// it had none / no layout requested) — restored on destroy, since some
-	// drivers keep the map as a persistent control.
+	// drivers keep the map as a persistent control. ALSA's memory
+	// (snd_pcm_get_chmap), freed with free().
 	snd_pcm_chmap_t *original_chmap;
 	SPUDAUDIO_DIRECTION direction;
 	SPUDAUDIO_STREAM_CONFIG config;
@@ -61,6 +64,8 @@ struct spudaudio_stream_t {
 	uint32_t frame_bytes;
 	uint8_t *scratch; // one period; interleaved, or one plane per channel
 	void **planes;    // planar: channel_count pointers into scratch
+	uint32_t scratch_frames; // frames in scratch (frame_bytes each), which it is freed with
+	uint32_t planes_count;   // pointers in planes
 
 	SPUDAUDIO_THREAD_PRIORITY priority;
 	int32_t sched_fifo_priority;
@@ -76,6 +81,12 @@ struct spudaudio_stream_t {
 	pthread_t audio_thread_self;
 	atomic_bool audio_thread_known;
 	int stop_fd; // eventfd; written by stop, polled by the thread
+	// The thread's poll set: the stop eventfd, then the PCM's own
+	// descriptors. Made by start on the caller's thread and freed after the
+	// join, so the audio thread never calls the allocator. NULL while no
+	// thread runs, and when the PCM has no descriptors.
+	struct pollfd *fds;
+	uint32_t pcm_fd_count; // fds holds pcm_fd_count + 1
 	sem_t startup;
 	bool startup_initialized;
 	SPUDRESULT startup_result;
@@ -111,6 +122,8 @@ struct alsa_endpoint {
  * doesn't move.
  */
 struct alsa_watch {
+	// The instance's: the watch and its endpoint lists are its memory.
+	SPUD_ALLOCATOR allocator;
 	SPUDAUDIO_DEVICE_EVENT_CALLBACK callback;
 	void *user_data;
 	struct udev *udev;
@@ -120,12 +133,14 @@ struct alsa_watch {
 	bool thread_started;
 	struct alsa_endpoint *endpoints;
 	uint32_t endpoint_count;
+	uint32_t endpoint_capacity; // what `endpoints` was allocated, and is freed, with
 };
 
 struct spudaudio_instance_t {
-	const char *debug_name;
+	spud_object_head head;
 	struct spudaudio_device_t *devices; // every PCM ever enumerated
 	spudaudio_device *enumerated[2];    // latest array per direction
+	uint32_t enumerated_capacity[2];    // what each was allocated, and is freed, with
 	struct alsa_watch *watch;           // NULL while no device-event callback is set
 };
 
@@ -313,10 +328,15 @@ static bool alsa_chmap_query_matches(const snd_pcm_chmap_query_t *q, const unsig
 // Device-change notification
 // --------------------------------------------------------------------------
 
-// Every endpoint there is now, malloc'd: the same hints, the same test and
-// the same identity (PCM name + direction) as spudaudio_enumerate_devices,
-// for both directions. A PCM with no IOID does both and is two endpoints.
-static SPUDRESULT alsa_list_endpoints(struct alsa_endpoint **out_endpoints, uint32_t *out_count) {
+// Every endpoint there is now, in a block of the watch's allocator with room
+// for `*out_capacity`: the same hints, the same test and the same identity
+// (PCM name + direction) as spudaudio_enumerate_devices, for both
+// directions. A PCM with no IOID does both and is two endpoints.
+static SPUDRESULT alsa_list_endpoints(
+    const SPUD_ALLOCATOR *allocator,
+    struct alsa_endpoint **out_endpoints,
+    uint32_t *out_count,
+    uint32_t *out_capacity) {
 	static const struct {
 		SPUDAUDIO_DIRECTION direction;
 		const char *ioid;
@@ -326,6 +346,7 @@ static SPUDRESULT alsa_list_endpoints(struct alsa_endpoint **out_endpoints, uint
 	};
 	*out_endpoints = NULL;
 	*out_count     = 0;
+	*out_capacity  = 0;
 
 	void **hints = NULL;
 	int err      = snd_device_name_hint(-1, "pcm", &hints);
@@ -338,7 +359,7 @@ static SPUDRESULT alsa_list_endpoints(struct alsa_endpoint **out_endpoints, uint
 		snd_device_name_free_hint(hints);
 		return SPUD_SUCCESS;
 	}
-	struct alsa_endpoint *list = (struct alsa_endpoint *)calloc(capacity, sizeof(*list));
+	struct alsa_endpoint *list = SPUD_NEW_ARRAY_ZEROED(allocator, struct alsa_endpoint, capacity);
 	if (!list) {
 		snd_device_name_free_hint(hints);
 		return SPUDRESULT_OUT_OF_MEMORY;
@@ -355,12 +376,14 @@ static SPUDRESULT alsa_list_endpoints(struct alsa_endpoint **out_endpoints, uint
 			strncpy(list[written].persistent_id, name, sizeof(list[written].persistent_id) - 1);
 			++written;
 		}
+		// ALSA's strings, which it says to free with free().
 		free(name);
 		free(ioid);
 	}
 	snd_device_name_free_hint(hints);
 	*out_endpoints = list;
 	*out_count     = written;
+	*out_capacity  = capacity;
 	return SPUD_SUCCESS;
 }
 
@@ -378,12 +401,15 @@ static bool alsa_endpoint_in(const struct alsa_endpoint *endpoint, const struct 
 static void alsa_watch_devices_changed(struct alsa_watch *w) {
 	struct alsa_endpoint *now = NULL;
 	uint32_t now_count        = 0;
-	if (SPUDFAIL(alsa_list_endpoints(&now, &now_count)))
+	uint32_t now_capacity     = 0;
+	if (SPUDFAIL(alsa_list_endpoints(&w->allocator, &now, &now_count, &now_capacity)))
 		return;
-	struct alsa_endpoint *before = w->endpoints;
-	uint32_t before_count        = w->endpoint_count;
-	w->endpoints                 = now;
-	w->endpoint_count            = now_count;
+	struct alsa_endpoint *before   = w->endpoints;
+	uint32_t before_count          = w->endpoint_count;
+	const uint32_t before_capacity = w->endpoint_capacity;
+	w->endpoints                   = now;
+	w->endpoint_count              = now_count;
+	w->endpoint_capacity           = now_capacity;
 
 	for (uint32_t i = 0; i < before_count; ++i)
 		if (!alsa_endpoint_in(&before[i], now, now_count))
@@ -391,7 +417,7 @@ static void alsa_watch_devices_changed(struct alsa_watch *w) {
 	for (uint32_t i = 0; i < now_count; ++i)
 		if (!alsa_endpoint_in(&now[i], before, before_count))
 			w->callback(SPUDAUDIO_DEVICE_EVENT_ADDED, now[i].persistent_id, now[i].direction, SPUDAUDIO_DEFAULT_ROLE_NONE, w->user_data);
-	free(before);
+	SPUD_DELETE_ARRAY(&w->allocator, struct alsa_endpoint, before, before_capacity);
 }
 
 /*
@@ -449,14 +475,20 @@ static void alsa_watch_destroy(struct alsa_watch *w) {
 		udev_unref(w->udev);
 	if (w->stop_fd >= 0)
 		close(w->stop_fd);
-	free(w->endpoints);
-	free(w);
+	const SPUD_ALLOCATOR allocator = w->allocator;
+	SPUD_DELETE_ARRAY(&allocator, struct alsa_endpoint, w->endpoints, w->endpoint_capacity);
+	SPUD_DELETE(&allocator, struct alsa_watch, w);
 }
 
-static SPUDRESULT alsa_watch_create(SPUDAUDIO_DEVICE_EVENT_CALLBACK callback, void *user_data, struct alsa_watch **out_watch) {
-	struct alsa_watch *w = (struct alsa_watch *)calloc(1, sizeof(*w));
+static SPUDRESULT alsa_watch_create(
+    const SPUD_ALLOCATOR *allocator,
+    SPUDAUDIO_DEVICE_EVENT_CALLBACK callback,
+    void *user_data,
+    struct alsa_watch **out_watch) {
+	struct alsa_watch *w = SPUD_NEW_ZEROED(allocator, struct alsa_watch);
 	if (!w)
 		return SPUDRESULT_OUT_OF_MEMORY;
+	w->allocator = *allocator;
 	w->callback  = callback;
 	w->user_data = user_data;
 	w->stop_fd   = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
@@ -480,7 +512,7 @@ static SPUDRESULT alsa_watch_create(SPUDAUDIO_DEVICE_EVENT_CALLBACK callback, vo
 	if (SPUD_SUCCESS == r && udev_monitor_enable_receiving(w->monitor) < 0)
 		r = SPUDRESULT_API_SPECIFIC_FAILURE;
 	if (SPUD_SUCCESS == r)
-		r = alsa_list_endpoints(&w->endpoints, &w->endpoint_count);
+		r = alsa_list_endpoints(&w->allocator, &w->endpoints, &w->endpoint_count, &w->endpoint_capacity);
 	if (SPUD_SUCCESS == r) {
 		if (pthread_create(&w->thread, NULL, alsa_watch_thread, w) == 0)
 			w->thread_started = true;
@@ -507,20 +539,21 @@ static bool alsa_in_device_event_callback(spudaudio_instance instance) {
 // --------------------------------------------------------------------------
 
 SPUDRESULT spudaudio_create_instance(
-    SPUDAUDIO_NATIVE_API api,
+    const SPUDAUDIO_INSTANCE_DESC *desc,
     spudaudio_instance *out_instance) {
-	if (!out_instance)
-		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
-	*out_instance = NULL;
-	if (api == SPUDAUDIO_NATIVE_API_PIPEWIRE)
+	const SPUDRESULT desc_result = spudaudio_validate_instance_desc(desc, out_instance);
+	if (desc_result != SPUD_SUCCESS)
+		return desc_result;
+	if (desc->native_api == SPUDAUDIO_NATIVE_API_PIPEWIRE)
 		return SPUDRESULT_NOT_IMPLEMENTED_YET;
-	if (api != SPUDAUDIO_NATIVE_API_ALSA)
+	if (desc->native_api != SPUDAUDIO_NATIVE_API_ALSA)
 		return SPUDRESULT_INVALID_API;
 
-	struct spudaudio_instance_t *inst = (struct spudaudio_instance_t *)calloc(1, sizeof(*inst));
+	struct spudaudio_instance_t *inst = SPUD_NEW_ZEROED(desc->allocator, struct spudaudio_instance_t);
 	if (!inst)
 		return SPUDRESULT_OUT_OF_MEMORY;
-	*out_instance = inst;
+	inst->head.allocator = *desc->allocator;
+	*out_instance        = inst;
 	return SPUD_SUCCESS;
 }
 
@@ -530,17 +563,18 @@ SPUDRESULT spudaudio_destroy_instance(spudaudio_instance instance) {
 	if (alsa_in_device_event_callback(instance))
 		return SPUDRESULT_GENERAL_FAILURE;
 	alsa_watch_destroy(instance->watch);
+	const SPUD_ALLOCATOR allocator = instance->head.allocator;
 	struct spudaudio_device_t *dev = instance->devices;
 	while (dev) {
 		struct spudaudio_device_t *next = dev->next;
-		free((void *)dev->debug_name);
-		free(dev);
+		spud_string_free(&allocator, dev->head.debug_name);
+		SPUD_DELETE(&allocator, struct spudaudio_device_t, dev);
 		dev = next;
 	}
-	free(instance->enumerated[0]);
-	free(instance->enumerated[1]);
-	free((void *)instance->debug_name);
-	free(instance);
+	SPUD_DELETE_ARRAY(&allocator, spudaudio_device, instance->enumerated[0], instance->enumerated_capacity[0]);
+	SPUD_DELETE_ARRAY(&allocator, spudaudio_device, instance->enumerated[1], instance->enumerated_capacity[1]);
+	spud_string_free(&allocator, instance->head.debug_name);
+	SPUD_DELETE(&allocator, struct spudaudio_instance_t, instance);
 	return SPUD_SUCCESS;
 }
 
@@ -559,10 +593,11 @@ static struct spudaudio_device_t *alsa_find_or_add_device(
 		if (d->direction == direction && strcmp(d->persistent_id, name) == 0)
 			return d;
 
-	struct spudaudio_device_t *d = (struct spudaudio_device_t *)calloc(1, sizeof(*d));
+	struct spudaudio_device_t *d = SPUD_NEW_ZEROED(&instance->head.allocator, struct spudaudio_device_t);
 	if (!d)
 		return NULL;
-	d->direction = direction;
+	d->head.allocator = instance->head.allocator;
+	d->direction      = direction;
 	strncpy(d->persistent_id, name, sizeof(d->persistent_id) - 1);
 	// DESC is multi-line ("card, device\nwhat it is"); join it into one.
 	strncpy(d->name, description ? description : name, sizeof(d->name) - 1);
@@ -599,7 +634,7 @@ SPUDRESULT spudaudio_enumerate_devices(
 	uint32_t capacity = 0;
 	for (void **h = hints; *h; ++h)
 		++capacity;
-	spudaudio_device *list = capacity ? (spudaudio_device *)calloc(capacity, sizeof(spudaudio_device)) : NULL;
+	spudaudio_device *list = capacity ? SPUD_NEW_ARRAY_ZEROED(&instance->head.allocator, spudaudio_device, capacity) : NULL;
 	if (capacity && !list) {
 		snd_device_name_free_hint(hints);
 		return SPUDRESULT_OUT_OF_MEMORY;
@@ -618,6 +653,7 @@ SPUDRESULT spudaudio_enumerate_devices(
 			else
 				r = SPUDRESULT_OUT_OF_MEMORY;
 		}
+		// ALSA's strings, which it says to free with free().
 		free(name);
 		free(desc);
 		free(ioid);
@@ -626,14 +662,15 @@ SPUDRESULT spudaudio_enumerate_devices(
 	}
 	snd_device_name_free_hint(hints);
 	if (SPUDFAIL(r)) {
-		free(list);
+		SPUD_DELETE_ARRAY(&instance->head.allocator, spudaudio_device, list, capacity);
 		return r;
 	}
 
-	free(instance->enumerated[direction]);
-	instance->enumerated[direction] = list;
-	*out_devices                    = list;
-	*out_device_count               = written;
+	SPUD_DELETE_ARRAY(&instance->head.allocator, spudaudio_device, instance->enumerated[direction], instance->enumerated_capacity[direction]);
+	instance->enumerated[direction]          = list;
+	instance->enumerated_capacity[direction] = capacity;
+	*out_devices                             = list;
+	*out_device_count                        = written;
 	return SPUD_SUCCESS;
 }
 
@@ -688,14 +725,18 @@ SPUDRESULT spudaudio_get_timing_caps(
 // With out_original NULL (probe), a successfully applied map is undone
 // before returning. Otherwise (create) it stays applied and the previous
 // map is handed back for the stream to restore on destroy.
+// `map` is SpudAudio's, from `allocator`; the original ALSA hands back is
+// ALSA's (snd_pcm_get_chmap), freed with free().
 static SPUDRESULT alsa_apply_chmap(
+    const SPUD_ALLOCATOR *allocator,
     snd_pcm_t *pcm,
     const unsigned int *want,
     const SPUDAUDIO_FORMAT *format,
     SPUDAUDIO_STREAM_CONFIG *out_config,
     snd_pcm_chmap_t **out_original) {
 	const unsigned int n = format->channel_count;
-	snd_pcm_chmap_t *map = (snd_pcm_chmap_t *)malloc(sizeof(snd_pcm_chmap_t) + n * sizeof(unsigned int));
+	const size_t size    = sizeof(snd_pcm_chmap_t) + n * sizeof(unsigned int);
+	snd_pcm_chmap_t *map = (snd_pcm_chmap_t *)spud_allocate(allocator, size, SPUD_ALIGNOF(snd_pcm_chmap_t));
 	if (!map)
 		return SPUDRESULT_OUT_OF_MEMORY;
 	map->channels = n;
@@ -719,7 +760,7 @@ static SPUDRESULT alsa_apply_chmap(
 		snd_pcm_set_chmap(pcm, original);
 	}
 	free(original);
-	free(map);
+	spud_free(allocator, map, size, SPUD_ALIGNOF(snd_pcm_chmap_t));
 	return r;
 }
 
@@ -877,7 +918,7 @@ static SPUDRESULT alsa_configure(
 	// Some drivers keep the map as a persistent control (HDMI's "Playback
 	// Channel Map"), so the original is restored before closing — a probe
 	// must not leave the device changed.
-	return has_layout ? alsa_apply_chmap(pcm, want, &desc->format, out_config, out_original_chmap) : SPUD_SUCCESS;
+	return has_layout ? alsa_apply_chmap(&desc->device->head.allocator, pcm, want, &desc->format, out_config, out_original_chmap) : SPUD_SUCCESS;
 }
 
 // SpudAudio's own thread runs the callback, so NORMAL and SCHED_FIFO
@@ -1013,11 +1054,13 @@ static void alsa_free_stream(struct spudaudio_stream_t *s) {
 		close(s->stop_fd);
 	if (s->startup_initialized)
 		sem_destroy(&s->startup);
-	free(s->original_chmap);
-	free(s->planes);
-	free(s->scratch);
-	free((void *)s->debug_name);
-	free(s);
+	free(s->original_chmap); // ALSA's
+	const SPUD_ALLOCATOR allocator = s->head.allocator;
+	SPUD_DELETE_ARRAY(&allocator, void *, s->planes, s->planes_count);
+	// Bytes read as the stream's samples.
+	spud_free_array(&allocator, s->scratch, s->scratch_frames, s->frame_bytes, SPUD_ALIGNOF(max_align_t));
+	spud_string_free(&allocator, s->head.debug_name);
+	SPUD_DELETE(&allocator, struct spudaudio_stream_t, s);
 }
 
 SPUDRESULT spudaudio_create_stream(
@@ -1035,9 +1078,10 @@ SPUDRESULT spudaudio_create_stream(
 	if (SPUDFAIL(r))
 		return r;
 
-	struct spudaudio_stream_t *s = (struct spudaudio_stream_t *)calloc(1, sizeof(*s));
+	struct spudaudio_stream_t *s = SPUD_NEW_ZEROED(&desc->device->head.allocator, struct spudaudio_stream_t);
 	if (!s)
 		return SPUDRESULT_OUT_OF_MEMORY;
+	s->head.allocator      = desc->device->head.allocator;
 	s->stop_fd             = -1;
 	s->direction           = desc->device->direction;
 	s->callback            = desc->callback;
@@ -1061,13 +1105,16 @@ SPUDRESULT spudaudio_create_stream(
 			r = alsa_result(err);
 	}
 	if (SPUD_SUCCESS == r) {
-		const uint32_t channels = s->config.format.channel_count;
-		const uint32_t period   = s->config.period_frames;
-		s->sample_bytes         = spudaudio_sample_format_byte_size(s->config.format.sample_format);
-		s->frame_bytes          = s->sample_bytes * channels;
-		s->scratch              = (uint8_t *)calloc(period, s->frame_bytes);
-		s->planes               = (void **)calloc(channels, sizeof(void *));
-		s->stop_fd              = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
+		const SPUD_ALLOCATOR *allocator = &s->head.allocator;
+		const uint32_t channels         = s->config.format.channel_count;
+		const uint32_t period           = s->config.period_frames;
+		s->sample_bytes                 = spudaudio_sample_format_byte_size(s->config.format.sample_format);
+		s->frame_bytes                  = s->sample_bytes * channels;
+		s->scratch_frames               = period;
+		s->planes_count                 = channels;
+		s->scratch                      = (uint8_t *)spud_allocate_array(allocator, period, s->frame_bytes, SPUD_ALIGNOF(max_align_t), true);
+		s->planes                       = SPUD_NEW_ARRAY_ZEROED(allocator, void *, channels);
+		s->stop_fd                      = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
 		if (!s->scratch || !s->planes)
 			r = SPUDRESULT_OUT_OF_MEMORY;
 		else if (s->stop_fd < 0 || sem_init(&s->startup, 0, 0) != 0)
@@ -1272,15 +1319,14 @@ static void *alsa_audio_thread(void *arg) {
 	atomic_store(&s->audio_thread_known, true);
 
 	// --- Startup, reported back to spudaudio_stream_start. The poll set is
-	// the stop eventfd plus the PCM's own descriptors.
-	struct pollfd *fds = NULL;
-	int pcm_fds        = 0;
+	// the stop eventfd plus the PCM's own descriptors, in the array start
+	// made for them (NULL when the PCM has none).
+	struct pollfd *fds = s->fds;
+	const int pcm_fds  = (int)s->pcm_fd_count;
 	SPUDRESULT r       = alsa_apply_priority(s);
 	if (SPUD_SUCCESS == r) {
-		pcm_fds = snd_pcm_poll_descriptors_count(s->pcm);
-		fds     = pcm_fds > 0 ? (struct pollfd *)calloc((size_t)pcm_fds + 1, sizeof(struct pollfd)) : NULL;
 		if (!fds)
-			r = pcm_fds > 0 ? SPUDRESULT_OUT_OF_MEMORY : SPUDRESULT_API_SPECIFIC_FAILURE;
+			r = SPUDRESULT_API_SPECIFIC_FAILURE;
 		else if (snd_pcm_poll_descriptors(s->pcm, fds + 1, (unsigned int)pcm_fds) != pcm_fds)
 			r = SPUDRESULT_API_SPECIFIC_FAILURE;
 	}
@@ -1294,7 +1340,6 @@ static void *alsa_audio_thread(void *arg) {
 			alsa_set_terminal(s, r);
 		snd_pcm_drop(s->pcm);
 		snd_pcm_prepare(s->pcm);
-		free(fds);
 		s->startup_result = r;
 		sem_post(&s->startup);
 		return NULL;
@@ -1335,7 +1380,6 @@ static void *alsa_audio_thread(void *arg) {
 	snd_pcm_prepare(s->pcm);
 	unsigned int running = SPUDAUDIO_STREAM_STATE_RUNNING;
 	atomic_compare_exchange_strong(&s->state, &running, SPUDAUDIO_STREAM_STATE_STOPPED);
-	free(fds);
 	return NULL;
 }
 
@@ -1343,10 +1387,18 @@ static bool alsa_on_audio_thread(struct spudaudio_stream_t *s) {
 	return atomic_load(&s->audio_thread_known) && pthread_equal(pthread_self(), s->audio_thread_self);
 }
 
+// Frees the poll set start made. NULL is nothing to free.
+static void alsa_free_poll_set(struct spudaudio_stream_t *s) {
+	SPUD_DELETE_ARRAY(&s->head.allocator, struct pollfd, s->fds, (size_t)s->pcm_fd_count + 1);
+	s->fds          = NULL;
+	s->pcm_fd_count = 0;
+}
+
 static void alsa_join_thread(struct spudaudio_stream_t *s) {
 	pthread_join(s->thread, NULL);
 	s->has_thread = false;
 	atomic_store(&s->audio_thread_known, false);
+	alsa_free_poll_set(s);
 }
 
 SPUDRESULT spudaudio_stream_start(spudaudio_stream stream) {
@@ -1365,8 +1417,21 @@ SPUDRESULT spudaudio_stream_start(spudaudio_stream stream) {
 	} // clear a stop left over from the previous run
 	stream->frames_transferred    = 0;
 	stream->pending_discontinuity = false;
-	if (pthread_create(&stream->thread, NULL, alsa_audio_thread, stream) != 0)
+
+	// The thread's poll set is made here, on the caller's thread, so the
+	// audio thread never calls the allocator. A PCM with no descriptors
+	// gets none, and the thread reports it.
+	const int pcm_fds = snd_pcm_poll_descriptors_count(stream->pcm);
+	if (pcm_fds > 0) {
+		stream->fds = SPUD_NEW_ARRAY_ZEROED(&stream->head.allocator, struct pollfd, (size_t)pcm_fds + 1);
+		if (!stream->fds)
+			return SPUDRESULT_OUT_OF_MEMORY;
+		stream->pcm_fd_count = (uint32_t)pcm_fds;
+	}
+	if (pthread_create(&stream->thread, NULL, alsa_audio_thread, stream) != 0) {
+		alsa_free_poll_set(stream);
 		return SPUDRESULT_API_SPECIFIC_FAILURE;
+	}
 	stream->has_thread = true;
 
 	while (sem_wait(&stream->startup) != 0 && errno == EINTR) {
@@ -1471,7 +1536,7 @@ SPUDRESULT spudaudio_set_device_event_callback(
 	// the callback that was set still set.
 	struct alsa_watch *watch = NULL;
 	if (callback) {
-		SPUDRESULT r = alsa_watch_create(callback, user_data, &watch);
+		SPUDRESULT r = alsa_watch_create(&instance->head.allocator, callback, user_data, &watch);
 		if (SPUDFAIL(r))
 			return r;
 	}

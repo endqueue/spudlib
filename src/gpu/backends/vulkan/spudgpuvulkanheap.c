@@ -285,12 +285,13 @@ SPUDRESULT spudgpu_create_heap(
         return SPUDRESULT_API_SPECIFIC_FAILURE;
     }
 
-    spudgpu_heap_vulkan *heap = calloc(1, sizeof(spudgpu_heap_vulkan));
+    spudgpu_heap_vulkan *heap = SPUD_NEW_ZEROED(&device->head.allocator, spudgpu_heap_vulkan);
     if (!heap) {
         // Freeing mapped memory unmaps it.
         vkFreeMemory(vk_device, memory, NULL);
         return SPUDRESULT_OUT_OF_MEMORY;
     }
+    heap->head.allocator = device->head.allocator;
     heap->_memory_vk = memory;
     heap->_memory_type_index_vk = memoryTypeIndex;
     heap->_memory_properties_vk = memoryProperties;
@@ -302,7 +303,7 @@ SPUDRESULT spudgpu_create_heap(
         spudgpu_destroy_heap(heap);
         return SPUDRESULT_OUT_OF_MEMORY;
     }
-    heap->_desc.debug_name = heap->_debug_name;
+    heap->_desc.debug_name = heap->head.debug_name;
 
     *out_heap = heap;
     return SPUD_SUCCESS;
@@ -318,8 +319,9 @@ void spudgpu_destroy_heap(spudgpu_heap heap) {
     if (heap->_mapped)
         vkUnmapMemory(heap->_device._logical_device_vk, heap->_memory_vk);
     vkFreeMemory(heap->_device._logical_device_vk, heap->_memory_vk, NULL);
-    free((void *) heap->_debug_name);
-    free(heap);
+    const SPUD_ALLOCATOR allocator = heap->head.allocator;
+    spud_string_free(&allocator, heap->head.debug_name);
+    SPUD_DELETE(&allocator, spudgpu_heap_vulkan, heap);
 }
 
 SPUDRESULT spudgpu_get_heap_desc(
@@ -428,11 +430,12 @@ SPUDRESULT spudgpu_create_placed_buffer(
         return SPUDRESULT_API_SPECIFIC_FAILURE;
     }
 
-    spudgpu_buffer_vulkan *buffer = calloc(1, sizeof(spudgpu_buffer_vulkan));
+    spudgpu_buffer_vulkan *buffer = SPUD_NEW_ZEROED(&heap->head.allocator, spudgpu_buffer_vulkan);
     if (!buffer) {
         vkDestroyBuffer(vk_device, vk_buffer, NULL);
         return SPUDRESULT_OUT_OF_MEMORY;
     }
+    buffer->head.allocator = heap->head.allocator;
     buffer->_buffer_vk = vk_buffer;
     buffer->_memory_vk = heap->_memory_vk;
     buffer->_memory_offset_vk = offset;
@@ -456,7 +459,7 @@ SPUDRESULT spudgpu_create_placed_buffer(
         spudgpu_destroy_buffer(buffer);
         return SPUDRESULT_OUT_OF_MEMORY;
     }
-    buffer->_desc.debug_name = buffer->_debug_name;
+    buffer->_desc.debug_name = buffer->head.debug_name;
 
     *out_buffer = buffer;
     return SPUD_SUCCESS;
@@ -496,11 +499,12 @@ SPUDRESULT spudgpu_create_placed_image(
         return SPUDRESULT_API_SPECIFIC_FAILURE;
     }
 
-    spudgpu_image_vulkan *image = calloc(1, sizeof(spudgpu_image_vulkan));
+    spudgpu_image_vulkan *image = SPUD_NEW_ZEROED(&heap->head.allocator, spudgpu_image_vulkan);
     if (!image) {
         vkDestroyImage(vk_device, vk_image, NULL);
         return SPUDRESULT_OUT_OF_MEMORY;
     }
+    image->head.allocator = heap->head.allocator;
     image->_image_vk = vk_image;
     image->_memory_vk = heap->_memory_vk;
     image->_format_vk = info.format;
@@ -515,7 +519,7 @@ SPUDRESULT spudgpu_create_placed_image(
         spudgpu_destroy_image(image);
         return SPUDRESULT_OUT_OF_MEMORY;
     }
-    image->_desc.debug_name = image->_debug_name;
+    image->_desc.debug_name = image->head.debug_name;
 
     *out_image = image;
     return SPUD_SUCCESS;

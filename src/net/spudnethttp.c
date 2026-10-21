@@ -34,33 +34,50 @@ extern "C" {
 // A response's status and headers
 // --------------------------------------------------------------------------
 
-void spudnet_head_clear(struct spudnet_http_head *head) {
-	for (uint32_t i = 0; i < head->count; ++i) {
-		free(head->entries[i].name);
-		free(head->entries[i].value);
-	}
-	free(head->entries);
+/* Frees an entry's two strings. Each was allocated with its length and a
+ * terminator, kept beside it: a value from the network may hold a '\0' of
+ * its own, so strlen would not always find the size. */
+static void spudnet_head_free_entry(const SPUD_ALLOCATOR *allocator, const struct spudnet_http_header_entry *entry) {
+	spud_free(allocator, entry->name, entry->name_length + 1, 1);
+	spud_free(allocator, entry->value, entry->value_length + 1, 1);
+}
+
+void spudnet_head_clear(const SPUD_ALLOCATOR *allocator, struct spudnet_http_head *head) {
+	for (uint32_t i = 0; i < head->count; ++i)
+		spudnet_head_free_entry(allocator, &head->entries[i]);
+	SPUD_DELETE_ARRAY(allocator, struct spudnet_http_header_entry, head->entries, head->capacity);
 	memset(head, 0, sizeof(*head));
 }
 
 /* Drops the headers and keeps the room they were in. */
-static void spudnet_head_drop_headers(struct spudnet_http_head *head) {
-	for (uint32_t i = 0; i < head->count; ++i) {
-		free(head->entries[i].name);
-		free(head->entries[i].value);
-	}
+static void spudnet_head_drop_headers(const SPUD_ALLOCATOR *allocator, struct spudnet_http_head *head) {
+	for (uint32_t i = 0; i < head->count; ++i)
+		spudnet_head_free_entry(allocator, &head->entries[i]);
 	head->count = 0;
 }
 
 static struct spudnet_http_header_entry *spudnet_head_find(const struct spudnet_http_head *head, const char *name, size_t name_length) {
 	for (uint32_t i = 0; i < head->count; ++i) {
-		if (strlen(head->entries[i].name) == name_length && spudnet_ascii_equal_no_case(head->entries[i].name, name, name_length))
+		if (head->entries[i].name_length == name_length && spudnet_ascii_equal_no_case(head->entries[i].name, name, name_length))
 			return &head->entries[i];
 	}
 	return NULL;
 }
 
+/* `length` bytes of `text` and a terminator, or NULL. */
+static char *spudnet_head_copy(const SPUD_ALLOCATOR *allocator, const char *text, size_t length) {
+	if (length == SIZE_MAX)
+		return NULL;
+	char *copy = (char *)spud_allocate(allocator, length + 1, 1);
+	if (!copy)
+		return NULL;
+	memcpy(copy, text, length);
+	copy[length] = '\0';
+	return copy;
+}
+
 bool spudnet_head_add_header(
+    const SPUD_ALLOCATOR *allocator,
     struct spudnet_http_head *head,
     const char *name,
     size_t name_length,
@@ -69,14 +86,20 @@ bool spudnet_head_add_header(
 	// A name that is there already gets the new value joined onto its own.
 	struct spudnet_http_header_entry *entry = spudnet_head_find(head, name, name_length);
 	if (entry) {
-		size_t old_length = strlen(entry->value);
-		char  *joined     = (char *)realloc(entry->value, old_length + 2 + value_length + 1);
+		size_t old_length = entry->value_length;
+		if (value_length > SIZE_MAX - 3 - old_length)
+			return false;
+		size_t joined_length = old_length + 2 + value_length;
+		char  *joined        = (char *)spud_allocate(allocator, joined_length + 1, 1);
 		if (!joined)
 			return false;
+		memcpy(joined, entry->value, old_length);
 		memcpy(joined + old_length, ", ", 2);
 		memcpy(joined + old_length + 2, value, value_length);
-		joined[old_length + 2 + value_length] = '\0';
-		entry->value                          = joined;
+		joined[joined_length] = '\0';
+		spud_free(allocator, entry->value, old_length + 1, 1);
+		entry->value        = joined;
+		entry->value_length = joined_length;
 		return true;
 	}
 
@@ -85,30 +108,29 @@ bool spudnet_head_add_header(
 			return false;
 		uint32_t                          capacity = head->capacity ? head->capacity * 2 : 16;
 		struct spudnet_http_header_entry *moved =
-		    (struct spudnet_http_header_entry *)realloc(head->entries, (size_t)capacity * sizeof(struct spudnet_http_header_entry));
+		    SPUD_RESIZE_ARRAY(allocator, struct spudnet_http_header_entry, head->entries, head->capacity, capacity);
 		if (!moved)
 			return false;
 		head->entries  = moved;
 		head->capacity = capacity;
 	}
-	char *name_copy  = (char *)malloc(name_length + 1);
-	char *value_copy = (char *)malloc(value_length + 1);
+	char *name_copy  = spudnet_head_copy(allocator, name, name_length);
+	char *value_copy = spudnet_head_copy(allocator, value, value_length);
 	if (!name_copy || !value_copy) {
-		free(name_copy);
-		free(value_copy);
+		spud_free(allocator, name_copy, name_length + 1, 1);
+		spud_free(allocator, value_copy, value_length + 1, 1);
 		return false;
 	}
-	memcpy(name_copy, name, name_length);
-	name_copy[name_length] = '\0';
-	memcpy(value_copy, value, value_length);
-	value_copy[value_length]         = '\0';
-	head->entries[head->count].name  = name_copy;
-	head->entries[head->count].value = value_copy;
+	head->entries[head->count].name         = name_copy;
+	head->entries[head->count].name_length  = name_length;
+	head->entries[head->count].value        = value_copy;
+	head->entries[head->count].value_length = value_length;
 	head->count++;
 	return true;
 }
 
 bool spudnet_head_add_header_line(
+    const SPUD_ALLOCATOR *allocator,
     struct spudnet_http_head *head,
     const char *line,
     size_t length) {
@@ -116,7 +138,7 @@ bool spudnet_head_add_header_line(
 		length--;
 
 	if (length >= 5 && spudnet_ascii_equal_no_case(line, "HTTP/", 5)) {
-		spudnet_head_drop_headers(head);
+		spudnet_head_drop_headers(allocator, head);
 		return true;
 	}
 
@@ -135,7 +157,7 @@ bool spudnet_head_add_header_line(
 	while (value_length > 0 && (value[value_length - 1] == ' ' || value[value_length - 1] == '\t'))
 		value_length--;
 
-	return spudnet_head_add_header(head, line, colon, value, value_length);
+	return spudnet_head_add_header(allocator, head, line, colon, value, value_length);
 }
 
 const char *spudnet_head_get_header(const struct spudnet_http_head *head, const char *name) {
@@ -241,14 +263,19 @@ SPUDRESULT spudnet_http_transfer_create(
 	if (!client)
 		return SPUDRESULT_SPUDNET_INVALID_HTTP_CLIENT;
 
-	struct spudnet_http_transfer_t *transfer = (struct spudnet_http_transfer_t *)calloc(1, sizeof(struct spudnet_http_transfer_t));
+	// Every backend's client starts with its head (see spudnetshared.h), so
+	// the client's allocator is reached without knowing the backend's type.
+	const SPUD_ALLOCATOR *allocator = &((const spud_object_head *)client)->allocator;
+
+	struct spudnet_http_transfer_t *transfer = SPUD_NEW_ZEROED(allocator, struct spudnet_http_transfer_t);
 	if (!transfer)
 		return SPUDRESULT_OUT_OF_MEMORY;
-	transfer->client  = client;
-	transfer->phase   = SPUDNET_HTTP_PHASE_CREATED;
-	SPUDRESULT result = spudnet_http_backend_create(transfer);
+	transfer->head.allocator = *allocator;
+	transfer->client         = client;
+	transfer->phase          = SPUDNET_HTTP_PHASE_CREATED;
+	SPUDRESULT result        = spudnet_http_backend_create(transfer);
 	if (SPUDFAIL(result)) {
-		free(transfer);
+		SPUD_DELETE(allocator, struct spudnet_http_transfer_t, transfer);
 		return result;
 	}
 
@@ -260,9 +287,10 @@ void spudnet_http_transfer_destroy(spudnet_http_transfer transfer) {
 	if (!transfer)
 		return;
 	spudnet_http_backend_destroy(transfer);
-	spudnet_head_clear(&transfer->head);
-	free((void *)transfer->debug_name);
-	free(transfer);
+	const SPUD_ALLOCATOR allocator = transfer->head.allocator;
+	spudnet_head_clear(&allocator, &transfer->response);
+	spud_string_free(&allocator, transfer->head.debug_name);
+	SPUD_DELETE(&allocator, struct spudnet_http_transfer_t, transfer);
 }
 
 void spudnet_http_transfer_abort(spudnet_http_transfer transfer) {
@@ -373,7 +401,7 @@ SPUDRESULT spudnet_http_transfer_receive_response(
 }
 
 uint32_t spudnet_http_transfer_get_status(spudnet_http_transfer transfer) {
-	return transfer ? transfer->head.status : 0;
+	return transfer ? transfer->response.status : 0;
 }
 
 const char *spudnet_http_transfer_get_header(
@@ -381,11 +409,11 @@ const char *spudnet_http_transfer_get_header(
     const char *name) {
 	if (!transfer || !name)
 		return NULL;
-	return spudnet_head_get_header(&transfer->head, name);
+	return spudnet_head_get_header(&transfer->response, name);
 }
 
 uint32_t spudnet_http_transfer_get_header_count(spudnet_http_transfer transfer) {
-	return transfer ? transfer->head.count : 0;
+	return transfer ? transfer->response.count : 0;
 }
 
 SPUDRESULT spudnet_http_transfer_get_header_at(
@@ -397,10 +425,10 @@ SPUDRESULT spudnet_http_transfer_get_header_at(
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
 	*out_name  = NULL;
 	*out_value = NULL;
-	if (!transfer || index >= transfer->head.count)
+	if (!transfer || index >= transfer->response.count)
 		return SPUDRESULT_INDEX_OUT_OF_RANGE;
-	*out_name  = transfer->head.entries[index].name;
-	*out_value = transfer->head.entries[index].value;
+	*out_name  = transfer->response.entries[index].name;
+	*out_value = transfer->response.entries[index].value;
 	return SPUD_SUCCESS;
 }
 

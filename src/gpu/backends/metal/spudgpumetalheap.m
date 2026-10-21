@@ -130,9 +130,10 @@ SPUDRESULT spudgpu_create_heap(
 	if (desc->memory_kind == SPUDGPU_MEMORY_KIND_DEVICE_MAPPABLE && !device_metal->_properties.device_mappable_memory)
 		return SPUDRESULT_GPU_MEMORY_KIND_NOT_SUPPORTED;
 
-	spudgpu_heap_metal *heap = (spudgpu_heap_metal *)calloc(1, sizeof(spudgpu_heap_metal));
+	spudgpu_heap_metal *heap = SPUD_NEW_ZEROED(&device_metal->head.allocator, spudgpu_heap_metal);
 	if (!heap)
 		return SPUDRESULT_OUT_OF_MEMORY;
+	heap->head.allocator        = device_metal->head.allocator;
 	heap->_parent_device        = device_metal;
 	heap->_desc                 = *desc;
 	heap->_resource_options_mtl =
@@ -148,7 +149,7 @@ SPUDRESULT spudgpu_create_heap(
 		[heap_desc release];
 	}
 	if (!heap->_heap_mtl) {
-		free(heap);
+		SPUD_DELETE(&device_metal->head.allocator, spudgpu_heap_metal, heap);
 		return SPUDRESULT_API_SPECIFIC_FAILURE;
 	}
 
@@ -156,7 +157,7 @@ SPUDRESULT spudgpu_create_heap(
 		spudgpu_destroy_heap((spudgpu_heap)heap);
 		return SPUDRESULT_OUT_OF_MEMORY;
 	}
-	heap->_desc.debug_name = heap->_debug_name;
+	heap->_desc.debug_name = heap->head.debug_name;
 
 	*out_heap = (spudgpu_heap)heap;
 	return SPUD_SUCCESS;
@@ -171,9 +172,10 @@ void spudgpu_destroy_heap(spudgpu_heap heap) {
 	// spudgpu.h).
 	assert(heap_metal->_placed_count == 0);
 #endif
-	free((void *)heap_metal->_debug_name);
+	const SPUD_ALLOCATOR allocator = heap_metal->head.allocator;
+	spud_string_free(&allocator, heap_metal->head.debug_name);
 	[heap_metal->_heap_mtl release];
-	free(heap_metal);
+	SPUD_DELETE(&allocator, spudgpu_heap_metal, heap_metal);
 }
 
 SPUDRESULT spudgpu_get_heap_desc(
@@ -272,16 +274,17 @@ SPUDRESULT spudgpu_create_placed_buffer(
 	if (sr != SPUD_SUCCESS)
 		return sr;
 
-	spudgpu_buffer_metal *buffer_metal = (spudgpu_buffer_metal *)calloc(1, sizeof(spudgpu_buffer_metal));
+	spudgpu_buffer_metal *buffer_metal = SPUD_NEW_ZEROED(&heap_metal->head.allocator, spudgpu_buffer_metal);
 	if (!buffer_metal)
 		return SPUDRESULT_OUT_OF_MEMORY;
+	buffer_metal->head.allocator = heap_metal->head.allocator;
 	buffer_metal->_parent_device = heap_metal->_parent_device;
 	buffer_metal->_desc          = *desc;
 	buffer_metal->_buffer_mtl    = [heap_metal->_heap_mtl newBufferWithLength:(NSUInteger)desc->size
 	                                                                   options:heap_metal->_resource_options_mtl
 	                                                                    offset:(NSUInteger)offset];
 	if (!buffer_metal->_buffer_mtl) {
-		free(buffer_metal);
+		SPUD_DELETE(&heap_metal->head.allocator, spudgpu_buffer_metal, buffer_metal);
 		return SPUDRESULT_API_SPECIFIC_FAILURE;
 	}
 	buffer_metal->_heap = heap;
@@ -295,7 +298,7 @@ SPUDRESULT spudgpu_create_placed_buffer(
 		spudgpu_destroy_buffer((spudgpu_buffer)buffer_metal);
 		return SPUDRESULT_OUT_OF_MEMORY;
 	}
-	buffer_metal->_desc.debug_name = buffer_metal->_debug_name;
+	buffer_metal->_desc.debug_name = buffer_metal->head.debug_name;
 
 	*out_buffer = (spudgpu_buffer)buffer_metal;
 	return SPUD_SUCCESS;
@@ -332,17 +335,18 @@ SPUDRESULT spudgpu_create_placed_image(
 		return sr;
 	}
 
-	spudgpu_image_metal *image_metal = (spudgpu_image_metal *)calloc(1, sizeof(spudgpu_image_metal));
+	spudgpu_image_metal *image_metal = SPUD_NEW_ZEROED(&heap_metal->head.allocator, spudgpu_image_metal);
 	if (!image_metal) {
 		[texture_desc release];
 		return SPUDRESULT_OUT_OF_MEMORY;
 	}
+	image_metal->head.allocator = heap_metal->head.allocator;
 	image_metal->_parent_device = heap_metal->_parent_device;
 	image_metal->_desc          = *desc;
 	image_metal->_texture_mtl   = [heap_metal->_heap_mtl newTextureWithDescriptor:texture_desc offset:(NSUInteger)offset];
 	[texture_desc release];
 	if (!image_metal->_texture_mtl) {
-		free(image_metal);
+		SPUD_DELETE(&heap_metal->head.allocator, spudgpu_image_metal, image_metal);
 		return SPUDRESULT_API_SPECIFIC_FAILURE;
 	}
 	image_metal->_heap = heap;
@@ -354,7 +358,7 @@ SPUDRESULT spudgpu_create_placed_image(
 		spudgpu_destroy_image((spudgpu_image)image_metal);
 		return SPUDRESULT_OUT_OF_MEMORY;
 	}
-	image_metal->_desc.debug_name = image_metal->_debug_name;
+	image_metal->_desc.debug_name = image_metal->head.debug_name;
 
 	*out_image = (spudgpu_image)image_metal;
 	return SPUD_SUCCESS;

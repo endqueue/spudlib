@@ -2,6 +2,7 @@
 #if SPUDLIB_PLATFORM_WIN32
 
 #include "spudfiles.h"
+#include "../../../spudallocator.h"
 #include <ShObjIdl_core.h>
 #include <Windows.h>
 #include <shlwapi.h>
@@ -14,7 +15,9 @@ extern "C" {
 #endif
 
 struct sfs_file_t {
-	const char *debug_name;
+	// Its debug name, freed through its allocator: the system heap until
+	// SpudFiles has an instance to take the caller's from (MATURITY_TODO.md).
+	spud_object_head head;
     HANDLE handle;
 };
 
@@ -88,7 +91,8 @@ sfs_file_open(SFS_FILE_OPEN_ATTRIBUTES open_attribs, sfs_file *out_file) {
         CloseHandle(h);
         return SPUDRESULT_OUT_OF_MEMORY;
     }
-    f->debug_name = NULL;
+    f->head.debug_name = NULL;
+    f->head.allocator  = spud_allocator_system();
     f->handle = h;
     *out_file = f;
     return SPUD_SUCCESS;
@@ -97,7 +101,7 @@ sfs_file_open(SFS_FILE_OPEN_ATTRIBUTES open_attribs, sfs_file *out_file) {
 SPUDRESULT sfs_file_release(sfs_file file) {
     if (!file) return SPUDRESULT_SFS_INVALID_FILE;
     CloseHandle(file->handle);
-    free((void *)file->debug_name);
+    spud_string_free(&file->head.allocator, file->head.debug_name);
     free(file);
     return SPUD_SUCCESS;
 }

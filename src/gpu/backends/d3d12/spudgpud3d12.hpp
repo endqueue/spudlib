@@ -1,6 +1,7 @@
 
 #if SPUDGPU_COMPILE_D3D12_API
 
+#include "../../../spudallocator.h"
 #include "d3dx12.h"
 #include "spudgpu.h"
 #include "spudgpu_d3d12_natives.h"
@@ -116,7 +117,7 @@ spudgpu_d3d12_get_initial_image_state(SPUDGPU_IMAGE_USAGE usage) {
 }
 
 typedef struct spudgpu_instance_t {
-	const char *_debug_name;
+	spud_object_head head;
 	const char *application_name;
 	uint32_t application_version;
 	const char *engine_name;
@@ -158,13 +159,13 @@ typedef struct spudgpu_d3d12_shader_heap {
 	Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> heap;
 	uint32_t increment = 0;
 	// The unused ranges, sorted by offset, with touching neighbours merged:
-	// free_ranges[0, free_count), in an array of free_capacity allocated
-	// with malloc/realloc.
+	// free_ranges[0, free_count), in an array of free_capacity made through
+	// the device's allocator. The device frees it, with that capacity, when
+	// it is destroyed (spudgpud3d12context.cpp): a destructor has no
+	// allocator to free it through.
 	spudgpu_d3d12_heap_range *free_ranges = nullptr;
 	uint32_t free_count                   = 0;
 	uint32_t free_capacity                = 0;
-
-	~spudgpu_d3d12_shader_heap() { free(free_ranges); }
 } spudgpu_d3d12_shader_heap;
 
 // A root-signature-less command signature describing one DRAW (or
@@ -176,18 +177,14 @@ typedef struct spudgpu_d3d12_indirect_signature {
 } spudgpu_d3d12_indirect_signature;
 
 // The device's indirect draw signatures: entries[0, count) in an array of
-// capacity allocated with malloc/realloc. Each signature is released, and
-// the array freed, with the device.
+// capacity made through the device's allocator. Each signature is released,
+// and the array freed with that capacity, when the device is destroyed
+// (spudgpud3d12context.cpp): a destructor has no allocator to free it
+// through.
 typedef struct spudgpu_d3d12_indirect_signatures {
 	spudgpu_d3d12_indirect_signature *entries = nullptr;
 	uint32_t count                            = 0;
 	uint32_t capacity                         = 0;
-
-	~spudgpu_d3d12_indirect_signatures() {
-		for (uint32_t i = 0; i < count; ++i)
-			entries[i].signature->Release();
-		free(entries);
-	}
 } spudgpu_d3d12_indirect_signatures;
 
 typedef struct spudgpu_bindless_state_d3d12 {
@@ -219,7 +216,7 @@ typedef struct spudgpu_bindless_state_d3d12 {
 } spudgpu_bindless_state_d3d12;
 
 typedef struct spudgpu_device_t {
-	const char *_debug_name;
+	spud_object_head head;
 	spudgpu_instance_d3d12 *_instance;
 	Microsoft::WRL::ComPtr<IDXGIAdapter4> _dxgi_adapter;
 	Microsoft::WRL::ComPtr<ID3D12Device14> _d3d_device;
@@ -271,13 +268,13 @@ typedef struct spudgpu_device_t {
 } spudgpu_device_d3d12;
 
 typedef struct spudgpu_command_queue_t {
-	const char *_debug_name;
+	spud_object_head head;
 	spudgpu_device_d3d12 *_device;
 	Microsoft::WRL::ComPtr<ID3D12CommandQueue> _d3d_cmd_queue;
 } spudgpu_command_queue_d3d12;
 
 typedef struct spudgpu_command_allocator_t {
-	const char *_debug_name;
+	spud_object_head head;
 	spudgpu_device_d3d12 *_device;
 	Microsoft::WRL::ComPtr<ID3D12CommandAllocator> _d3d_cmd_allocator;
 	D3D12_COMMAND_LIST_TYPE _d3d_cmd_list_type;
@@ -291,7 +288,7 @@ typedef struct spudgpu_command_allocator_t {
 } spudgpu_command_allocator_d3d12;
 
 typedef struct spudgpu_command_list_t {
-	const char *_debug_name;
+	spud_object_head head;
 	spudgpu_command_allocator_d3d12 *_allocator;
 	Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList10> _d3d_cmd_list;
 
@@ -317,7 +314,7 @@ typedef struct spudgpu_command_list_t {
 } spudgpu_command_list_d3d12;
 
 typedef struct spudgpu_timestamp_set_t {
-	const char *_debug_name;
+	spud_object_head head;
 	Microsoft::WRL::ComPtr<ID3D12QueryHeap> _d3d_query_heap;
 	// What spudgpu_cmd_resolve_timestamps copies the ticks into, entry i at
 	// byte i * 8, and spudgpu_get_timestamps maps.
@@ -328,7 +325,7 @@ typedef struct spudgpu_timestamp_set_t {
 } spudgpu_timestamp_set_d3d12;
 
 typedef struct spudgpu_buffer_t {
-	const char *_debug_name;
+	spud_object_head head;
 	spudgpu_device_d3d12 *_device;
 	spudgpu_buffer_desc _desc;
 	Microsoft::WRL::ComPtr<ID3D12Resource2> _d3d_resource;
@@ -340,14 +337,14 @@ typedef struct spudgpu_buffer_t {
 } spudgpu_buffer_d3d12;
 
 typedef struct spudgpu_buffer_view_t {
-	const char *_debug_name;
+	spud_object_head head;
 	spudgpu_buffer_d3d12 *_buffer;
 	spudgpu_buffer_view_desc _desc;
 	SPUDGPU_D3D12_BUFFER_VIEW _d3d_view;
 } spudgpu_buffer_view_d3d12;
 
 typedef struct spudgpu_image_t {
-	const char *_debug_name;
+	spud_object_head head;
 	spudgpu_device_d3d12 *_device;
 	spudgpu_image_desc _desc;
 	Microsoft::WRL::ComPtr<ID3D12Resource2> _d3d_resource;
@@ -382,7 +379,7 @@ typedef struct spudgpu_image_t {
 } spudgpu_image_d3d12;
 
 typedef struct spudgpu_heap_t {
-	const char *_debug_name;
+	spud_object_head head;
 #if _DEBUG
 	// Buffers and images placed in the heap and not yet destroyed.
 	// spudgpu_destroy_heap asserts it is 0. Atomic, because resources in
@@ -418,7 +415,7 @@ bool spudgpu_d3d12_get_image_clear_value(
     D3D12_CLEAR_VALUE *out_clear_value);
 
 typedef struct spudgpu_image_view_t {
-	const char *_debug_name;
+	spud_object_head head;
 	spudgpu_image_d3d12 *_image;
 	spudgpu_image_view_desc _desc;
 	// What a render pass reads (_rtv, _dsv), and what
@@ -450,14 +447,14 @@ typedef struct spudgpu_d3d12_root_layout {
 } spudgpu_d3d12_root_layout;
 
 typedef struct spudgpu_shader_module_t {
-	const char *_debug_name;
+	spud_object_head head;
 	spudgpu_device_d3d12 *_device;
 	spudgpu_shader_module_desc _desc;
 	Microsoft::WRL::ComPtr<ID3DBlob> _d3d_blob;
 } spudgpu_shader_module_d3d12;
 
 typedef struct spudgpu_shader_pipeline_t {
-	const char *_debug_name;
+	spud_object_head head;
 	spudgpu_device_d3d12 *_device;
 	spudgpu_shader_pipeline_desc _desc;
 	Microsoft::WRL::ComPtr<ID3D12PipelineState> _d3d_pipeline_state;
@@ -473,7 +470,7 @@ typedef struct spudgpu_shader_pipeline_t {
 } spudgpu_shader_pipeline_d3d12;
 
 typedef struct spudgpu_compute_pipeline_t {
-	const char *_debug_name;
+	spud_object_head head;
 	spudgpu_device_d3d12 *_device;
 	spudgpu_compute_pipeline_desc _desc;
 	Microsoft::WRL::ComPtr<ID3D12PipelineState> _d3d_pipeline_state;
@@ -482,7 +479,7 @@ typedef struct spudgpu_compute_pipeline_t {
 } spudgpu_compute_pipeline_d3d12;
 
 typedef struct spudgpu_fence_t {
-	const char *_debug_name;
+	spud_object_head head;
 	spudgpu_device_d3d12 *_device;
 	SPUDGPU_FENCE_FLAGS flags;
 	// The fence's value is the ID3D12Fence's own. Nothing is counted here:
@@ -492,7 +489,7 @@ typedef struct spudgpu_fence_t {
 } spudgpu_fence_d3d12;
 
 typedef struct spudgpu_semaphore_t {
-	const char *_debug_name;
+	spud_object_head head;
 	spudgpu_device_d3d12 *_device;
 	uint64_t _signal_value;
 	Microsoft::WRL::ComPtr<ID3D12Fence1> _d3d_fence;
@@ -510,12 +507,12 @@ typedef struct spudgpu_d3d12_binding_slot {
 // translated desc, written into a sampler heap slot on demand by
 // spudgpu_update_descriptor_sets (spudgpud3d12descriptors.cpp).
 typedef struct spudgpu_sampler_t {
-	const char *_debug_name;
+	spud_object_head head;
 	D3D12_SAMPLER_DESC _d3d_desc;
 } spudgpu_sampler_d3d12;
 
 typedef struct spudgpu_descriptor_set_layout_t {
-	const char *_debug_name;
+	spud_object_head head;
 	spudgpu_device_d3d12 *_device;
 	spudgpu_descriptor_set_layout_desc _desc;
 	// Offsets into a set's allocated heap range, indexed by binding desc order.
@@ -525,7 +522,7 @@ typedef struct spudgpu_descriptor_set_layout_t {
 } spudgpu_descriptor_set_layout_d3d12;
 
 typedef struct spudgpu_descriptor_pool_t {
-	const char *_debug_name;
+	spud_object_head head;
 	spudgpu_device_d3d12 *_device;
 	spudgpu_descriptor_pool_desc _desc;
 	// The pool's ranges of the device's shader-visible heaps
@@ -545,7 +542,7 @@ typedef struct spudgpu_descriptor_pool_t {
 } spudgpu_descriptor_pool_d3d12;
 
 typedef struct spudgpu_descriptor_set_t {
-	const char *_debug_name;
+	spud_object_head head;
 	spudgpu_descriptor_pool_d3d12 *_pool;
 	spudgpu_descriptor_set_layout_d3d12 *_layout;
 	uint32_t _cbv_srv_uav_base; // base slot index in pool's CBV/SRV/UAV range
@@ -554,13 +551,13 @@ typedef struct spudgpu_descriptor_set_t {
 } spudgpu_descriptor_set_d3d12;
 
 typedef struct spudgpu_surface_t {
-	const char *_debug_name;
+	spud_object_head head;
 	HWND _hwnd;
 	spudgpu_instance_d3d12 *_instance;
 } spudgpu_surface_d3d12;
 
 typedef struct spudgpu_swap_chain_t {
-	const char *_debug_name;
+	spud_object_head head;
 	spudgpu_device_d3d12 *_device;
 	spudgpu_swap_chain_desc _desc;
 	Microsoft::WRL::ComPtr<IDXGISwapChain4> _dxgi_swap_chain;

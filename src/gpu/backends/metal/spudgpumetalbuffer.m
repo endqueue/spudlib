@@ -71,11 +71,12 @@ SPUDRESULT spudgpu_create_buffer(
 	if (sr != SPUD_SUCCESS)
 		return sr;
 
-	spudgpu_buffer_metal *buffer_metal = (spudgpu_buffer_metal *)calloc(1, sizeof(spudgpu_buffer_metal));
+	spudgpu_buffer_metal *buffer_metal = SPUD_NEW_ZEROED(&device_metal->head.allocator, spudgpu_buffer_metal);
 	if (!buffer_metal) {
 		sr = SPUDRESULT_GENERAL_FAILURE;
 		goto failedattempt;
 	}
+	buffer_metal->head.allocator = device_metal->head.allocator;
 	buffer_metal->_parent_device = device_metal;
 	buffer_metal->_desc          = *desc;
 
@@ -91,14 +92,14 @@ SPUDRESULT spudgpu_create_buffer(
 		spudgpu_destroy_buffer((spudgpu_buffer)buffer_metal);
 		return SPUDRESULT_OUT_OF_MEMORY;
 	}
-	buffer_metal->_desc.debug_name = buffer_metal->_debug_name;
+	buffer_metal->_desc.debug_name = buffer_metal->head.debug_name;
 
 	*out_buffer = (spudgpu_buffer)buffer_metal;
 
 	return sr;
 
 failedattempt:
-	free(buffer_metal);
+	SPUD_DELETE(&device_metal->head.allocator, spudgpu_buffer_metal, buffer_metal);
 	return sr;
 }
 void spudgpu_destroy_buffer(spudgpu_buffer buffer) {
@@ -111,8 +112,9 @@ void spudgpu_destroy_buffer(spudgpu_buffer buffer) {
 		if (buffer_metal->_heap)
 			buffer_metal->_heap->_placed_count--;
 #endif
-		free((void *)buffer_metal->_debug_name);
-		free(buffer_metal);
+		const SPUD_ALLOCATOR allocator = buffer_metal->head.allocator;
+		spud_string_free(&allocator, buffer_metal->head.debug_name);
+		SPUD_DELETE(&allocator, spudgpu_buffer_metal, buffer_metal);
 	}
 }
 SPUDRESULT spudgpu_get_buffer_desc(
@@ -165,11 +167,12 @@ SPUDRESULT spudgpu_create_buffer_view(
 
 	SPUDRESULT sr = SPUD_SUCCESS;
 
-	spudgpu_buffer_view_metal *result = (spudgpu_buffer_view_metal *)calloc(1, sizeof(spudgpu_buffer_view_metal));
+	spudgpu_buffer_view_metal *result = SPUD_NEW_ZEROED(&parent_buffer_metal->head.allocator, spudgpu_buffer_view_metal);
 	if (!result) {
 		sr = SPUDRESULT_GENERAL_FAILURE;
 		goto failedattempt;
 	}
+	result->head.allocator      = parent_buffer_metal->head.allocator;
 	result->_desc               = *desc;
 	result->_desc.parent_buffer = buffer; // Authoritative - see spudgpu_buffer_view_metal.
 
@@ -184,8 +187,9 @@ failedattempt:
 void spudgpu_destroy_buffer_view(spudgpu_buffer_view buffer_view) {
 	if (!buffer_view)
 		return;
-	free((void *)buffer_view->_debug_name);
-	free(buffer_view);
+	const SPUD_ALLOCATOR allocator = buffer_view->head.allocator;
+	spud_string_free(&allocator, buffer_view->head.debug_name);
+	SPUD_DELETE(&allocator, spudgpu_buffer_view_metal, buffer_view);
 }
 SPUDRESULT spudgpu_get_buffer_view_desc(
     spudgpu_buffer_view buffer_view,

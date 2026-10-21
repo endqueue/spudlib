@@ -30,19 +30,20 @@ SPUDRESULT spudgpu_create_timestamp_set(
 	if (FAILED(queue->_d3d_cmd_queue->GetTimestampFrequency(&frequency)) || frequency == 0)
 		return SPUDRESULT_API_SPECIFIC_FAILURE;
 
-	spudgpu_timestamp_set_d3d12 *set = (spudgpu_timestamp_set_d3d12 *)malloc(sizeof(spudgpu_timestamp_set_d3d12));
+	spudgpu_timestamp_set_d3d12 *set = SPUD_NEW(&device->head.allocator, spudgpu_timestamp_set_d3d12);
 	if (!set)
 		return SPUDRESULT_OUT_OF_MEMORY;
-	set             = new (set) spudgpu_timestamp_set_d3d12();
-	set->_count     = count;
-	set->_frequency = frequency;
+	set                 = new (set) spudgpu_timestamp_set_d3d12();
+	set->head.allocator = device->head.allocator;
+	set->_count         = count;
+	set->_frequency     = frequency;
 
 	D3D12_QUERY_HEAP_DESC heapDesc = {};
 	heapDesc.Type                  = D3D12_QUERY_HEAP_TYPE_TIMESTAMP;
 	heapDesc.Count                 = count;
 	if (FAILED(device->_d3d_device->CreateQueryHeap(&heapDesc, IID_PPV_ARGS(&set->_d3d_query_heap)))) {
 		set->~spudgpu_timestamp_set_d3d12();
-		free(set);
+		SPUD_DELETE(&device->head.allocator, spudgpu_timestamp_set_d3d12, set);
 		return SPUDRESULT_API_SPECIFIC_FAILURE;
 	}
 
@@ -61,7 +62,7 @@ SPUDRESULT spudgpu_create_timestamp_set(
 	if (FAILED(device->_d3d_device->CreateCommittedResource(&heapProperties, D3D12_HEAP_FLAG_CREATE_NOT_ZEROED, &bufferDesc,
 	                                                        D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&set->_d3d_readback)))) {
 		set->~spudgpu_timestamp_set_d3d12();
-		free(set);
+		SPUD_DELETE(&device->head.allocator, spudgpu_timestamp_set_d3d12, set);
 		return SPUDRESULT_API_SPECIFIC_FAILURE;
 	}
 
@@ -72,9 +73,10 @@ SPUDRESULT spudgpu_create_timestamp_set(
 void spudgpu_destroy_timestamp_set(spudgpu_timestamp_set set) {
 	if (!set)
 		return;
-	free((void *)set->_debug_name);
+	const SPUD_ALLOCATOR allocator = set->head.allocator;
+	spud_string_free(&allocator, set->head.debug_name);
 	set->~spudgpu_timestamp_set_d3d12();
-	free(set);
+	SPUD_DELETE(&allocator, spudgpu_timestamp_set_d3d12, set);
 }
 
 void spudgpu_cmd_reset_timestamps(

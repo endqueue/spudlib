@@ -72,11 +72,13 @@ SPUDRESULT spudgpu_create_sampler(
     info.compareOp = desc->compare_enable ? (VkCompareOp)desc->compare_op : VK_COMPARE_OP_ALWAYS;
     info.borderColor = VK_BORDER_COLOR_FLOAT_TRANSPARENT_BLACK;
 
-    spudgpu_sampler_vulkan *pResult = calloc(1, sizeof(spudgpu_sampler_vulkan));
+    spudgpu_sampler_vulkan *pResult = SPUD_NEW_ZEROED(&device->head.allocator, spudgpu_sampler_vulkan);
+    if (!pResult) return SPUDRESULT_OUT_OF_MEMORY;
+    pResult->head.allocator = device->head.allocator;
     pResult->_device = *device;
 
     if (vkCreateSampler(device->_logical_device_vk, &info, NULL, &pResult->_sampler_vk) != VK_SUCCESS) {
-        free(pResult);
+        SPUD_DELETE(&device->head.allocator, spudgpu_sampler_vulkan, pResult);
         return SPUDRESULT_API_SPECIFIC_FAILURE;
     }
 
@@ -92,8 +94,9 @@ SPUDRESULT spudgpu_create_sampler(
 void spudgpu_destroy_sampler(spudgpu_sampler sampler) {
     if (!sampler) return;
     vkDestroySampler(sampler->_device._logical_device_vk, sampler->_sampler_vk, NULL);
-    free((void *)sampler->_debug_name);
-    free(sampler);
+    const SPUD_ALLOCATOR allocator = sampler->head.allocator;
+    spud_string_free(&allocator, sampler->head.debug_name);
+    SPUD_DELETE(&allocator, spudgpu_sampler_vulkan, sampler);
 }
 
 SPUDRESULT spudgpu_create_descriptor_set_layout(
@@ -108,6 +111,7 @@ SPUDRESULT spudgpu_create_descriptor_set_layout(
     if (desc->binding_count > SPUDGPU_MAX_DESCRIPTOR_BINDINGS_PER_SET) return SPUDRESULT_GPU_TOO_MANY_DESCRIPTOR_BINDINGS;
 
     spudgpu_descriptor_set_layout_vulkan result = {0};
+    result.head.allocator = device->head.allocator;
     result._device = *device;
     result._desc = *desc;
 
@@ -161,13 +165,17 @@ SPUDRESULT spudgpu_create_descriptor_set_layout(
 #endif
 
     spudgpu_descriptor_set_layout_vulkan *pResult =
-            malloc(sizeof(spudgpu_descriptor_set_layout_vulkan));
+            SPUD_NEW(&result.head.allocator, spudgpu_descriptor_set_layout_vulkan);
+    if (!pResult) {
+        vkDestroyDescriptorSetLayout(vk_device, result._layout_vk, NULL);
+        return SPUDRESULT_OUT_OF_MEMORY;
+    }
     memcpy(pResult, &result, sizeof(spudgpu_descriptor_set_layout_vulkan));
     if (spud_debug_name_set(pResult, desc->debug_name) != SPUD_SUCCESS) {
         spudgpu_destroy_descriptor_set_layout(pResult);
         return SPUDRESULT_OUT_OF_MEMORY;
     }
-    pResult->_desc.debug_name = pResult->_debug_name;
+    pResult->_desc.debug_name = pResult->head.debug_name;
 
     *out_layout = pResult;
     return SPUD_SUCCESS;
@@ -180,8 +188,9 @@ void spudgpu_destroy_descriptor_set_layout(
         layout->_device._logical_device_vk,
         layout->_layout_vk,
         NULL);
-    free((void *)layout->_debug_name);
-    free(layout);
+    const SPUD_ALLOCATOR allocator = layout->head.allocator;
+    spud_string_free(&allocator, layout->head.debug_name);
+    SPUD_DELETE(&allocator, spudgpu_descriptor_set_layout_vulkan, layout);
 }
 
 SPUDRESULT spudgpu_create_descriptor_pool(
@@ -196,6 +205,7 @@ SPUDRESULT spudgpu_create_descriptor_pool(
     if (desc->pool_size_count > SPUDGPU_MAX_DESCRIPTOR_POOL_SIZES) return SPUDRESULT_GPU_TOO_MANY_DESCRIPTOR_POOLS;
 
     spudgpu_descriptor_pool_vulkan result = {0};
+    result.head.allocator = device->head.allocator;
     result._device = *device;
     result._desc = *desc;
 
@@ -244,16 +254,34 @@ SPUDRESULT spudgpu_create_descriptor_pool(
 	}
 #endif
 
-    spudgpu_descriptor_pool_vulkan *pResult = malloc(sizeof(spudgpu_descriptor_pool_vulkan));
+    spudgpu_descriptor_pool_vulkan *pResult = SPUD_NEW(&result.head.allocator, spudgpu_descriptor_pool_vulkan);
+    if (!pResult) {
+        vkDestroyDescriptorPool(vk_device, result._pool_vk, NULL);
+        return SPUDRESULT_OUT_OF_MEMORY;
+    }
     memcpy(pResult, &result, sizeof(spudgpu_descriptor_pool_vulkan));
     if (spud_debug_name_set(pResult, desc->debug_name) != SPUD_SUCCESS) {
         spudgpu_destroy_descriptor_pool(pResult);
         return SPUDRESULT_OUT_OF_MEMORY;
     }
-    pResult->_desc.debug_name = pResult->_debug_name;
+    pResult->_desc.debug_name = pResult->head.debug_name;
 
     *out_pool = pResult;
     return SPUD_SUCCESS;
+}
+
+// Frees every set handle [pool] made, names included: the Vulkan sets go
+// with the pool's reset or destruction.
+static void spudgpuvulkan___release_descriptor_sets(spudgpu_descriptor_pool_vulkan *pool) {
+    spudgpu_descriptor_set_vulkan *set = pool->_sets;
+    while (set) {
+        spudgpu_descriptor_set_vulkan *next = set->_next;
+        const SPUD_ALLOCATOR allocator = set->head.allocator;
+        spud_string_free(&allocator, set->head.debug_name);
+        SPUD_DELETE(&allocator, spudgpu_descriptor_set_vulkan, set);
+        set = next;
+    }
+    pool->_sets = NULL;
 }
 
 void spudgpu_reset_descriptor_pool(
@@ -261,6 +289,7 @@ void spudgpu_reset_descriptor_pool(
     if (!pool) return;
     // Bulk-free all sets allocated from this pool. The 'flags' parameter is reserved and must be 0.
 	vkResetDescriptorPool(pool->_device._logical_device_vk, pool->_pool_vk, 0);
+	spudgpuvulkan___release_descriptor_sets(pool);
 }
 
 void spudgpu_destroy_descriptor_pool(
@@ -271,8 +300,10 @@ void spudgpu_destroy_descriptor_pool(
         pool->_device._logical_device_vk,
         pool->_pool_vk,
         NULL);
-    free((void *)pool->_debug_name);
-    free(pool);
+    spudgpuvulkan___release_descriptor_sets(pool);
+    const SPUD_ALLOCATOR allocator = pool->head.allocator;
+    spud_string_free(&allocator, pool->head.debug_name);
+    SPUD_DELETE(&allocator, spudgpu_descriptor_pool_vulkan, pool);
 }
 
 SPUDRESULT spudgpu_create_descriptor_sets(
@@ -317,15 +348,19 @@ SPUDRESULT spudgpu_create_descriptor_sets(
     // Wrap each raw VkDescriptorSet in a heap-allocated SpudGPU handle.
     for (uint32_t i = 0; i < desc->set_count; i++) {
         spudgpu_descriptor_set_vulkan *pSet =
-                malloc(sizeof(spudgpu_descriptor_set_vulkan));
+                SPUD_NEW(&desc->pool->head.allocator, spudgpu_descriptor_set_vulkan);
         if (!pSet) {
             // Partial allocation — caller's out_sets is partially populated.
-            // The pool reset at the next frame will reclaim the Vulkan-side sets.
+            // The pool reset at the next frame will reclaim the Vulkan-side
+            // sets, and the handles made so far, which are on its list.
             return SPUDRESULT_GPU_INTERNAL_DESCRIPTOR_SET_ALLOCATION_FAIL;
         }
-        pSet->_debug_name = NULL;
+        pSet->head.debug_name = NULL;
+        pSet->head.allocator = desc->pool->head.allocator;
         pSet->_pool = *desc->pool;
         pSet->_set_vk = vk_sets[i];
+        pSet->_next = desc->pool->_sets;
+        desc->pool->_sets = pSet;
         out_sets[i] = (spudgpu_descriptor_set) pSet;
     }
 
@@ -483,7 +518,8 @@ void spudgpu_cmd_bind_descriptor_sets_compute(
 SPUDRESULT spudgpuvulkan___ensure_bindless_state(spudgpu_device device) {
     if (device->_bindless) return SPUD_SUCCESS;
 
-    spudgpu_bindless_state_vulkan *state = calloc(1, sizeof(spudgpu_bindless_state_vulkan));
+    const SPUD_ALLOCATOR *allocator = &device->head.allocator;
+    spudgpu_bindless_state_vulkan *state = SPUD_NEW_ZEROED(allocator, spudgpu_bindless_state_vulkan);
     if (!state) return SPUDRESULT_API_SPECIFIC_FAILURE;
 
     VkDescriptorSetLayoutBinding bindings[3] = {0};
@@ -520,18 +556,19 @@ SPUDRESULT spudgpuvulkan___ensure_bindless_state(spudgpu_device device) {
     layoutInfo.pBindings = bindings;
 
     spudgpu_descriptor_set_layout_vulkan *layoutWrapper =
-            calloc(1, sizeof(spudgpu_descriptor_set_layout_vulkan));
+            SPUD_NEW_ZEROED(allocator, spudgpu_descriptor_set_layout_vulkan);
     if (!layoutWrapper) {
-        free(state);
+        SPUD_DELETE(allocator, spudgpu_bindless_state_vulkan, state);
         return SPUDRESULT_API_SPECIFIC_FAILURE;
     }
+    layoutWrapper->head.allocator = device->head.allocator;
     layoutWrapper->_device = *device;
 
     if (vkCreateDescriptorSetLayout(
             device->_logical_device_vk, &layoutInfo, NULL,
             &layoutWrapper->_layout_vk) != VK_SUCCESS) {
-        free(layoutWrapper);
-        free(state);
+        SPUD_DELETE(allocator, spudgpu_descriptor_set_layout_vulkan, layoutWrapper);
+        SPUD_DELETE(allocator, spudgpu_bindless_state_vulkan, state);
         return SPUDRESULT_API_SPECIFIC_FAILURE;
     }
 
@@ -550,8 +587,8 @@ SPUDRESULT spudgpuvulkan___ensure_bindless_state(spudgpu_device device) {
 
     if (vkCreateDescriptorPool(device->_logical_device_vk, &poolInfo, NULL, &state->pool_vk) != VK_SUCCESS) {
         vkDestroyDescriptorSetLayout(device->_logical_device_vk, layoutWrapper->_layout_vk, NULL);
-        free(layoutWrapper);
-        free(state);
+        SPUD_DELETE(allocator, spudgpu_descriptor_set_layout_vulkan, layoutWrapper);
+        SPUD_DELETE(allocator, spudgpu_bindless_state_vulkan, state);
         return SPUDRESULT_API_SPECIFIC_FAILURE;
     }
 
@@ -564,8 +601,8 @@ SPUDRESULT spudgpuvulkan___ensure_bindless_state(spudgpu_device device) {
     if (vkAllocateDescriptorSets(device->_logical_device_vk, &allocInfo, &state->set_vk) != VK_SUCCESS) {
         vkDestroyDescriptorPool(device->_logical_device_vk, state->pool_vk, NULL);
         vkDestroyDescriptorSetLayout(device->_logical_device_vk, layoutWrapper->_layout_vk, NULL);
-        free(layoutWrapper);
-        free(state);
+        SPUD_DELETE(allocator, spudgpu_descriptor_set_layout_vulkan, layoutWrapper);
+        SPUD_DELETE(allocator, spudgpu_bindless_state_vulkan, state);
         return SPUDRESULT_API_SPECIFIC_FAILURE;
     }
 
@@ -579,16 +616,17 @@ SPUDRESULT spudgpuvulkan___ensure_bindless_state(spudgpu_device device) {
 void spudgpuvulkan___destroy_bindless_state(spudgpu_device device) {
     if (!device || !device->_bindless) return;
     spudgpu_bindless_state_vulkan *state = device->_bindless;
+    const SPUD_ALLOCATOR allocator = device->head.allocator;
 
     // Destroying the pool frees the set allocated from it.
     vkDestroyDescriptorPool(device->_logical_device_vk, state->pool_vk, NULL);
     spudgpu_descriptor_set_layout_vulkan *layoutWrapper = (spudgpu_descriptor_set_layout_vulkan *) state->layout;
     if (layoutWrapper) {
         vkDestroyDescriptorSetLayout(device->_logical_device_vk, layoutWrapper->_layout_vk, NULL);
-        free((void *)layoutWrapper->_debug_name);
-        free(layoutWrapper);
+        spud_string_free(&allocator, layoutWrapper->head.debug_name);
+        SPUD_DELETE(&allocator, spudgpu_descriptor_set_layout_vulkan, layoutWrapper);
     }
-    free(state);
+    SPUD_DELETE(&allocator, spudgpu_bindless_state_vulkan, state);
     device->_bindless = NULL;
 }
 

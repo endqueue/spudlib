@@ -35,6 +35,8 @@ static MTLPixelFormat spudgpumetal___internal_swap_chain_pixel_format(SPUDGPU_FO
 static void spudgpumetal___internal_destroy_swap_chain(spudgpu_swap_chain_metal *swap_chain_metal) {
 	if (!swap_chain_metal)
 		return;
+	// Everything below was made through the swap chain's allocator.
+	const SPUD_ALLOCATOR allocator = swap_chain_metal->head.allocator;
 	if (swap_chain_metal->_current_drawable) {
 		[swap_chain_metal->_current_drawable release];
 	}
@@ -42,31 +44,34 @@ static void spudgpumetal___internal_destroy_swap_chain(spudgpu_swap_chain_metal 
 		if (swap_chain_metal->_image_available_semaphore->_event_mtl) {
 			[swap_chain_metal->_image_available_semaphore->_event_mtl release];
 		}
-		free((void *)swap_chain_metal->_image_available_semaphore->_debug_name);
-		free(swap_chain_metal->_image_available_semaphore);
+		spud_string_free(&allocator, swap_chain_metal->_image_available_semaphore->head.debug_name);
+		SPUD_DELETE(&allocator, spudgpu_semaphore_metal, swap_chain_metal->_image_available_semaphore);
 	}
 	if (swap_chain_metal->_render_finished_semaphore) {
 		if (swap_chain_metal->_render_finished_semaphore->_event_mtl) {
 			[swap_chain_metal->_render_finished_semaphore->_event_mtl release];
 		}
-		free((void *)swap_chain_metal->_render_finished_semaphore->_debug_name);
-		free(swap_chain_metal->_render_finished_semaphore);
+		spud_string_free(&allocator, swap_chain_metal->_render_finished_semaphore->head.debug_name);
+		SPUD_DELETE(&allocator, spudgpu_semaphore_metal, swap_chain_metal->_render_finished_semaphore);
 	}
 	if (swap_chain_metal->_in_flight_fence) {
 		if (swap_chain_metal->_in_flight_fence->_shared_event_mtl) {
 			[swap_chain_metal->_in_flight_fence->_shared_event_mtl release];
 		}
-		free((void *)swap_chain_metal->_in_flight_fence->_debug_name);
-		free(swap_chain_metal->_in_flight_fence);
+		spud_string_free(&allocator, swap_chain_metal->_in_flight_fence->head.debug_name);
+		SPUD_DELETE(&allocator, spudgpu_fence_metal, swap_chain_metal->_in_flight_fence);
 	}
 	if (swap_chain_metal->_back_buffer_images)
-		free((void *)swap_chain_metal->_back_buffer_images->_debug_name);
+		spud_string_free(&allocator, swap_chain_metal->_back_buffer_images->head.debug_name);
 	if (swap_chain_metal->_back_buffer_image_views)
-		free((void *)swap_chain_metal->_back_buffer_image_views->_debug_name);
-	free(swap_chain_metal->_back_buffer_images);
-	free(swap_chain_metal->_back_buffer_image_views);
-	free((void *)swap_chain_metal->_debug_name);
-	free(swap_chain_metal);
+		spud_string_free(&allocator, swap_chain_metal->_back_buffer_image_views->head.debug_name);
+	SPUD_DELETE_ARRAY(
+	    &allocator, spudgpu_image_metal, swap_chain_metal->_back_buffer_images, swap_chain_metal->_desc.buffer_count);
+	SPUD_DELETE_ARRAY(
+	    &allocator, spudgpu_image_view_metal, swap_chain_metal->_back_buffer_image_views,
+	    swap_chain_metal->_desc.buffer_count);
+	spud_string_free(&allocator, swap_chain_metal->head.debug_name);
+	SPUD_DELETE(&allocator, spudgpu_swap_chain_metal, swap_chain_metal);
 }
 
 SPUDRESULT spudgpu_create_surface(
@@ -83,11 +88,12 @@ SPUDRESULT spudgpu_create_surface(
 
 	SPUDRESULT sr = SPUD_SUCCESS;
 
-	spudgpu_surface_metal *surface_metal = (spudgpu_surface_metal *)calloc(1, sizeof(spudgpu_surface_metal));
+	spudgpu_surface_metal *surface_metal = SPUD_NEW_ZEROED(&instance->head.allocator, spudgpu_surface_metal);
 	if (!surface_metal) {
 		sr = SPUDRESULT_GENERAL_FAILURE;
 		goto failedattempt;
 	}
+	surface_metal->head.allocator   = instance->head.allocator;
 	surface_metal->_parent_instance = (spudgpu_instance_metal *)instance;
 	surface_metal->_window_handle   = window_handle;
 	surface_metal->_display_handle  = display_handle;
@@ -102,15 +108,16 @@ SPUDRESULT spudgpu_create_surface(
 	return sr;
 
 failedattempt:
-	free(surface_metal);
+	SPUD_DELETE(&instance->head.allocator, spudgpu_surface_metal, surface_metal);
 	return sr;
 }
 
 void spudgpu_destroy_surface(spudgpu_surface surface) {
 	spudgpu_surface_metal *surface_metal = (spudgpu_surface_metal *)surface;
 	if (surface_metal) {
-		free((void *)surface_metal->_debug_name);
-		free(surface_metal);
+		const SPUD_ALLOCATOR allocator = surface_metal->head.allocator;
+		spud_string_free(&allocator, surface_metal->head.debug_name);
+		SPUD_DELETE(&allocator, spudgpu_surface_metal, surface_metal);
 	}
 }
 
@@ -170,12 +177,12 @@ SPUDRESULT spudgpu_create_swap_chain(
 
 	SPUDRESULT sr = SPUD_SUCCESS;
 
-	spudgpu_swap_chain_metal *swap_chain_metal =
-	    (spudgpu_swap_chain_metal *)calloc(1, sizeof(spudgpu_swap_chain_metal));
+	spudgpu_swap_chain_metal *swap_chain_metal = SPUD_NEW_ZEROED(&device->head.allocator, spudgpu_swap_chain_metal);
 	if (!swap_chain_metal) {
 		sr = SPUDRESULT_GENERAL_FAILURE;
 		goto failedattempt;
 	}
+	swap_chain_metal->head.allocator    = device->head.allocator;
 	swap_chain_metal->_parent_device    = (spudgpu_device_metal *)device;
 	swap_chain_metal->_desc             = *desc;
 	swap_chain_metal->_desc.buffer_count = 1; // Truthful, not the caller's raw request - see above.
@@ -189,12 +196,17 @@ SPUDRESULT spudgpu_create_swap_chain(
 	// (blit source/destination, sampling, storage) needs it off.
 	swap_chain_metal->_metal_layer.framebufferOnly = desc->usage == 0 ? YES : NO;
 
-	swap_chain_metal->_back_buffer_images      = calloc(1, sizeof(spudgpu_image_metal));
-	swap_chain_metal->_back_buffer_image_views = calloc(1, sizeof(spudgpu_image_view_metal));
+	// _desc.buffer_count (1) long each, the count they are freed with.
+	swap_chain_metal->_back_buffer_images =
+	    SPUD_NEW_ARRAY_ZEROED(&swap_chain_metal->head.allocator, spudgpu_image_metal, swap_chain_metal->_desc.buffer_count);
+	swap_chain_metal->_back_buffer_image_views = SPUD_NEW_ARRAY_ZEROED(
+	    &swap_chain_metal->head.allocator, spudgpu_image_view_metal, swap_chain_metal->_desc.buffer_count);
 	if (!swap_chain_metal->_back_buffer_images || !swap_chain_metal->_back_buffer_image_views) {
 		sr = SPUDRESULT_GENERAL_FAILURE;
 		goto failedattempt;
 	}
+	swap_chain_metal->_back_buffer_images[0].head.allocator      = swap_chain_metal->head.allocator;
+	swap_chain_metal->_back_buffer_image_views[0].head.allocator = swap_chain_metal->head.allocator;
 	swap_chain_metal->_back_buffer_images[0]._parent_device      = swap_chain_metal->_parent_device;
 	swap_chain_metal->_back_buffer_images[0]._desc.usage          = SPUDGPU_IMAGE_USAGE_COLOR_ATTACHMENT | desc->usage;
 	swap_chain_metal->_back_buffer_images[0]._desc.format          = desc->format;
@@ -212,12 +224,12 @@ SPUDRESULT spudgpu_create_swap_chain(
 	// image_available: attach it to the struct before doing anything that
 	// can fail, so spudgpumetal___internal_destroy_swap_chain always finds
 	// and cleans it up regardless of where creation stops.
-	swap_chain_metal->_image_available_semaphore =
-	    (spudgpu_semaphore_metal *)calloc(1, sizeof(spudgpu_semaphore_metal));
+	swap_chain_metal->_image_available_semaphore = SPUD_NEW_ZEROED(&swap_chain_metal->head.allocator, spudgpu_semaphore_metal);
 	if (!swap_chain_metal->_image_available_semaphore) {
 		sr = SPUDRESULT_GENERAL_FAILURE;
 		goto failedattempt;
 	}
+	swap_chain_metal->_image_available_semaphore->head.allocator = swap_chain_metal->head.allocator;
 	swap_chain_metal->_image_available_semaphore->_parent_device = swap_chain_metal->_parent_device;
 	swap_chain_metal->_image_available_semaphore->_event_mtl =
 	    [swap_chain_metal->_parent_device->_device_mtl newEvent];
@@ -244,12 +256,12 @@ SPUDRESULT spudgpu_create_swap_chain(
 	// render_finished via spudgpu_queue_submit same as on Vulkan/D3D12), but
 	// spudgpu_swap_chain_present below never consumes either of them itself -
 	// see spudgpu_swap_chain_metal's struct comment for why.
-	swap_chain_metal->_render_finished_semaphore =
-	    (spudgpu_semaphore_metal *)calloc(1, sizeof(spudgpu_semaphore_metal));
+	swap_chain_metal->_render_finished_semaphore = SPUD_NEW_ZEROED(&swap_chain_metal->head.allocator, spudgpu_semaphore_metal);
 	if (!swap_chain_metal->_render_finished_semaphore) {
 		sr = SPUDRESULT_GENERAL_FAILURE;
 		goto failedattempt;
 	}
+	swap_chain_metal->_render_finished_semaphore->head.allocator = swap_chain_metal->head.allocator;
 	swap_chain_metal->_render_finished_semaphore->_parent_device = swap_chain_metal->_parent_device;
 	swap_chain_metal->_render_finished_semaphore->_event_mtl =
 	    [swap_chain_metal->_parent_device->_device_mtl newEvent];
@@ -258,12 +270,12 @@ SPUDRESULT spudgpu_create_swap_chain(
 		goto failedattempt;
 	}
 
-	swap_chain_metal->_in_flight_fence =
-	    (spudgpu_fence_metal *)calloc(1, sizeof(spudgpu_fence_metal));
+	swap_chain_metal->_in_flight_fence = SPUD_NEW_ZEROED(&swap_chain_metal->head.allocator, spudgpu_fence_metal);
 	if (!swap_chain_metal->_in_flight_fence) {
 		sr = SPUDRESULT_GENERAL_FAILURE;
 		goto failedattempt;
 	}
+	swap_chain_metal->_in_flight_fence->head.allocator = swap_chain_metal->head.allocator;
 	swap_chain_metal->_in_flight_fence->_parent_device = swap_chain_metal->_parent_device;
 	swap_chain_metal->_in_flight_fence->_shared_event_mtl =
 	    [swap_chain_metal->_parent_device->_device_mtl newSharedEvent];

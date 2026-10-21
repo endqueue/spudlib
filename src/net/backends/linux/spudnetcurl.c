@@ -80,16 +80,19 @@ static pthread_mutex_t spudnet_curl_start_lock = PTHREAD_MUTEX_INITIALIZER;
  * has its global init, which it counts: it stays up until as many
  * curl_global_cleanup calls have been made. */
 SPUDRESULT spudnet_instance_create(
+    const spudnet_instance_desc *desc,
     spudnet_instance *out_instance,
     spudnet_error *out_error) {
 	spudnet_error_clear(out_error);
-	if (!out_instance)
-		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
-	*out_instance = NULL;
+	const SPUDRESULT desc_result = spudnet_instance_desc_check(desc, out_instance);
+	if (desc_result != SPUD_SUCCESS)
+		return desc_result;
 
-	struct spudnet_instance_t *instance = (struct spudnet_instance_t *)calloc(1, sizeof(struct spudnet_instance_t));
+	const SPUD_ALLOCATOR      *allocator = desc->allocator;
+	struct spudnet_instance_t *instance  = SPUD_NEW_ZEROED(allocator, struct spudnet_instance_t);
 	if (!instance)
 		return SPUDRESULT_OUT_OF_MEMORY;
+	instance->head.allocator = *allocator;
 
 	pthread_mutex_lock(&spudnet_curl_start_lock);
 	// The libcurl found at run time, which need not be the one the headers
@@ -102,11 +105,11 @@ SPUDRESULT spudnet_instance_create(
 	if (!thread_safe) {
 		// Nothing was started, and nothing of the platform's failed: there
 		// is no code to record.
-		free(instance);
+		SPUD_DELETE(allocator, struct spudnet_instance_t, instance);
 		return SPUDRESULT_SPUDNET_UNSUPPORTED;
 	}
 	if (code != CURLE_OK) {
-		free(instance);
+		SPUD_DELETE(allocator, struct spudnet_instance_t, instance);
 		return spudnet_error_record(out_error, SPUDRESULT_SPUDNET_STARTUP_FAILED, SPUDNET_ERROR_SOURCE_CURL, code, curl_easy_strerror(code));
 	}
 	*out_instance = instance;
@@ -118,8 +121,9 @@ void spudnet_instance_destroy(spudnet_instance instance) {
 		return;
 	// Thread-safe on any libcurl an instance could have been made with.
 	curl_global_cleanup();
-	free((void *)instance->debug_name);
-	free(instance);
+	const SPUD_ALLOCATOR allocator = instance->head.allocator;
+	spud_string_free(&allocator, instance->head.debug_name);
+	SPUD_DELETE(&allocator, struct spudnet_instance_t, instance);
 }
 
 // --------------------------------------------------------------------------
@@ -169,8 +173,14 @@ static SPUDRESULT spudnet_curl_failed(spudnet_error *record, CURLcode code, SPUD
 
 /* The caller's headers as the list libcurl takes. A header with no name or
  * value is SPUDRESULT_DESC_INVALID_PARAMETERS and a failed allocation is
- * SPUDRESULT_OUT_OF_MEMORY; `*out_list` is NULL after either. */
-static SPUDRESULT spudnet_curl_headers(const spudnet_header *headers, uint32_t header_count, struct curl_slist **out_list) {
+ * SPUDRESULT_OUT_OF_MEMORY; `*out_list` is NULL after either. Each line is
+ * put together through `allocator` and freed once libcurl has its copy;
+ * the list itself is libcurl's. */
+static SPUDRESULT spudnet_curl_headers(
+    const SPUD_ALLOCATOR *allocator,
+    const spudnet_header *headers,
+    uint32_t header_count,
+    struct curl_slist **out_list) {
 	SPUDRESULT result = SPUD_SUCCESS;
 	*out_list         = NULL;
 	for (uint32_t i = 0; i < header_count; ++i) {
@@ -180,7 +190,8 @@ static SPUDRESULT spudnet_curl_headers(const spudnet_header *headers, uint32_t h
 		}
 		size_t name_length  = strlen(headers[i].name);
 		size_t value_length = strlen(headers[i].value);
-		char  *line         = (char *)malloc(name_length + 2 + value_length + 1);
+		size_t line_size    = name_length + 2 + value_length + 1;
+		char  *line         = (char *)spud_allocate(allocator, line_size, 1);
 		if (!line) {
 			result = SPUDRESULT_OUT_OF_MEMORY;
 			goto failed;
@@ -195,7 +206,7 @@ static SPUDRESULT spudnet_curl_headers(const spudnet_header *headers, uint32_t h
 			memcpy(line + name_length + 2, headers[i].value, value_length + 1);
 		}
 		struct curl_slist *grown = curl_slist_append(*out_list, line);
-		free(line);
+		spud_free(allocator, line, line_size, 1);
 		if (!grown) {
 			result = SPUDRESULT_OUT_OF_MEMORY;
 			goto failed;
@@ -249,14 +260,19 @@ struct spudnet_curl_tls {
 	bool              skip_host_name_check;
 	char             *roots; // every root, as PEM one after another; or NULL
 	size_t            roots_size;
+	size_t            roots_capacity; // the bytes `roots` was allocated with
 	char             *pins;  // "sha256//<base64>;sha256//<base64>", or NULL
+	size_t            pins_capacity; // the bytes `pins` was allocated with
 };
 
-static void spudnet_curl_tls_free(struct spudnet_curl_tls *tls) {
-	free(tls->roots);
-	free(tls->pins);
-	tls->roots = NULL;
-	tls->pins  = NULL;
+/* Frees what spudnet_curl_tls_create made, through the same allocator. */
+static void spudnet_curl_tls_free(const SPUD_ALLOCATOR *allocator, struct spudnet_curl_tls *tls) {
+	spud_free(allocator, tls->roots, tls->roots_capacity, 1);
+	spud_free(allocator, tls->pins, tls->pins_capacity, 1);
+	tls->roots          = NULL;
+	tls->roots_capacity = 0;
+	tls->pins           = NULL;
+	tls->pins_capacity  = 0;
 }
 
 static size_t spudnet_curl_base64_length(size_t size) { return (size + 2) / 3 * 4; }
@@ -280,8 +296,9 @@ static char *spudnet_curl_base64(const uint8_t *data, size_t size, char *out) {
 	return out;
 }
 
-/* Fills `out_tls`, which the caller frees with spudnet_curl_tls_free. */
-static SPUDRESULT spudnet_curl_tls_create(const spudnet_tls_desc *desc, struct spudnet_curl_tls *out_tls) {
+/* Fills `out_tls` through `allocator`, which the caller frees with
+ * spudnet_curl_tls_free and the same allocator. */
+static SPUDRESULT spudnet_curl_tls_create(const SPUD_ALLOCATOR *allocator, const spudnet_tls_desc *desc, struct spudnet_curl_tls *out_tls) {
 	static const char pem_begin[]  = "-----BEGIN CERTIFICATE-----\n";
 	static const char pem_end[]    = "-----END CERTIFICATE-----\n";
 	static const char pin_prefix[] = "sha256//";
@@ -309,11 +326,13 @@ static SPUDRESULT spudnet_curl_tls_create(const spudnet_tls_desc *desc, struct s
 		}
 		// `line` holds one root's base64 before it is cut into lines; the
 		// total is room enough for the longest.
-		out_tls->roots = (char *)malloc(total);
-		char *line     = (char *)malloc(total);
+		out_tls->roots = (char *)spud_allocate(allocator, total, 1);
+		if (out_tls->roots)
+			out_tls->roots_capacity = total;
+		char *line = (char *)spud_allocate(allocator, total, 1);
 		if (!out_tls->roots || !line) {
-			free(line);
-			spudnet_curl_tls_free(out_tls);
+			spud_free(allocator, line, total, 1);
+			spudnet_curl_tls_free(allocator, out_tls);
 			return SPUDRESULT_OUT_OF_MEMORY;
 		}
 		char *at = out_tls->roots;
@@ -330,17 +349,18 @@ static SPUDRESULT spudnet_curl_tls_create(const spudnet_tls_desc *desc, struct s
 			memcpy(at, pem_end, sizeof(pem_end) - 1);
 			at += sizeof(pem_end) - 1;
 		}
-		free(line);
+		spud_free(allocator, line, total, 1);
 		out_tls->roots_size = (size_t)(at - out_tls->roots);
 	}
 
 	if (desc->pin_count > 0) {
 		size_t each   = sizeof(pin_prefix) - 1 + spudnet_curl_base64_length(SPUDNET_TLS_PIN_SIZE) + 1; // and a ';' or the terminator
-		out_tls->pins = (char *)malloc((size_t)desc->pin_count * each);
+		out_tls->pins = (char *)spud_allocate_array(allocator, desc->pin_count, each, 1, false);
 		if (!out_tls->pins) {
-			spudnet_curl_tls_free(out_tls);
+			spudnet_curl_tls_free(allocator, out_tls);
 			return SPUDRESULT_OUT_OF_MEMORY;
 		}
+		out_tls->pins_capacity = (size_t)desc->pin_count * each;
 		char *at = out_tls->pins;
 		for (uint32_t i = 0; i < desc->pin_count; ++i) {
 			memcpy(at, pin_prefix, sizeof(pin_prefix) - 1);
@@ -481,7 +501,7 @@ static enum spudnet_curl_outcome spudnet_curl_run(
  * connection, taking an unfinished one off drops it. */
 
 struct spudnet_http_client_t {
-	const char *debug_name;
+	spud_object_head head; // first: spudnethttp.c reaches the allocator through it
 	// Holds the open connections, and is driven by whichever transfer is
 	// under way - one at a time, which `busy` keeps to.
 	CURLM      *multi;
@@ -505,10 +525,11 @@ void spudnet_http_client_destroy(spudnet_http_client client) {
 		return;
 	if (client->multi)
 		curl_multi_cleanup(client->multi);
-	spudnet_curl_tls_free(&client->tls);
-	spudnet_proxy_free(&client->proxy);
-	free((void *)client->debug_name);
-	free(client);
+	const SPUD_ALLOCATOR allocator = client->head.allocator;
+	spudnet_curl_tls_free(&allocator, &client->tls);
+	spudnet_proxy_free(&allocator, &client->proxy);
+	spud_string_free(&allocator, client->head.debug_name);
+	SPUD_DELETE(&allocator, struct spudnet_http_client_t, client);
 }
 
 SPUDRESULT spudnet_http_client_create(
@@ -526,13 +547,14 @@ SPUDRESULT spudnet_http_client_create(
 	if (base_sr != SPUD_SUCCESS)
 		return base_sr;
 
-	struct spudnet_http_client_t *client = (struct spudnet_http_client_t *)calloc(1, sizeof(struct spudnet_http_client_t));
+	struct spudnet_http_client_t *client = SPUD_NEW_ZEROED(&instance->head.allocator, struct spudnet_http_client_t);
 	if (!client)
 		return SPUDRESULT_OUT_OF_MEMORY;
+	client->head.allocator = instance->head.allocator;
 	atomic_init(&client->busy, false);
-	SPUDRESULT result = spudnet_curl_tls_create(&desc->tls, &client->tls);
+	SPUDRESULT result = spudnet_curl_tls_create(&client->head.allocator, &desc->tls, &client->tls);
 	if (!SPUDFAIL(result))
-		result = spudnet_proxy_parse(&desc->proxy, &client->proxy);
+		result = spudnet_proxy_parse(&client->head.allocator, &desc->proxy, &client->proxy);
 	if (!SPUDFAIL(result)) {
 		client->multi = curl_multi_init();
 		if (!client->multi)
@@ -602,7 +624,9 @@ static size_t spudnet_curl_http_on_header(char *data, size_t size, size_t count,
 		http->block_has_location = true;
 	// A status line empties what was collected, so only the last block's
 	// headers are left.
-	if (!spudnet_head_add_header_line(&http->owner->head, data, bytes)) {
+	// libcurl calls back from inside curl_multi_perform, on the thread of
+	// the transfer call that is driving it: the caller's.
+	if (!spudnet_head_add_header_line(&http->owner->head.allocator, &http->owner->response, data, bytes)) {
 		http->out_of_memory = true;
 		return 0; // anything but the full count stops the transfer
 	}
@@ -634,11 +658,15 @@ static size_t spudnet_curl_http_on_body(char *data, size_t size, size_t count, v
 		return CURL_WRITEFUNC_PAUSE;
 	}
 	if (bytes > http->pending_capacity) {
-		uint8_t *moved = (uint8_t *)realloc(http->pending, bytes);
+		// The old piece has all been taken, so nothing of it is kept. On the
+		// caller's thread, as the header callback is.
+		const SPUD_ALLOCATOR *allocator = &http->owner->head.allocator;
+		uint8_t              *moved     = (uint8_t *)spud_allocate(allocator, bytes, 1);
 		if (!moved) {
 			http->out_of_memory = true;
 			return 0; // anything but the full count stops the transfer
 		}
+		spud_free(allocator, http->pending, http->pending_capacity, 1);
 		http->pending          = moved;
 		http->pending_capacity = bytes;
 	}
@@ -746,7 +774,7 @@ static void spudnet_curl_http_unpause(struct spudnet_curl_http *http) {
 }
 
 SPUDRESULT spudnet_http_backend_create(struct spudnet_http_transfer_t *transfer) {
-	struct spudnet_curl_http *http = (struct spudnet_curl_http *)calloc(1, sizeof(struct spudnet_curl_http));
+	struct spudnet_curl_http *http = SPUD_NEW_ZEROED(&transfer->head.allocator, struct spudnet_curl_http);
 	if (!http)
 		return SPUDRESULT_OUT_OF_MEMORY;
 	http->owner  = transfer;
@@ -754,7 +782,7 @@ SPUDRESULT spudnet_http_backend_create(struct spudnet_http_transfer_t *transfer)
 	atomic_init(&http->aborted, false);
 	http->curl = curl_easy_init();
 	if (!http->curl) {
-		free(http);
+		SPUD_DELETE(&transfer->head.allocator, struct spudnet_curl_http, http);
 		return SPUDRESULT_OUT_OF_MEMORY;
 	}
 	transfer->backend = http;
@@ -771,10 +799,10 @@ void spudnet_http_backend_destroy(struct spudnet_http_transfer_t *transfer) {
 		curl_multi_remove_handle(http->client->multi, http->curl);
 	curl_easy_cleanup(http->curl);
 	curl_slist_free_all(http->headers);
-	free(http->pending);
+	spud_free(&transfer->head.allocator, http->pending, http->pending_capacity, 1);
 	if (http->holds_client)
 		atomic_store(&http->client->busy, false);
-	free(http);
+	SPUD_DELETE(&transfer->head.allocator, struct spudnet_curl_http, http);
 	transfer->backend = NULL;
 }
 
@@ -801,7 +829,7 @@ SPUDRESULT spudnet_http_backend_start(
 		return SPUDRESULT_SPUDNET_INVALID_HTTP_TRANSFER;
 	http->holds_client = true;
 
-	SPUDRESULT headers_result = spudnet_curl_headers(desc->headers, desc->header_count, &http->headers);
+	SPUDRESULT headers_result = spudnet_curl_headers(&transfer->head.allocator, desc->headers, desc->header_count, &http->headers);
 	if (SPUDFAIL(headers_result))
 		return headers_result;
 
@@ -942,7 +970,7 @@ SPUDRESULT spudnet_http_backend_receive_response(
 	curl_easy_getinfo(http->curl, CURLINFO_RESPONSE_CODE, &status);
 	if (status <= 0)
 		return SPUDRESULT_SPUDNET_HTTP_FAILED; // ended cleanly with no response at all
-	transfer->head.status = (uint32_t)status;
+	transfer->response.status = (uint32_t)status;
 	return SPUD_SUCCESS;
 }
 
@@ -996,7 +1024,7 @@ SPUDRESULT spudnet_http_backend_recv(
 #if LIBCURL_VERSION_NUM >= 0x080b00
 
 struct spudnet_websocket_t {
-	const char *debug_name;
+	spud_object_head head;
 	spudnet_instance instance;
 	// The multi handle only drives the opening request; the easy handle
 	// stays on it afterwards because that is what keeps a connect-only
@@ -1142,12 +1170,13 @@ void spudnet_websocket_destroy(spudnet_websocket socket) {
 	if (socket->multi)
 		curl_multi_cleanup(socket->multi);
 	curl_slist_free_all(socket->headers);
-	spudnet_curl_tls_free(&socket->tls);
+	const SPUD_ALLOCATOR allocator = socket->head.allocator;
+	spudnet_curl_tls_free(&allocator, &socket->tls);
 	if (socket->wake >= 0)
 		close(socket->wake);
 	pthread_mutex_destroy(&socket->lock);
-	free((void *)socket->debug_name);
-	free(socket);
+	spud_string_free(&allocator, socket->head.debug_name);
+	SPUD_DELETE(&allocator, struct spudnet_websocket_t, socket);
 }
 
 spudnet_instance spudnet_websocket_instance(spudnet_websocket socket) { return socket ? socket->instance : NULL; }
@@ -1163,10 +1192,11 @@ SPUDRESULT spudnet_websocket_create(
 	if (!spudnet_curl_has_websocket())
 		return SPUDRESULT_SPUDNET_UNSUPPORTED;
 
-	struct spudnet_websocket_t *socket = (struct spudnet_websocket_t *)calloc(1, sizeof(struct spudnet_websocket_t));
+	struct spudnet_websocket_t *socket = SPUD_NEW_ZEROED(&instance->head.allocator, struct spudnet_websocket_t);
 	if (!socket)
 		return SPUDRESULT_OUT_OF_MEMORY;
-	socket->instance = instance;
+	socket->head.allocator = instance->head.allocator;
+	socket->instance       = instance;
 	pthread_mutex_init(&socket->lock, NULL);
 	atomic_init(&socket->aborted, false);
 	socket->descriptor = CURL_SOCKET_BAD;
@@ -1261,24 +1291,25 @@ SPUDRESULT spudnet_websocket_connect(
 	if (!spudnet_url_has_scheme(desc->url, "ws") && !spudnet_url_has_scheme(desc->url, "wss"))
 		return SPUDRESULT_SPUDNET_INVALID_URL;
 
-	uint64_t           start   = spudnet_curl_now_ms();
-	struct curl_slist *headers = NULL;
-	SPUDRESULT headers_result = spudnet_curl_headers(desc->headers, desc->header_count, &headers);
+	const SPUD_ALLOCATOR *allocator = &socket->head.allocator;
+	uint64_t              start     = spudnet_curl_now_ms();
+	struct curl_slist    *headers   = NULL;
+	SPUDRESULT headers_result = spudnet_curl_headers(allocator, desc->headers, desc->header_count, &headers);
 	if (SPUDFAIL(headers_result))
 		return headers_result;
 
 	struct spudnet_curl_tls tls;
-	SPUDRESULT              result = spudnet_curl_tls_create(&desc->tls, &tls);
+	SPUDRESULT              result = spudnet_curl_tls_create(allocator, &desc->tls, &tls);
 	if (SPUDFAIL(result)) {
 		curl_slist_free_all(headers);
 		return result;
 	}
 	// Only needed until it has been set on the handle, which copies it.
 	struct spudnet_proxy proxy;
-	result = spudnet_proxy_parse(&desc->proxy, &proxy);
+	result = spudnet_proxy_parse(allocator, &desc->proxy, &proxy);
 	if (SPUDFAIL(result)) {
-		spudnet_proxy_free(&proxy);
-		spudnet_curl_tls_free(&tls);
+		spudnet_proxy_free(allocator, &proxy);
+		spudnet_curl_tls_free(allocator, &tls);
 		curl_slist_free_all(headers);
 		return result;
 	}
@@ -1295,8 +1326,8 @@ SPUDRESULT spudnet_websocket_connect(
 	pthread_mutex_unlock(&socket->lock);
 	if (SPUDFAIL(result)) {
 		curl_slist_free_all(headers);
-		spudnet_curl_tls_free(&tls);
-		spudnet_proxy_free(&proxy);
+		spudnet_curl_tls_free(allocator, &tls);
+		spudnet_proxy_free(allocator, &proxy);
 		return result;
 	}
 	socket->headers          = headers;
@@ -1312,7 +1343,7 @@ SPUDRESULT spudnet_websocket_connect(
 	// that decides what becomes of a redirect.
 	curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, desc->follow_redirects ? 1L : 0L);
 	spudnet_curl_proxy_apply(curl, &proxy);
-	spudnet_proxy_free(&proxy);
+	spudnet_proxy_free(allocator, &proxy);
 	// 2: do the opening request, then hand the connection over for
 	// curl_ws_send/curl_ws_recv instead of running a transfer on it.
 	curl_easy_setopt(curl, CURLOPT_CONNECT_ONLY, 2L);

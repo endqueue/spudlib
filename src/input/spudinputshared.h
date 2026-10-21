@@ -50,7 +50,11 @@ typedef struct spudinput_gamepad_record {
 } spudinput_gamepad_record;
 
 struct spudinput_instance_t {
+	/* The caller's desc; its `allocator` points at `allocator`. */
 	SPUDINPUT_INSTANCE_DESC desc;
+	/* The caller's allocator, copied. Everything of the instance's, the
+	 * backend's included, is allocated and freed through it. */
+	SPUD_ALLOCATOR allocator;
 
 	/* The connected gamepads, in the order they were first seen. */
 	spudinput_gamepad_record *records;

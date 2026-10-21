@@ -8,6 +8,7 @@
 #include "stdlib.h"
 #include "stdbool.h"
 #include "../../../spudstructbase.h"
+#include "../../spudgpushared.h"
 
 VkFormat convert_spud_to_vulkan_format(SPUDGPU_FORMAT format) {
     switch (format) {
@@ -196,11 +197,16 @@ static VkDevice spudgpuvulkan___initialize_vk_logical_device_internal(
 
     VkPhysicalDevice physicalDevice = device->_physical_device_vk;
 
+    const SPUD_ALLOCATOR *allocator = &device->head.allocator;
     uint32_t queueFamilyCount = 0;
     vkGetPhysicalDeviceQueueFamilyProperties(physicalDevice, &queueFamilyCount, NULL);
 
     //std::vector<VkQueueFamilyProperties> queueFamilies(queueFamilyCount);
-    VkQueueFamilyProperties *queueFamilies = calloc(queueFamilyCount, sizeof(VkQueueFamilyProperties));
+    // queueFamilyCount is kept as the count it is freed with.
+    VkQueueFamilyProperties *queueFamilies = SPUD_NEW_ARRAY_ZEROED(allocator, VkQueueFamilyProperties, queueFamilyCount);
+    if (!queueFamilies)
+        return VK_NULL_HANDLE;
+    const uint32_t queueFamilyCapacity = queueFamilyCount;
     vkGetPhysicalDeviceQueueFamilyProperties(physicalDevice, &queueFamilyCount, queueFamilies);
 
     // Set params to create (1) command queue with type graphics.
@@ -296,7 +302,12 @@ static VkDevice spudgpuvulkan___initialize_vk_logical_device_internal(
         uint32_t extensionCount = 0;
         vkEnumerateDeviceExtensionProperties(physicalDevice, NULL, &extensionCount, NULL);
         if (extensionCount > 0) {
-            VkExtensionProperties *extensions = calloc(extensionCount, sizeof(VkExtensionProperties));
+            const uint32_t extensionCapacity = extensionCount;
+            VkExtensionProperties *extensions = SPUD_NEW_ARRAY_ZEROED(allocator, VkExtensionProperties, extensionCapacity);
+            if (!extensions) {
+                SPUD_DELETE_ARRAY(allocator, VkQueueFamilyProperties, queueFamilies, queueFamilyCapacity);
+                return VK_NULL_HANDLE;
+            }
             vkEnumerateDeviceExtensionProperties(physicalDevice, NULL, &extensionCount, extensions);
             for (uint32_t i = 0; i < extensionCount; i++) {
                 if (strcmp(extensions[i].extensionName, VK_EXT_MESH_SHADER_EXTENSION_NAME) == 0) {
@@ -304,7 +315,7 @@ static VkDevice spudgpuvulkan___initialize_vk_logical_device_internal(
                     break;
                 }
             }
-            free(extensions);
+            SPUD_DELETE_ARRAY(allocator, VkExtensionProperties, extensions, extensionCapacity);
         }
     }
 
@@ -358,7 +369,7 @@ static VkDevice spudgpuvulkan___initialize_vk_logical_device_internal(
     if (r != VK_SUCCESS) {
         //throw std::runtime_error("failed to create logical device!");
         printf("failed to create logical device\n");
-        free(queueFamilies);
+        SPUD_DELETE_ARRAY(allocator, VkQueueFamilyProperties, queueFamilies, queueFamilyCapacity);
         return NULL;
     }
 
@@ -407,28 +418,29 @@ static VkDevice spudgpuvulkan___initialize_vk_logical_device_internal(
         m_resource_pool = std::static_pointer_cast<gpu_resource_pool_vulkan>(spudGpuVulkanPool);
     }*/
 
-    free(queueFamilies);
+    SPUD_DELETE_ARRAY(allocator, VkQueueFamilyProperties, queueFamilies, queueFamilyCapacity);
     return result;
 };
 
 // Whether the Vulkan loader offers instance extension [name].
-static bool spudgpuvulkan__instance_extension_available(const char *name) {
+static bool spudgpuvulkan__instance_extension_available(const SPUD_ALLOCATOR *allocator, const char *name) {
     uint32_t count = 0;
     if (vkEnumerateInstanceExtensionProperties(NULL, &count, NULL) != VK_SUCCESS || count == 0)
         return false;
-    VkExtensionProperties *properties = malloc(sizeof(VkExtensionProperties) * count);
+    const uint32_t capacity = count;
+    VkExtensionProperties *properties = SPUD_NEW_ARRAY(allocator, VkExtensionProperties, capacity);
     if (!properties)
         return false;
     bool found = false;
     if (vkEnumerateInstanceExtensionProperties(NULL, &count, properties) == VK_SUCCESS)
         for (uint32_t i = 0; i < count && !found; i++)
             found = strcmp(properties[i].extensionName, name) == 0;
-    free(properties);
+    SPUD_DELETE_ARRAY(allocator, VkExtensionProperties, properties, capacity);
     return found;
 }
 
 // The instance extensions, into [names] (room for 4), and their count.
-static void spudgpuvulkan__determine_vulkan_extensions(VkInstanceCreateInfo *pOutput, const char **names) {
+static void spudgpuvulkan__determine_vulkan_extensions(const SPUD_ALLOCATOR *allocator, VkInstanceCreateInfo *pOutput, const char **names) {
     if (!pOutput) return;
     uint32_t count = 0;
 #if defined(_WIN32)
@@ -444,7 +456,7 @@ static void spudgpuvulkan__determine_vulkan_extensions(VkInstanceCreateInfo *pOu
 #endif
     // Debug labels (spudgpu_cmd_begin_debug_label) and object names: only
     // read by tools, and enabled wherever the loader has them.
-    if (spudgpuvulkan__instance_extension_available(VK_EXT_DEBUG_UTILS_EXTENSION_NAME))
+    if (spudgpuvulkan__instance_extension_available(allocator, VK_EXT_DEBUG_UTILS_EXTENSION_NAME))
         names[count++] = VK_EXT_DEBUG_UTILS_EXTENSION_NAME;
     pOutput->enabledExtensionCount   = count;
     pOutput->ppEnabledExtensionNames = count ? names : NULL;
@@ -459,22 +471,22 @@ extern "C" {
 
 
 SPUDRESULT spudgpu_create_instance(
-    const char *application_name,
-    uint32_t application_version,
-    const char *engine_name,
-    uint32_t engine_version,
+    const spudgpu_instance_desc *desc,
     spudgpu_instance *out_instance) {
-    if (!out_instance) return SPUDRESULT_NULL_OUTPUT_PARAMETER;
+    const SPUDRESULT desc_result = spudgpu___internal_check_instance_desc(desc, out_instance);
+    if (desc_result != SPUD_SUCCESS) return desc_result;
+    // Only for the scratch arrays below, until the instance holds its copy.
+    const SPUD_ALLOCATOR *allocator = desc->allocator;
     spudgpu_instance_vulkan result = {0};
 
     VkApplicationInfo appInfo = {0};
     appInfo.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
     appInfo.pNext = NULL;
     appInfo.apiVersion = VK_API_VERSION_1_3;
-    appInfo.pApplicationName = application_name;
-    appInfo.applicationVersion = application_version;
-    appInfo.pEngineName = engine_name;
-    appInfo.engineVersion = engine_version;
+    appInfo.pApplicationName = desc->application_name;
+    appInfo.applicationVersion = desc->application_version;
+    appInfo.pEngineName = desc->engine_name;
+    appInfo.engineVersion = desc->engine_version;
 
     VkInstanceCreateInfo createInfo = {0};
     createInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
@@ -482,7 +494,7 @@ SPUDRESULT spudgpu_create_instance(
     createInfo.flags = 0;
     createInfo.pApplicationInfo = &appInfo;
     const char *extensionNames[4] = {0};
-    spudgpuvulkan__determine_vulkan_extensions(&createInfo, extensionNames);
+    spudgpuvulkan__determine_vulkan_extensions(allocator, &createInfo, extensionNames);
 
     createInfo.enabledLayerCount = 0;
     createInfo.ppEnabledLayerNames = NULL;
@@ -494,7 +506,10 @@ SPUDRESULT spudgpu_create_instance(
     static const char *validationLayer = "VK_LAYER_KHRONOS_validation";
     uint32_t availableLayerCount = 0;
     vkEnumerateInstanceLayerProperties(&availableLayerCount, NULL);
-    VkLayerProperties *availableLayers = malloc(sizeof(VkLayerProperties) * availableLayerCount);
+    const uint32_t availableLayerCapacity = availableLayerCount;
+    VkLayerProperties *availableLayers = SPUD_NEW_ARRAY(allocator, VkLayerProperties, availableLayerCapacity);
+    if (!availableLayers)
+        return SPUDRESULT_OUT_OF_MEMORY;
     vkEnumerateInstanceLayerProperties(&availableLayerCount, availableLayers);
     for (uint32_t i = 0; i < availableLayerCount; i++) {
         if (strcmp(availableLayers[i].layerName, validationLayer) == 0) {
@@ -503,7 +518,7 @@ SPUDRESULT spudgpu_create_instance(
             break;
         }
     }
-    free(availableLayers);
+    SPUD_DELETE_ARRAY(allocator, VkLayerProperties, availableLayers, availableLayerCapacity);
 #endif
 
     if (vkCreateInstance(&createInfo, NULL, &result._instance_vk) != VK_SUCCESS) {
@@ -512,31 +527,42 @@ SPUDRESULT spudgpu_create_instance(
     }
 
     // If successful, return a memcpy'ed heap pointer of the result
-    spudgpu_instance_vulkan *pResult = malloc(sizeof(spudgpu_instance_vulkan));
+    spudgpu_instance_vulkan *pResult = SPUD_NEW(allocator, spudgpu_instance_vulkan);
+    if (!pResult) {
+        vkDestroyInstance(result._instance_vk, NULL);
+        return SPUDRESULT_OUT_OF_MEMORY;
+    }
+    result.head.allocator = *desc->allocator;
     memcpy(pResult, &result, sizeof(spudgpu_instance_vulkan));
     *out_instance = pResult;
     return SPUD_SUCCESS;
 }
 
+// Frees a device spudgpu_enumerate_devices made, its name and its bindless
+// state included. NULL is nothing to free.
+static void spudgpuvulkan___destroy_device(spudgpu_device_vulkan *dev) {
+    if (!dev) return;
+    const SPUD_ALLOCATOR allocator = dev->head.allocator;
+    spudgpuvulkan___destroy_bindless_state((spudgpu_device) dev);
+    if (dev->_logical_device_vk)
+        vkDestroyDevice(dev->_logical_device_vk, NULL);
+    spud_string_free(&allocator, dev->head.debug_name);
+    SPUD_DELETE(&allocator, spudgpu_device_vulkan, dev);
+}
+
 SPUDRESULT spudgpu_destroy_instance(spudgpu_instance instance) {
     if (!instance) return SPUD_SUCCESS;
 
+    const SPUD_ALLOCATOR allocator = instance->head.allocator;
     // instance owns every spudgpu_device handed out by spudgpu_enumerate_devices
     // (there is no public spudgpu_destroy_device), and the array of them.
-    for (uint32_t i = 0; i < instance->_devices_count; i++) {
-        spudgpu_device_vulkan *dev = (spudgpu_device_vulkan *) instance->_devices[i];
-        if (!dev) continue;
-        // Created for every device in spudgpu_enumerate_devices.
-        spudgpuvulkan___destroy_bindless_state((spudgpu_device) dev);
-        vkDestroyDevice(dev->_logical_device_vk, NULL);
-        free((void *)dev->_debug_name);
-        free(dev);
-    }
-    free(instance->_devices);
+    for (uint32_t i = 0; i < instance->_devices_count; i++)
+        spudgpuvulkan___destroy_device((spudgpu_device_vulkan *) instance->_devices[i]);
+    SPUD_DELETE_ARRAY(&allocator, spudgpu_device, instance->_devices, instance->_devices_count);
 
     vkDestroyInstance(instance->_instance_vk, NULL);
-    free((void *)instance->_debug_name);
-    free(instance);
+    spud_string_free(&allocator, instance->head.debug_name);
+    SPUD_DELETE(&allocator, spudgpu_instance_vulkan, instance);
     return SPUD_SUCCESS;
 }
 
@@ -621,12 +647,13 @@ static void spudgpuvulkan___internal_make_device_properties(
     vkGetPhysicalDeviceQueueFamilyProperties(device->_physical_device_vk, &familyCount, NULL);
     device->_properties.pass_timestamps = false;
     if (device->_graphics_queue_family_index < familyCount) {
-        VkQueueFamilyProperties *families = malloc(sizeof(VkQueueFamilyProperties) * familyCount);
+        const uint32_t familyCapacity = familyCount;
+        VkQueueFamilyProperties *families = SPUD_NEW_ARRAY(&device->head.allocator, VkQueueFamilyProperties, familyCapacity);
         if (families) {
             vkGetPhysicalDeviceQueueFamilyProperties(device->_physical_device_vk, &familyCount, families);
             device->_properties.pass_timestamps =
                 families[device->_graphics_queue_family_index].timestampValidBits > 0;
-            free(families);
+            SPUD_DELETE_ARRAY(&device->head.allocator, VkQueueFamilyProperties, families, familyCapacity);
         }
     }
 }
@@ -651,24 +678,38 @@ SPUDRESULT spudgpu_enumerate_devices(
         //throw std::runtime_error("failed to find GPUs with Vulkan support!");
         return SPUDRESULT_GPU_DEVICE_ENUMERATION_FAILURE;
     }
-    VkPhysicalDevice *physicalDevices = malloc(sizeof(VkPhysicalDevice) * deviceCount);
+    const SPUD_ALLOCATOR *allocator = &instance->head.allocator;
+    // A count vkEnumeratePhysicalDevices may lower; the arrays are freed with
+    // the one they were made with.
+    const uint32_t physicalDeviceCapacity = deviceCount;
+    VkPhysicalDevice *physicalDevices = SPUD_NEW_ARRAY(allocator, VkPhysicalDevice, physicalDeviceCapacity);
+    if (!physicalDevices)
+        return SPUDRESULT_OUT_OF_MEMORY;
     vkEnumeratePhysicalDevices(instance->_instance_vk, &deviceCount, physicalDevices);
 
     // Finally initialize the Vulkan logical devices and gather them. The
     // array is the instance's, and the caller is handed it: the devices and
     // the array are freed by spudgpu_destroy_instance.
-    instance->_devices = calloc(deviceCount, sizeof(spudgpu_device));
-    if (!instance->_devices) {
-        free(physicalDevices);
+    spudgpu_device *devices = SPUD_NEW_ARRAY_ZEROED(allocator, spudgpu_device, deviceCount);
+    if (!devices) {
+        SPUD_DELETE_ARRAY(allocator, VkPhysicalDevice, physicalDevices, physicalDeviceCapacity);
         return SPUDRESULT_OUT_OF_MEMORY;
     }
-    instance->_devices_count = deviceCount;
-    *ppOutputDevices = instance->_devices;
-    *pOutputDevicesCount = deviceCount;
 
     for (size_t i = 0; i < deviceCount; i++) {
-        spudgpu_device_vulkan *pDeviceVulkan = malloc(sizeof(spudgpu_device_vulkan));
-        pDeviceVulkan->_debug_name = NULL;
+        // Zeroed: the name and the members a failed device creation leaves
+        // unset are null, which is what spudgpuvulkan___destroy_device frees.
+        spudgpu_device_vulkan *pDeviceVulkan = SPUD_NEW_ZEROED(allocator, spudgpu_device_vulkan);
+        if (!pDeviceVulkan) {
+            // All or none: the devices made so far go with the array.
+            for (size_t j = 0; j < i; j++)
+                spudgpuvulkan___destroy_device((spudgpu_device_vulkan *) devices[j]);
+            SPUD_DELETE_ARRAY(allocator, spudgpu_device, devices, deviceCount);
+            SPUD_DELETE_ARRAY(allocator, VkPhysicalDevice, physicalDevices, physicalDeviceCapacity);
+            return SPUDRESULT_OUT_OF_MEMORY;
+        }
+        pDeviceVulkan->head.debug_name = NULL;
+        pDeviceVulkan->head.allocator = instance->head.allocator;
         pDeviceVulkan->_bindless = NULL;
         pDeviceVulkan->_instance = *instance;
         pDeviceVulkan->_physical_device_vk = physicalDevices[i];
@@ -684,10 +725,15 @@ SPUDRESULT spudgpu_enumerate_devices(
         // snapshot) — see spudgpuvulkandescriptors.c's bindless section.
         spudgpuvulkan___ensure_bindless_state(pDeviceVulkan);
 
-        instance->_devices[i] = (spudgpu_device) pDeviceVulkan;
+        devices[i] = (spudgpu_device) pDeviceVulkan;
     }
 
-    free(physicalDevices);
+    instance->_devices = devices;
+    instance->_devices_count = deviceCount;
+    *ppOutputDevices = instance->_devices;
+    *pOutputDevicesCount = deviceCount;
+
+    SPUD_DELETE_ARRAY(allocator, VkPhysicalDevice, physicalDevices, physicalDeviceCapacity);
     return SPUD_SUCCESS;
 }
 

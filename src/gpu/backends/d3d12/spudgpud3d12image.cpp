@@ -292,18 +292,19 @@ SPUDRESULT spudgpu_create_image(
 		return descResult;
 
 	spudgpu_image_d3d12 *pResult =
-	    (spudgpu_image_d3d12 *)malloc(sizeof(spudgpu_image_d3d12));
+	    SPUD_NEW(&device->head.allocator, spudgpu_image_d3d12);
 	if (!pResult)
 		return SPUDRESULT_OUT_OF_MEMORY;
-	pResult          = new (pResult) spudgpu_image_d3d12();
-	pResult->_device = device;
-	pResult->_desc   = *desc;
+	pResult                 = new (pResult) spudgpu_image_d3d12();
+	pResult->head.allocator = device->head.allocator;
+	pResult->_device        = device;
+	pResult->_desc          = *desc;
 
 	SPUDRESULT sr = spudgpu_d3d12_create_resource_desc_from_image(
 	    desc, &pResult->_d3d_resource_desc);
 	if (sr != SPUD_SUCCESS) {
 		pResult->~spudgpu_image_d3d12();
-		free(pResult);
+		SPUD_DELETE(&device->head.allocator, spudgpu_image_d3d12, pResult);
 		return sr;
 	}
 
@@ -328,7 +329,7 @@ SPUDRESULT spudgpu_create_image(
 		    desc->width, desc->height, (unsigned)pResult->_d3d_resource_desc.Format, (unsigned)pResult->_d3d_resource_desc.Flags,
 		    (unsigned)d3dHeapFlags, (unsigned)d3dInitialState, (unsigned long)hr);
 		pResult->~spudgpu_image_d3d12();
-		free(pResult);
+		SPUD_DELETE(&device->head.allocator, spudgpu_image_d3d12, pResult);
 		return SPUDRESULT_API_SPECIFIC_FAILURE;
 	}
 	pResult->_current_state = d3dInitialState;
@@ -337,7 +338,7 @@ SPUDRESULT spudgpu_create_image(
 		spudgpu_destroy_image(pResult);
 		return SPUDRESULT_OUT_OF_MEMORY;
 	}
-	pResult->_desc.debug_name = pResult->_debug_name;
+	pResult->_desc.debug_name = pResult->head.debug_name;
 
 	*out_image = pResult;
 
@@ -349,9 +350,10 @@ void spudgpu_destroy_image(spudgpu_image image) {
     if (image->_heap)
         image->_heap->_placed_count--;
 #endif
-    free((void *)image->_debug_name);
+    const SPUD_ALLOCATOR allocator = image->head.allocator;
+    spud_string_free(&allocator, image->head.debug_name);
     image->~spudgpu_image_d3d12();
-    free(image);
+    SPUD_DELETE(&allocator, spudgpu_image_d3d12, image);
 }
 SPUDRESULT spudgpu_get_image_desc(
 	spudgpu_image image,
@@ -396,10 +398,11 @@ SPUDRESULT spudgpu_create_image_view(
 	if (desc->subresource_range.aspect_mask & ~spudgpu_d3d12_format_aspects(image->_desc.format))
 		return SPUDRESULT_DESC_INVALID_PARAMETERS;
 
-	spudgpu_image_view_d3d12 *pResult = (spudgpu_image_view_d3d12 *)calloc(
-	    1, sizeof(spudgpu_image_view_d3d12));
+	spudgpu_image_view_d3d12 *pResult = SPUD_NEW_ZEROED(
+	    &image->_device->head.allocator, spudgpu_image_view_d3d12);
 	if (!pResult)
 		return SPUDRESULT_OUT_OF_MEMORY;
+	pResult->head.allocator = image->_device->head.allocator;
 	pResult->_image = image;
 	pResult->_desc  = *desc;
 	pResult->_desc.parent_image = image;
@@ -482,8 +485,9 @@ SPUDRESULT spudgpu_create_image_view(
 void spudgpu_destroy_image_view(spudgpu_image_view image_view) {
 	if (!image_view)
 		return;
-	free((void *)image_view->_debug_name);
-	free(image_view);
+	const SPUD_ALLOCATOR allocator = image_view->head.allocator;
+	spud_string_free(&allocator, image_view->head.debug_name);
+	SPUD_DELETE(&allocator, spudgpu_image_view_d3d12, image_view);
 }
 SPUDRESULT spudgpu_get_image_view_desc(
     spudgpu_image_view image_view, spudgpu_image_view_desc *out_desc) {

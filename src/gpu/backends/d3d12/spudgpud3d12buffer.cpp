@@ -65,12 +65,13 @@ SPUDRESULT spudgpu_create_buffer(
 		return descResult;
 
 	spudgpu_buffer_d3d12 *pResult =
-	    (spudgpu_buffer_d3d12 *)malloc(sizeof(spudgpu_buffer_d3d12));
+	    SPUD_NEW(&device->head.allocator, spudgpu_buffer_d3d12);
 	if (!pResult)
 		return SPUDRESULT_OUT_OF_MEMORY;
-	pResult          = new (pResult) spudgpu_buffer_d3d12();
-	pResult->_device = device;
-	pResult->_desc   = *desc;
+	pResult                 = new (pResult) spudgpu_buffer_d3d12();
+	pResult->head.allocator = device->head.allocator;
+	pResult->_device        = device;
+	pResult->_desc          = *desc;
 
 	pResult->_d3d_resource_desc =
 	    spudgpu_d3d12_create_resource_desc_from_buffer(desc);
@@ -85,7 +86,7 @@ SPUDRESULT spudgpu_create_buffer(
 	        d3dInitialState, nullptr,
 	        IID_PPV_ARGS(&pResult->_d3d_resource))) {
 		pResult->~spudgpu_buffer_d3d12();
-		free(pResult);
+		SPUD_DELETE(&device->head.allocator, spudgpu_buffer_d3d12, pResult);
 		return SPUDRESULT_API_SPECIFIC_FAILURE;
 	}
 	// spudgpu_get_buffer_gpu_address hands this back (see spudgpu.h).
@@ -95,7 +96,7 @@ SPUDRESULT spudgpu_create_buffer(
 		spudgpu_destroy_buffer(pResult);
 		return SPUDRESULT_OUT_OF_MEMORY;
 	}
-	pResult->_desc.debug_name = pResult->_debug_name;
+	pResult->_desc.debug_name = pResult->head.debug_name;
 
 	*out_buffer = pResult;
 	return SPUD_SUCCESS;
@@ -107,9 +108,10 @@ void spudgpu_destroy_buffer(spudgpu_buffer buffer) {
 	if (buffer->_heap)
 		buffer->_heap->_placed_count--;
 #endif
-	free((void *)buffer->_debug_name);
+	const SPUD_ALLOCATOR allocator = buffer->head.allocator;
+	spud_string_free(&allocator, buffer->head.debug_name);
 	buffer->~spudgpu_buffer_d3d12();
-	free(buffer);
+	SPUD_DELETE(&allocator, spudgpu_buffer_d3d12, buffer);
 }
 SPUDRESULT
 spudgpu_get_buffer_desc(spudgpu_buffer buffer, spudgpu_buffer_desc *out_desc) {
@@ -150,12 +152,13 @@ SPUDRESULT spudgpu_create_buffer_view(
 	if (desc->offset_from_parent_buffer + desc->size > buffer->_desc.size)
 		return SPUDRESULT_GPU_BUFFER_OR_IMAGE_VIEW_RANGE_OUT_OF_SCOPE;
 
-	spudgpu_buffer_view_d3d12 *pResult = (spudgpu_buffer_view_d3d12 *)calloc(
-	    1, sizeof(spudgpu_buffer_view_d3d12));
+	spudgpu_buffer_view_d3d12 *pResult = SPUD_NEW_ZEROED(
+	    &buffer->_device->head.allocator, spudgpu_buffer_view_d3d12);
 	if (!pResult)
 		return SPUDRESULT_OUT_OF_MEMORY;
-	pResult->_buffer = buffer;
-	pResult->_desc   = *desc;
+	pResult->head.allocator = buffer->_device->head.allocator;
+	pResult->_buffer        = buffer;
+	pResult->_desc          = *desc;
 
 	// spudgpu_buffer_desc::usage is a bitmask (a buffer can legitimately carry
 	// more than one usage, e.g. UNIFORM | VERTEX for a per-instance buffer
@@ -178,7 +181,7 @@ SPUDRESULT spudgpu_create_buffer_view(
 		else if (desc->stride == 2)
 			pResult->_d3d_view._ib.Format = DXGI_FORMAT_R16_UINT;
 		else {
-			free(pResult);
+			SPUD_DELETE(&buffer->_device->head.allocator, spudgpu_buffer_view_d3d12, pResult);
 			return SPUDRESULT_GPU_INVALID_INDEX_STRIDE;
 		}
 		pResult->_d3d_view._ib.SizeInBytes = desc->size;
@@ -199,8 +202,9 @@ SPUDRESULT spudgpu_create_buffer_view(
 void spudgpu_destroy_buffer_view(spudgpu_buffer_view buffer) {
 	if (!buffer)
 		return;
-	free((void *)buffer->_debug_name);
-	free(buffer);
+	const SPUD_ALLOCATOR allocator = buffer->head.allocator;
+	spud_string_free(&allocator, buffer->head.debug_name);
+	SPUD_DELETE(&allocator, spudgpu_buffer_view_d3d12, buffer);
 }
 SPUDRESULT spudgpu_get_buffer_view_desc(
     spudgpu_buffer_view view, spudgpu_buffer_view_desc *out_desc) {

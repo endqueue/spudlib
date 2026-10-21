@@ -30,8 +30,12 @@ extern "C" {
 // must already be set; if the layout doesn't describe exactly that many
 // channels, the result is no layout (all UNSPECIFIED). Without AudioToolbox
 // (watchOS) a tag can't be expanded, so a tag-only layout is no layout
-// there rather than a guess.
-void spudaudio_apple_layout_to_positions(const AudioChannelLayout *layout, SPUDAUDIO_FORMAT *out);
+// there rather than a guess. Expanding a tag takes a scratch block from
+// `allocator`, freed before the call returns.
+void spudaudio_apple_layout_to_positions(
+    const SPUD_ALLOCATOR *allocator,
+    const AudioChannelLayout *layout,
+    SPUDAUDIO_FORMAT *out);
 
 // mach_absolute_time units (AudioTimeStamp.mHostTime) to nanoseconds —
 // the clock spudperf_get_monotonic_time_ns reads on Apple platforms.

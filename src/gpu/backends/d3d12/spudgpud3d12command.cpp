@@ -66,14 +66,14 @@ SPUDRESULT spudgpu_submit_command_lists(
 	if (cmd_list_count == 0)
 		return SPUDRESULT_ZERO_SIZE;
 	ID3D12CommandList **d3dLists =
-	    (ID3D12CommandList **)malloc(sizeof(ID3D12CommandList *) * cmd_list_count);
+	    SPUD_NEW_ARRAY(&queue->head.allocator, ID3D12CommandList *, cmd_list_count);
 	if (!d3dLists)
 		return SPUDRESULT_OUT_OF_MEMORY;
 	for (uint32_t i = 0; i < cmd_list_count; ++i)
 		d3dLists[i] = cmd_lists[i]->_d3d_cmd_list.Get();
 	queue->_d3d_cmd_queue->ExecuteCommandLists(
 	    static_cast<UINT>(cmd_list_count), d3dLists);
-	free(d3dLists);
+	SPUD_DELETE_ARRAY(&queue->head.allocator, ID3D12CommandList *, d3dLists, cmd_list_count);
 	return SPUD_SUCCESS;
 }
 
@@ -114,18 +114,18 @@ SPUDRESULT spudgpu_create_command_allocator(
 	if (!out_allocator)
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
 	spudgpu_command_allocator_d3d12 *pResult =
-	    (spudgpu_command_allocator_d3d12 *)malloc(
-	        sizeof(spudgpu_command_allocator_d3d12));
+	    SPUD_NEW(&device->head.allocator, spudgpu_command_allocator_d3d12);
 	if (!pResult)
 		return SPUDRESULT_OUT_OF_MEMORY;
-	pResult          = new (pResult) spudgpu_command_allocator_d3d12();
-	pResult->_device = device;
+	pResult                 = new (pResult) spudgpu_command_allocator_d3d12();
+	pResult->head.allocator = device->head.allocator;
+	pResult->_device        = device;
     pResult->_d3d_cmd_list_type = spudgpu_d3d12_get_command_list_type(desc->type);
 	if (FAILED(device->_d3d_device->CreateCommandAllocator(
 	        pResult->_d3d_cmd_list_type,
 	        IID_PPV_ARGS(&pResult->_d3d_cmd_allocator)))) {
 		pResult->~spudgpu_command_allocator_d3d12();
-		free(pResult);
+		SPUD_DELETE(&device->head.allocator, spudgpu_command_allocator_d3d12, pResult);
 		return SPUDRESULT_API_SPECIFIC_FAILURE;
 	}
 	*out_allocator = pResult;
@@ -135,9 +135,10 @@ SPUDRESULT spudgpu_create_command_allocator(
 void spudgpu_destroy_command_allocator(spudgpu_command_allocator allocator) {
 	if (!allocator)
 		return;
-	free((void *)allocator->_debug_name);
+	const SPUD_ALLOCATOR memory_allocator = allocator->head.allocator;
+	spud_string_free(&memory_allocator, allocator->head.debug_name);
 	allocator->~spudgpu_command_allocator_d3d12();
-	free(allocator);
+	SPUD_DELETE(&memory_allocator, spudgpu_command_allocator_d3d12, allocator);
 }
 
 SPUDRESULT
@@ -159,17 +160,18 @@ SPUDRESULT spudgpu_create_command_list(
 		return SPUDRESULT_GPU_INVALID_COMMAND_ALLOCATOR;
     if (!out_cmd_list)
         return SPUDRESULT_NULL_OUTPUT_PARAMETER;
-    spudgpu_command_list_d3d12 *pResult = (spudgpu_command_list_d3d12 *) malloc(sizeof(spudgpu_command_list_d3d12));
+    spudgpu_command_list_d3d12 *pResult = SPUD_NEW(&allocator->_device->head.allocator, spudgpu_command_list_d3d12);
     if (!pResult)
         return SPUDRESULT_OUT_OF_MEMORY;
     pResult = new (pResult) spudgpu_command_list_d3d12();
+    pResult->head.allocator = allocator->_device->head.allocator;
     pResult->_allocator = allocator;
     if (FAILED(pResult->_allocator->_device->_d3d_device->CreateCommandList1(
         1, allocator->_d3d_cmd_list_type, D3D12_COMMAND_LIST_FLAG_NONE,
         IID_PPV_ARGS(&pResult->_d3d_cmd_list)
     ))) {
         pResult->~spudgpu_command_list_d3d12();
-        free(pResult);
+        SPUD_DELETE(&allocator->_device->head.allocator, spudgpu_command_list_d3d12, pResult);
         return SPUDRESULT_API_SPECIFIC_FAILURE;
     }
 	*out_cmd_list = pResult;
@@ -182,9 +184,10 @@ void spudgpu_destroy_command_list(spudgpu_command_list cmd) {
     if (cmd->_allocator->_open_list == cmd)
         cmd->_allocator->_open_list = nullptr;
 #endif
-    free((void *)cmd->_debug_name);
+    const SPUD_ALLOCATOR allocator = cmd->head.allocator;
+    spud_string_free(&allocator, cmd->head.debug_name);
     cmd->~spudgpu_command_list_d3d12();
-    free(cmd);
+    SPUD_DELETE(&allocator, spudgpu_command_list_d3d12, cmd);
 }
 void spudgpu_begin_command_list(spudgpu_command_list cmd)
 {
@@ -246,8 +249,8 @@ void spudgpu_cmd_set_scissor_rects(
 	// SPUDGPU_SCISSOR_RECT is {x, y, width, height} floats; D3D12_RECT is
 	// {left, top, right, bottom} LONGs -- not layout-compatible, needs a
 	// real per-rect conversion rather than a reinterpret_cast.
-	D3D12_RECT *d3dRects = (D3D12_RECT *)malloc(
-	    sizeof(D3D12_RECT) * scissor_rect_count);
+	D3D12_RECT *d3dRects = SPUD_NEW_ARRAY(
+	    &cmd->head.allocator, D3D12_RECT, scissor_rect_count);
 	if (!d3dRects)
 		return;
 	for (uint32_t i = 0; i < scissor_rect_count; ++i) {
@@ -258,7 +261,7 @@ void spudgpu_cmd_set_scissor_rects(
 	}
 	cmd->_d3d_cmd_list->RSSetScissorRects(
 	    static_cast<UINT>(scissor_rect_count), d3dRects);
-	free(d3dRects);
+	SPUD_DELETE_ARRAY(&cmd->head.allocator, D3D12_RECT, d3dRects, scissor_rect_count);
 }
 void spudgpu_cmd_set_vertex_buffers(
     spudgpu_command_list cmd,
@@ -267,8 +270,8 @@ void spudgpu_cmd_set_vertex_buffers(
     spudgpu_buffer_view *buffer_views) {
 	if (!cmd || !view_count || !buffer_views)
 		return;
-	D3D12_VERTEX_BUFFER_VIEW *d3dVbViews = (D3D12_VERTEX_BUFFER_VIEW *)malloc(
-	    sizeof(D3D12_VERTEX_BUFFER_VIEW) * view_count);
+	D3D12_VERTEX_BUFFER_VIEW *d3dVbViews = SPUD_NEW_ARRAY(
+	    &cmd->head.allocator, D3D12_VERTEX_BUFFER_VIEW, view_count);
 	if (!d3dVbViews)
 		return;
 	for (uint32_t i = 0; i < view_count; ++i)
@@ -278,7 +281,7 @@ void spudgpu_cmd_set_vertex_buffers(
 		static_cast<UINT>(view_count),
 		d3dVbViews
 	);
-	free(d3dVbViews);
+	SPUD_DELETE_ARRAY(&cmd->head.allocator, D3D12_VERTEX_BUFFER_VIEW, d3dVbViews, view_count);
 }
 void spudgpu_cmd_set_index_buffer(
     spudgpu_command_list cmd,
@@ -418,7 +421,8 @@ static ID3D12CommandSignature *spudgpu_d3d12___get_draw_indirect_signature(
 
 	if (kept.count == kept.capacity) {
 		uint32_t capacity = kept.capacity ? kept.capacity * 2 : 4;
-		auto *grown       = (spudgpu_d3d12_indirect_signature *)realloc(kept.entries, capacity * sizeof(spudgpu_d3d12_indirect_signature));
+		auto *grown       = SPUD_RESIZE_ARRAY(&device->head.allocator, spudgpu_d3d12_indirect_signature, kept.entries, kept.capacity, capacity);
+		// Out of memory: the old array is untouched and still the device's.
 		if (!grown)
 			return nullptr;
 		kept.entries  = grown;
@@ -600,7 +604,7 @@ SPUDRESULT spudgpu_queue_submit(
 	// Allocated before the waits are queued, so a failed allocation leaves
 	// the queue untouched.
 	ID3D12CommandList **d3dLists =
-	    (ID3D12CommandList **)malloc(sizeof(ID3D12CommandList *) * desc->cmd_list_count);
+	    SPUD_NEW_ARRAY(&queue->head.allocator, ID3D12CommandList *, desc->cmd_list_count);
 	if (!d3dLists)
 		return SPUDRESULT_OUT_OF_MEMORY;
 	for (uint32_t i = 0; i < desc->wait_semaphore_count; ++i) {
@@ -611,7 +615,7 @@ SPUDRESULT spudgpu_queue_submit(
 		d3dLists[i] = desc->cmd_lists[i]->_d3d_cmd_list.Get();
 	queue->_d3d_cmd_queue->ExecuteCommandLists(
 	    static_cast<UINT>(desc->cmd_list_count), d3dLists);
-	free(d3dLists);
+	SPUD_DELETE_ARRAY(&queue->head.allocator, ID3D12CommandList *, d3dLists, desc->cmd_list_count);
 
 	// Everything below is queued behind the command lists, so it is
 	// signaled once they have run.

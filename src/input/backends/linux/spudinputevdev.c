@@ -150,6 +150,9 @@ typedef struct spudinput_evdev_axis_source {
 /* This backend's object for one device: spudinput_gamepad_record's
  * `native`. */
 typedef struct spudinput_evdev_pad {
+	/* The instance's allocator: the pad and its strings are freed through
+	 * it. */
+	const SPUD_ALLOCATOR *allocator;
 	int fd;
 	/* Opened for writing as well, which playing an effect needs. */
 	bool writable;
@@ -420,12 +423,13 @@ static void spudinput_evdev_close(spudinput_evdev_pad *pad) {
 		if (battery_fds[i] >= 0)
 			close(battery_fds[i]);
 	}
-	free(pad->rgb_led);
+	const SPUD_ALLOCATOR *allocator = pad->allocator;
+	spud_string_free(allocator, pad->rgb_led);
 	for (int i = 0; i < 3; ++i)
-		free(pad->color_leds[i]);
+		spud_string_free(allocator, pad->color_leds[i]);
 	for (int i = 0; i < SPUDINPUT_EVDEV_PLAYER_LED_MAX; ++i)
-		free(pad->player_leds[i]);
-	free(pad);
+		spud_string_free(allocator, pad->player_leds[i]);
+	SPUD_DELETE(allocator, spudinput_evdev_pad, pad);
 }
 
 /* ---- sysfs ---- */
@@ -605,15 +609,6 @@ static void spudinput_evdev_read_battery(
 
 /* ---- Lights ---- */
 
-/* Copies a string to new memory, or returns null. */
-static char *spudinput_evdev_copy(const char *text) {
-	const size_t size = strlen(text) + 1;
-	char *copy        = (char *)malloc(size);
-	if (copy)
-		memcpy(copy, text, size);
-	return copy;
-}
-
 /* Which of red, green and blue a name is: 0, 1 or 2, else -1. */
 static int spudinput_evdev_color_index(const char *name) {
 	if (strcmp(name, "red") == 0)
@@ -644,7 +639,7 @@ static SPUDRESULT spudinput_evdev_take_multicolor(
 	if (channels[0] == UINT32_MAX || channels[1] == UINT32_MAX || channels[2] == UINT32_MAX)
 		return SPUD_SUCCESS;
 
-	pad->rgb_led = spudinput_evdev_copy(led);
+	pad->rgb_led = spud_string_copy(pad->allocator, led);
 	if (!pad->rgb_led)
 		return SPUDRESULT_OUT_OF_MEMORY;
 	pad->rgb_channel_count  = count;
@@ -705,7 +700,7 @@ static SPUDRESULT spudinput_evdev_find_lights(
 		if (strncmp(last, "player-", 7) == 0 && spudinput_evdev_parse_u32(last + 7, &player) && player >= 1 &&
 		    player <= SPUDINPUT_EVDEV_PLAYER_LED_MAX) {
 			if (!pad->player_leds[player - 1]) {
-				pad->player_leds[player - 1] = spudinput_evdev_copy(led);
+				pad->player_leds[player - 1] = spud_string_copy(pad->allocator, led);
 				if (!pad->player_leds[player - 1])
 					result = SPUDRESULT_OUT_OF_MEMORY;
 				pad->player_max_brightness[player - 1] = max_brightness;
@@ -724,7 +719,7 @@ static SPUDRESULT spudinput_evdev_find_lights(
 		if (color < 0)
 			color = spudinput_evdev_color_index(before);
 		if (color >= 0 && !pad->color_leds[color]) {
-			pad->color_leds[color] = spudinput_evdev_copy(led);
+			pad->color_leds[color] = spud_string_copy(pad->allocator, led);
 			if (!pad->color_leds[color])
 				result = SPUDRESULT_OUT_OF_MEMORY;
 			pad->color_max_brightness[color] = max_brightness;
@@ -744,7 +739,7 @@ static void spudinput_evdev_settle_lights(spudinput_evdev_pad *pad) {
 
 	if (!pad->color_leds[0] || !pad->color_leds[1] || !pad->color_leds[2]) {
 		for (int i = 0; i < 3; ++i) {
-			free(pad->color_leds[i]);
+			spud_string_free(pad->allocator, pad->color_leds[i]);
 			pad->color_leds[i] = NULL;
 		}
 	}
@@ -770,6 +765,7 @@ static SPUDRESULT spudinput_evdev_find_sysfs(
 
 		spudinput_evdev_find_battery(pad, device_directory);
 		const SPUDRESULT result = spudinput_evdev_find_lights(pad, device_directory);
+		/* realpath's, from the C library. */
 		free(device_directory);
 		if (result != SPUD_SUCCESS)
 			return result;
@@ -816,6 +812,7 @@ static void spudinput_evdev_find_axis(
  * memory (then *out_of_memory is set).
  */
 static spudinput_evdev_pad *spudinput_evdev_open(
+    const SPUD_ALLOCATOR *allocator,
     const char *path,
     const char *node_name,
     dev_t rdev,
@@ -848,12 +845,13 @@ static spudinput_evdev_pad *spudinput_evdev_open(
 	if (spudinput_evdev_test_bit(ev_bits, EV_FF))
 		ioctl(fd, EVIOCGBIT(EV_FF, sizeof(ff_bits)), ff_bits);
 
-	spudinput_evdev_pad *pad = (spudinput_evdev_pad *)calloc(1, sizeof(spudinput_evdev_pad));
+	spudinput_evdev_pad *pad = SPUD_NEW_ZEROED(allocator, spudinput_evdev_pad);
 	if (!pad) {
 		close(fd);
 		*out_of_memory = true;
 		return NULL;
 	}
+	pad->allocator                 = allocator;
 	pad->fd                        = fd;
 	pad->writable                  = writable;
 	pad->rdev                      = rdev;
@@ -988,15 +986,18 @@ static spudinput_gamepad_record *spudinput_evdev_find(
 
 /*
  * Opens every gamepad node in the directory that no record has, into a new
- * array of `*out_count` pads (NULL for none). Returns SPUDRESULT_OUT_OF_MEMORY
+ * array of `*out_count` pads (NULL for none), `*out_capacity` long, the count
+ * it is freed with. Returns SPUDRESULT_OUT_OF_MEMORY
  * with nothing opened, or SPUD_SUCCESS.
  */
 static SPUDRESULT spudinput_evdev_scan(
     spudinput_instance instance,
     spudinput_evdev_pad ***out_pads,
-    uint32_t *out_count) {
-	*out_pads  = NULL;
-	*out_count = 0;
+    uint32_t *out_count,
+    uint32_t *out_capacity) {
+	*out_pads     = NULL;
+	*out_count    = 0;
+	*out_capacity = 0;
 
 	/* No directory: no devices. */
 	DIR *directory = opendir(SPUDINPUT_EVDEV_DIRECTORY);
@@ -1022,7 +1023,7 @@ static SPUDRESULT spudinput_evdev_scan(
 			continue;
 
 		bool out_of_memory       = false;
-		spudinput_evdev_pad *pad = spudinput_evdev_open(path, entry->d_name, info.st_rdev, &out_of_memory);
+		spudinput_evdev_pad *pad = spudinput_evdev_open(&instance->allocator, path, entry->d_name, info.st_rdev, &out_of_memory);
 		if (out_of_memory) {
 			result = SPUDRESULT_OUT_OF_MEMORY;
 			break;
@@ -1032,7 +1033,7 @@ static SPUDRESULT spudinput_evdev_scan(
 
 		if (count == capacity) {
 			const uint32_t grown       = capacity ? capacity * 2 : 4;
-			spudinput_evdev_pad **more = (spudinput_evdev_pad **)realloc(pads, grown * sizeof(*pads));
+			spudinput_evdev_pad **more = SPUD_RESIZE_ARRAY(&instance->allocator, spudinput_evdev_pad *, pads, capacity, grown);
 			if (!more) {
 				spudinput_evdev_close(pad);
 				result = SPUDRESULT_OUT_OF_MEMORY;
@@ -1048,12 +1049,13 @@ static SPUDRESULT spudinput_evdev_scan(
 	if (result != SPUD_SUCCESS) {
 		for (uint32_t i = 0; i < count; ++i)
 			spudinput_evdev_close(pads[i]);
-		free(pads);
+		SPUD_DELETE_ARRAY(&instance->allocator, spudinput_evdev_pad *, pads, capacity);
 		return result;
 	}
 
-	*out_pads  = pads;
-	*out_count = count;
+	*out_pads     = pads;
+	*out_count    = count;
+	*out_capacity = capacity;
 	return SPUD_SUCCESS;
 }
 
@@ -1084,21 +1086,21 @@ SPUDINPUT_BACKEND_FUNCTION SPUDRESULT spudinput_evdev_create(spudinput_instance 
 	if (!instance->desc.read_in_background)
 		return SPUDRESULT_SPUDINPUT_UNSUPPORTED;
 
-	spudinput_evdev_instance *backend = (spudinput_evdev_instance *)calloc(1, sizeof(spudinput_evdev_instance));
+	spudinput_evdev_instance *backend = SPUD_NEW_ZEROED(&instance->allocator, spudinput_evdev_instance);
 	if (!backend)
 		return SPUDRESULT_OUT_OF_MEMORY;
 	backend->rescan = true;
 
 	backend->inotify_fd = inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
 	if (backend->inotify_fd < 0) {
-		free(backend);
+		SPUD_DELETE(&instance->allocator, spudinput_evdev_instance, backend);
 		return SPUDRESULT_API_SPECIFIC_FAILURE;
 	}
 	if (inotify_add_watch(backend->inotify_fd, SPUDINPUT_EVDEV_DIRECTORY, IN_CREATE | IN_ATTRIB) < 0) {
 		/* No directory: nothing to watch, and nothing to find. */
 		if (errno != ENOENT) {
 			close(backend->inotify_fd);
-			free(backend);
+			SPUD_DELETE(&instance->allocator, spudinput_evdev_instance, backend);
 			return SPUDRESULT_API_SPECIFIC_FAILURE;
 		}
 		close(backend->inotify_fd);
@@ -1113,7 +1115,7 @@ SPUDINPUT_BACKEND_FUNCTION void spudinput_evdev_destroy(spudinput_instance insta
 	spudinput_evdev_instance *backend = (spudinput_evdev_instance *)instance->backend;
 	if (backend->inotify_fd >= 0)
 		close(backend->inotify_fd);
-	free(backend);
+	SPUD_DELETE(&instance->allocator, spudinput_evdev_instance, backend);
 	instance->backend = NULL;
 }
 
@@ -1139,15 +1141,16 @@ SPUDINPUT_BACKEND_FUNCTION SPUDRESULT spudinput_evdev_poll(spudinput_instance in
 	 * look that fails is made again at the next poll. */
 	spudinput_evdev_pad **arrived = NULL;
 	uint32_t arrived_count        = 0;
+	uint32_t arrived_capacity     = 0;
 	if (backend->rescan) {
-		SPUDRESULT result = spudinput_evdev_scan(instance, &arrived, &arrived_count);
+		SPUDRESULT result = spudinput_evdev_scan(instance, &arrived, &arrived_count, &arrived_capacity);
 		if (result != SPUD_SUCCESS)
 			return result;
 		result = spudinput_shared_reserve(instance, arrived_count);
 		if (result != SPUD_SUCCESS) {
 			for (uint32_t i = 0; i < arrived_count; ++i)
 				spudinput_evdev_close(arrived[i]);
-			free(arrived);
+			SPUD_DELETE_ARRAY(&instance->allocator, spudinput_evdev_pad *, arrived, arrived_capacity);
 			return result;
 		}
 		backend->rescan = false;
@@ -1178,7 +1181,7 @@ SPUDINPUT_BACKEND_FUNCTION SPUDRESULT spudinput_evdev_poll(spudinput_instance in
 		spudinput_evdev_read_whole(pad);
 		spudinput_evdev_fill_record(record, pad);
 	}
-	free(arrived);
+	SPUD_DELETE_ARRAY(&instance->allocator, spudinput_evdev_pad *, arrived, arrived_capacity);
 
 	return SPUD_SUCCESS;
 }

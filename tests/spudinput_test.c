@@ -17,6 +17,7 @@
 /* The front end's own helpers, for the one that has no public call of its
  * own to be reached through. */
 #include "../src/input/spudinputshared.h"
+#include "spudtest_allocator.h"
 
 #include <inttypes.h>
 #include <math.h>
@@ -118,7 +119,20 @@ static void test_create_arguments(void) {
 
 	CHECK(spudinput_instance_create(&desc, NULL) == SPUDRESULT_NULL_OUTPUT_PARAMETER);
 
-	/* A desc with only its base set has not chosen an API. */
+	/* A desc with only its base set has not chosen an allocator, and one
+	 * missing a function is refused. */
+	CHECK(spudinput_instance_create(&desc, &instance) == SPUDRESULT_NULL_ALLOCATOR);
+	CHECK(instance == NULL);
+	SPUD_ALLOCATOR allocator = spud_allocator_system();
+	allocator.allocate       = NULL;
+	desc.allocator           = &allocator;
+	CHECK(spudinput_instance_create(&desc, &instance) == SPUDRESULT_INVALID_ALLOCATOR);
+	allocator      = spud_allocator_system();
+	allocator.free = NULL;
+	CHECK(spudinput_instance_create(&desc, &instance) == SPUDRESULT_INVALID_ALLOCATOR);
+	allocator = spud_allocator_system();
+
+	/* Nor an API. */
 	CHECK(spudinput_instance_create(&desc, &instance) == SPUDRESULT_INVALID_API);
 	CHECK(instance == NULL);
 
@@ -395,9 +409,15 @@ static void test_connected_gamepad(
 }
 
 static void test_instance(void) {
+	/* Everything the instances below allocate is through this, and checked
+	 * at the end to have been freed as it was allocated. */
+	spudtest_allocator tracker;
+	SPUD_ALLOCATOR allocator = spudtest_allocator_make(&tracker);
+
 	SPUDINPUT_INSTANCE_DESC desc;
 	memset(&desc, 0, sizeof(desc));
 	desc.base.type  = SPUD_STRUCT_TYPE_INPUT_INSTANCE_DESC;
+	desc.allocator  = &allocator;
 	desc.native_api = native_api();
 	/* Only while this process is the one in use, and keeping no motion
 	 * samples: the test switches no sensor on. */
@@ -412,10 +432,24 @@ static void test_instance(void) {
 	desc.read_in_background = true;
 #endif
 
-	spudinput_instance instance = NULL;
+	/* No memory: refused, with nothing made and nothing kept. */
+	spudinput_instance instance = (spudinput_instance)(uintptr_t)1;
+	tracker.refuse_after        = 0;
+	CHECK(spudinput_instance_create(&desc, &instance) == SPUDRESULT_OUT_OF_MEMORY);
+	CHECK(instance == NULL);
+	CHECK(spudtest_allocator_clean(&tracker));
+	tracker.refuse_after = SIZE_MAX;
+
+	/* The caller's struct need not outlive the call: the instance keeps a
+	 * copy, so this one is overwritten once it is made. */
+	SPUD_ALLOCATOR passed = allocator;
+	desc.allocator        = &passed;
 	CHECK(spudinput_instance_create(&desc, &instance) == SPUD_SUCCESS);
+	memset(&passed, 0, sizeof(passed));
+	desc.allocator = &allocator;
 	if (!instance)
 		return;
+	CHECK(tracker.given > 0);
 	CHECK(spudinput_instance_get_native_api(instance) == native_api());
 
 	const spudinput_gamepad_id *ids = (const spudinput_gamepad_id *)(uintptr_t)1;
@@ -487,6 +521,8 @@ static void test_instance(void) {
 			CHECK(ids[0] == 1);
 		spudinput_instance_destroy(instance);
 	}
+
+	CHECK(spudtest_allocator_clean(&tracker));
 }
 
 int main(void) {

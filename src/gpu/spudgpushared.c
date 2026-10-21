@@ -1,9 +1,25 @@
 #include "spudgpu.h"
 #include "spudgpushared.h"
+#include "../spudallocator.h"
+#include "../spudstructbase.h"
 
 #if __cplusplus
 extern "C" {
 #endif
+
+SPUDRESULT spudgpu___internal_check_instance_desc(
+    const spudgpu_instance_desc *desc,
+    spudgpu_instance *out_instance) {
+	if (!desc)
+		return SPUDRESULT_NULL_DESC;
+	const SPUDRESULT base_result = spud_struct_check(&desc->base, SPUD_STRUCT_TYPE_GPU_INSTANCE_DESC);
+	if (base_result != SPUD_SUCCESS)
+		return base_result;
+	if (!out_instance)
+		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
+	*out_instance = NULL;
+	return spud_allocator_check(desc->allocator);
+}
 
 bool spudgpu___internal_blend_attachments_equal(
     const spudgpu_blend_attachment_desc *a,

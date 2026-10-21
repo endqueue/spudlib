@@ -1,5 +1,6 @@
 #include "spudcore.h"
 #include "spudfiles.h"
+#include "../../../spudallocator.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
@@ -18,7 +19,9 @@ extern "C" {
 #endif // __cplusplus
 
 struct sfs_file_t {
-	const char *debug_name;
+	// Its debug name, freed through its allocator: the system heap until
+	// SpudFiles has an instance to take the caller's from (MATURITY_TODO.md).
+	spud_object_head head;
 	int fd;
 };
 
@@ -69,7 +72,8 @@ sfs_file_open(
 		close(fd);
 		return SPUDRESULT_OUT_OF_MEMORY;
 	}
-	f->debug_name = NULL;
+	f->head.debug_name = NULL;
+	f->head.allocator  = spud_allocator_system();
 	f->fd     = fd;
 	*out_file = f;
 	return SPUD_SUCCESS;
@@ -79,7 +83,7 @@ SPUDRESULT sfs_file_release(sfs_file file) {
 	if (!file)
 		return SPUDRESULT_SFS_INVALID_FILE;
 	close(file->fd);
-	free((void *)file->debug_name);
+	spud_string_free(&file->head.allocator, file->head.debug_name);
 	free(file);
 	return SPUD_SUCCESS;
 }

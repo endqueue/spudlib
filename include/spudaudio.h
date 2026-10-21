@@ -368,21 +368,54 @@ typedef struct SPUDAUDIO_FORMAT {
  */
 
 /**
+ * @brief What the caller decides when creating an instance. No field has a
+ * default: a zeroed desc is refused, for its `base`, and one with only its
+ * `base` set is refused for its `allocator`.
+ */
+typedef struct SPUDAUDIO_INSTANCE_DESC {
+	/** `type` is SPUD_STRUCT_TYPE_AUDIO_INSTANCE_DESC; `next` is NULL
+	 * (nothing is chained onto this struct yet). Set by the caller. See
+	 * SPUD_STRUCT_BASE. */
+	SPUD_STRUCT_BASE base;
+	/** Where the memory of the instance, and of every device handle and
+	 * stream made from it, comes from (SPUD_ALLOCATOR). Copied, so the
+	 * struct need not outlive the call; its functions and `user_data` must
+	 * outlive the instance and every stream made from it. A stream's
+	 * callback thread never calls it. While a device-event callback is set
+	 * (spudaudio_set_device_event_callback()), the thread or queue that
+	 * watches the device list does, at each change, so an allocator that is
+	 * safe on one thread only can't be used with one. Known problem: on
+	 * WASAPI the watch's last block may be freed on a Windows thread after
+	 * spudaudio_destroy_instance() has returned, if the system still holds
+	 * the watch then (not verified either way), so there the allocator has
+	 * to outlive that too. */
+	const SPUD_ALLOCATOR *allocator;
+	/** The native API to bind to. There is no "best available" value - the
+	 * caller chooses. */
+	SPUDAUDIO_NATIVE_API native_api;
+} SPUDAUDIO_INSTANCE_DESC;
+
+/**
  * @brief Creates a SpudAudio instance bound to one native audio API. Known
  * problem: SPUDAUDIO_NATIVE_API_PIPEWIRE is not built and returns
  * SPUDRESULT_NOT_IMPLEMENTED_YET, as does every API in a build with no
  * native audio API (iOS, iPadOS, watchOS).
  *
- * @param[in]  api          The native API to bind to. There is no "best
- *                          available" value - the caller chooses.
+ * @param[in]  desc         What the caller decides.
  * @param[out] out_instance Receives the new instance, the caller's to
  *                          destroy with spudaudio_destroy_instance().
  *
  * @retval SPUD_SUCCESS The instance was made.
+ * @retval SPUDRESULT_NULL_DESC `desc` is NULL.
+ * @retval SPUDRESULT_STRUCT_WRONG_TYPE `desc->base.type` is not
+ *         SPUD_STRUCT_TYPE_AUDIO_INSTANCE_DESC.
+ * @retval SPUDRESULT_STRUCT_UNKNOWN_IN_CHAIN `desc->base.next` is not NULL.
  * @retval SPUDRESULT_NULL_OUTPUT_PARAMETER `out_instance` is NULL.
- * @retval SPUDRESULT_INVALID_API `api` isn't compiled in on this platform,
- *         or is SPUDAUDIO_NATIVE_API_NONE.
- * @retval SPUDRESULT_NOT_IMPLEMENTED_YET `api` is
+ * @retval SPUDRESULT_NULL_ALLOCATOR `desc->allocator` is NULL.
+ * @retval SPUDRESULT_INVALID_ALLOCATOR `desc->allocator` lacks a function.
+ * @retval SPUDRESULT_INVALID_API `desc->native_api` isn't compiled in on
+ *         this platform, or is SPUDAUDIO_NATIVE_API_NONE.
+ * @retval SPUDRESULT_NOT_IMPLEMENTED_YET `desc->native_api` is
  *         SPUDAUDIO_NATIVE_API_PIPEWIRE on Linux, or this build has no
  *         native audio API at all.
  * @retval SPUDRESULT_OUT_OF_MEMORY The instance could not be allocated.
@@ -390,7 +423,7 @@ typedef struct SPUDAUDIO_FORMAT {
  *         API.
  */
 SPUDRESULT spudaudio_create_instance(
-    SPUDAUDIO_NATIVE_API api,
+    const SPUDAUDIO_INSTANCE_DESC *desc,
     spudaudio_instance *out_instance);
 
 /**

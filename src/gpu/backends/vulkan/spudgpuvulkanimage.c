@@ -162,6 +162,7 @@ SPUDRESULT spudgpu_create_image(
 
     // Create the result struct
     spudgpu_image_vulkan result = {0};
+    result.head.allocator = device->head.allocator;
     result._device = *device;
     result._desc = *desc;
     result._format_vk = convert_spud_to_vulkan_format(result._desc.format);
@@ -221,13 +222,18 @@ SPUDRESULT spudgpu_create_image(
     }
 
     // If all successful, return a memcpy'ed heap pointer
-    spudgpu_image_vulkan *pResult = malloc(sizeof(spudgpu_image_vulkan));
+    spudgpu_image_vulkan *pResult = SPUD_NEW(&result.head.allocator, spudgpu_image_vulkan);
+    if (!pResult) {
+        vkDestroyImage(vk_device, result._image_vk, NULL);
+        vkFreeMemory(vk_device, result._memory_vk, NULL);
+        return SPUDRESULT_OUT_OF_MEMORY;
+    }
     memcpy(pResult, &result, sizeof(spudgpu_image_vulkan));
     if (spud_debug_name_set(pResult, desc->debug_name) != SPUD_SUCCESS) {
         spudgpu_destroy_image(pResult);
         return SPUDRESULT_OUT_OF_MEMORY;
     }
-    pResult->_desc.debug_name = pResult->_debug_name;
+    pResult->_desc.debug_name = pResult->head.debug_name;
 
     *out_image = pResult;
     return SPUD_SUCCESS;
@@ -254,8 +260,9 @@ void spudgpu_destroy_image(
     if (image->_heap)
         image->_heap->_placed_count--;
 #endif
-    free((void *)image->_debug_name);
-    free(image);
+    const SPUD_ALLOCATOR allocator = image->head.allocator;
+    spud_string_free(&allocator, image->head.debug_name);
+    SPUD_DELETE(&allocator, spudgpu_image_vulkan, image);
 }
 
 // The aspects [format] has (SPUDGPU_IMAGE_ASPECT). The same table in every
@@ -302,6 +309,7 @@ SPUDRESULT spudgpu_create_image_view(
         return SPUDRESULT_DESC_INVALID_PARAMETERS;
 
     spudgpu_image_view_vulkan result = {0};
+    result.head.allocator = image->head.allocator;
     result._desc = *desc;
     result._desc.parent_image = image;
 
@@ -338,7 +346,11 @@ SPUDRESULT spudgpu_create_image_view(
     }
 
     // If all successful, return a memcpy'ed heap pointer
-    spudgpu_image_view_vulkan *pResult = malloc(sizeof(spudgpu_image_view_vulkan));
+    spudgpu_image_view_vulkan *pResult = SPUD_NEW(&result.head.allocator, spudgpu_image_view_vulkan);
+    if (!pResult) {
+        vkDestroyImageView(image->_device._logical_device_vk, result._image_view_vk, NULL);
+        return SPUDRESULT_OUT_OF_MEMORY;
+    }
     memcpy(pResult, &result, sizeof(spudgpu_image_view_vulkan));
     *out_image_view = pResult;
     return SPUD_SUCCESS;
@@ -347,8 +359,9 @@ SPUDRESULT spudgpu_create_image_view(
 void spudgpu_destroy_image_view(spudgpu_image_view image_view) {
     if (!image_view) return;
     vkDestroyImageView(image_view->_desc.parent_image->_device._logical_device_vk, image_view->_image_view_vk, NULL);
-    free((void *)image_view->_debug_name);
-    free(image_view);
+    const SPUD_ALLOCATOR allocator = image_view->head.allocator;
+    spud_string_free(&allocator, image_view->head.debug_name);
+    SPUD_DELETE(&allocator, spudgpu_image_view_vulkan, image_view);
 }
 
 SPUDRESULT spudgpu_get_image_view_desc(

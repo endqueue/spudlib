@@ -12,6 +12,16 @@
 extern "C" {
 #endif
 
+/*
+ * The checks every backend's create makes of its desc, in this order, before
+ * anything else: SPUDRESULT_NULL_DESC, the struct base's,
+ * SPUDRESULT_NULL_OUTPUT_PARAMETER (and *out set to NULL from there on), then
+ * the allocator's (SPUDRESULT_NULL_ALLOCATOR, SPUDRESULT_INVALID_ALLOCATOR).
+ */
+SPUDRESULT spudgpu___internal_check_instance_desc(
+    const spudgpu_instance_desc *desc,
+    spudgpu_instance *out_instance);
+
 /* The size of one texel block of [fmt] in bytes: a texel for an uncompressed
  * format, a 4x4 block for a block-compressed one (BC1-BC7). 0 for a format
  * whose texels aren't a whole number of bytes or have no known size. */

@@ -407,8 +407,14 @@ int main(
 #endif
 
 	printf("SpudAudio %s\n", api_name);
-	spudaudio_instance instance = NULL;
-	if (!call_ok(spudaudio_create_instance(api, &instance), "spudaudio_create_instance"))
+	// The system heap: this test listens for a tone, it doesn't count blocks.
+	const SPUD_ALLOCATOR allocator        = spud_allocator_system();
+	SPUDAUDIO_INSTANCE_DESC instance_desc = {0};
+	instance_desc.base.type               = SPUD_STRUCT_TYPE_AUDIO_INSTANCE_DESC;
+	instance_desc.allocator               = &allocator;
+	instance_desc.native_api              = api;
+	spudaudio_instance instance           = NULL;
+	if (!call_ok(spudaudio_create_instance(&instance_desc, &instance), "spudaudio_create_instance"))
 		return 1;
 	check(spudaudio_get_native_api(instance) == api, "instance reports its native API");
 

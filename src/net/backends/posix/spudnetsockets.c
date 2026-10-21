@@ -219,7 +219,7 @@ static int spudnet_posix_open_tcp(int family) {
 // --------------------------------------------------------------------------
 
 struct spudnet_tcp_listener_t {
-	const char *debug_name;
+	spud_object_head head; // its allocator, also every socket's it accepts
 	spudnet_instance           instance; // also every socket's it accepts
 	int                        fd;
 	struct spudnet_posix_abort abort;
@@ -228,7 +228,7 @@ struct spudnet_tcp_listener_t {
 };
 
 struct spudnet_tcp_socket_t {
-	const char *debug_name;
+	spud_object_head head;
 	spudnet_instance instance;
 	// -1 until connect makes it; read by other calls only once `open` says
 	// the connection is up, and closed only by destroy.
@@ -240,18 +240,21 @@ struct spudnet_tcp_socket_t {
 	spudnet_error errors[SPUDNET_ERROR_SIDE_COUNT];
 };
 
-/* A socket with its abort set up and no descriptor. NULL on failure. */
-static struct spudnet_tcp_socket_t *spudnet_posix_socket_alloc(spudnet_instance instance) {
-	struct spudnet_tcp_socket_t *socket = (struct spudnet_tcp_socket_t *)calloc(1, sizeof(struct spudnet_tcp_socket_t));
+/* A socket with its abort set up and no descriptor, made through
+ * `allocator` (its instance's, or for an accepted socket its listener's),
+ * which it keeps a copy of. NULL on failure. */
+static struct spudnet_tcp_socket_t *spudnet_posix_socket_alloc(spudnet_instance instance, const SPUD_ALLOCATOR *allocator) {
+	struct spudnet_tcp_socket_t *socket = SPUD_NEW_ZEROED(allocator, struct spudnet_tcp_socket_t);
 	if (!socket)
 		return NULL;
-	socket->instance = instance;
-	socket->fd       = -1;
+	socket->head.allocator = *allocator;
+	socket->instance       = instance;
+	socket->fd             = -1;
 	atomic_init(&socket->connect_called, false);
 	atomic_init(&socket->open, false);
 	if (!spudnet_posix_abort_init(&socket->abort)) {
 		spudnet_posix_abort_free(&socket->abort);
-		free(socket);
+		SPUD_DELETE(allocator, struct spudnet_tcp_socket_t, socket);
 		return NULL;
 	}
 	return socket;
@@ -287,8 +290,9 @@ void spudnet_tcp_listener_destroy(spudnet_tcp_listener listener) {
 	if (listener->fd >= 0)
 		close(listener->fd);
 	spudnet_posix_abort_free(&listener->abort);
-	free((void *)listener->debug_name);
-	free(listener);
+	const SPUD_ALLOCATOR allocator = listener->head.allocator;
+	spud_string_free(&allocator, listener->head.debug_name);
+	SPUD_DELETE(&allocator, struct spudnet_tcp_listener_t, listener);
 }
 
 SPUDRESULT spudnet_tcp_listener_create(
@@ -315,11 +319,12 @@ SPUDRESULT spudnet_tcp_listener_create(
 	if (!spudnet_posix_parse_address(desc->address, desc->port, &storage, &length))
 		return SPUDRESULT_SPUDNET_INVALID_ADDRESS;
 
-	struct spudnet_tcp_listener_t *listener = (struct spudnet_tcp_listener_t *)calloc(1, sizeof(struct spudnet_tcp_listener_t));
+	struct spudnet_tcp_listener_t *listener = SPUD_NEW_ZEROED(&instance->head.allocator, struct spudnet_tcp_listener_t);
 	if (!listener)
 		return SPUDRESULT_OUT_OF_MEMORY;
-	listener->instance = instance;
-	listener->fd       = -1;
+	listener->head.allocator = instance->head.allocator;
+	listener->instance       = instance;
+	listener->fd             = -1;
 	if (!spudnet_posix_abort_init(&listener->abort)) {
 		int error = errno;
 		spudnet_tcp_listener_destroy(listener);
@@ -405,7 +410,7 @@ SPUDRESULT spudnet_tcp_listener_accept(
 
 		int fd = accept(listener->fd, NULL, NULL);
 		if (fd >= 0) {
-			struct spudnet_tcp_socket_t *socket = spudnet_posix_socket_alloc(listener->instance);
+			struct spudnet_tcp_socket_t *socket = spudnet_posix_socket_alloc(listener->instance, &listener->head.allocator);
 			if (!socket) {
 				close(fd);
 				return SPUDRESULT_OUT_OF_MEMORY;
@@ -459,7 +464,7 @@ SPUDRESULT spudnet_tcp_socket_create(
 	*out_socket = NULL;
 	if (!instance)
 		return SPUDRESULT_SPUDNET_INVALID_INSTANCE;
-	*out_socket = spudnet_posix_socket_alloc(instance);
+	*out_socket = spudnet_posix_socket_alloc(instance, &instance->head.allocator);
 	return *out_socket ? SPUD_SUCCESS : SPUDRESULT_OUT_OF_MEMORY;
 }
 
@@ -469,8 +474,9 @@ void spudnet_tcp_socket_destroy(spudnet_tcp_socket socket) {
 	if (socket->fd >= 0)
 		close(socket->fd);
 	spudnet_posix_abort_free(&socket->abort);
-	free((void *)socket->debug_name);
-	free(socket);
+	const SPUD_ALLOCATOR allocator = socket->head.allocator;
+	spud_string_free(&allocator, socket->head.debug_name);
+	SPUD_DELETE(&allocator, struct spudnet_tcp_socket_t, socket);
 }
 
 void spudnet_tcp_socket_abort(spudnet_tcp_socket socket) {
@@ -697,11 +703,13 @@ SPUDRESULT spudnet_tcp_socket_get_peer_address(
  * with. Nothing has to be done about that here: an instance holds a start
  * of the platform's networking, and getaddrinfo on these platforms needs
  * none (the instance's is libcurl's on Linux, and nothing at all on
- * Apple's systems). The resolver takes the instance only to refuse NULL,
- * and keeps nothing of it. */
+ * Apple's systems). The resolver keeps nothing of the instance but a copy
+ * of its allocator, in its head, which is what it is freed through - by
+ * whichever of run and destroy lets go last, so possibly on the thread in
+ * run, after the instance is gone. */
 struct spudnet_resolver_t {
-	const char *debug_name;
-	atomic_int references;
+	spud_object_head head;
+	atomic_int       references;
 
 	// Set by create and only read after.
 	char                  *host;
@@ -719,6 +727,7 @@ struct spudnet_resolver_t {
 	SPUDRESULT      result;
 	char (*addresses)[SPUDNET_MAX_ADDRESS_STRING_LEN];
 	uint32_t      address_count;
+	uint32_t      address_capacity; // the entries `addresses` was allocated with
 	spudnet_error error;
 };
 
@@ -731,10 +740,12 @@ static void spudnet_posix_resolver_release(struct spudnet_resolver_t *resolver) 
 	if (resolver->done_write >= 0)
 		close(resolver->done_write);
 	pthread_mutex_destroy(&resolver->lock);
-	free(resolver->addresses);
-	free(resolver->host);
-	free((void *)resolver->debug_name);
-	free(resolver);
+	// The resolver's own copy: this may run after its instance is gone.
+	const SPUD_ALLOCATOR allocator = resolver->head.allocator;
+	spud_free_array(&allocator, resolver->addresses, resolver->address_capacity, SPUDNET_MAX_ADDRESS_STRING_LEN, 1);
+	spud_string_free(&allocator, resolver->host);
+	spud_string_free(&allocator, resolver->head.debug_name);
+	SPUD_DELETE(&allocator, struct spudnet_resolver_t, resolver);
 }
 
 SPUDRESULT spudnet_resolver_create(
@@ -754,9 +765,10 @@ SPUDRESULT spudnet_resolver_create(
 	if (!desc->host || desc->host[0] == '\0')
 		return SPUDRESULT_DESC_INVALID_PARAMETERS;
 
-	struct spudnet_resolver_t *resolver = (struct spudnet_resolver_t *)calloc(1, sizeof(struct spudnet_resolver_t));
+	struct spudnet_resolver_t *resolver = SPUD_NEW_ZEROED(&instance->head.allocator, struct spudnet_resolver_t);
 	if (!resolver)
 		return SPUDRESULT_OUT_OF_MEMORY;
+	resolver->head.allocator = instance->head.allocator;
 	// One for this function's failure paths to let go of; the second is
 	// added only once there is a resolver to hand out.
 	atomic_init(&resolver->references, 1);
@@ -770,10 +782,9 @@ SPUDRESULT spudnet_resolver_create(
 	resolver->done_write       = -1;
 	resolver->family           = desc->family;
 
-	size_t host_size = strlen(desc->host) + 1;
-	resolver->host   = (char *)malloc(host_size);
-	int  ends[2]     = {-1, -1};
-	bool made        = resolver->host && spudnet_posix_abort_init(&resolver->abort) && pipe(ends) == 0;
+	resolver->host       = spud_string_copy(&resolver->head.allocator, desc->host);
+	int  ends[2]         = {-1, -1};
+	bool made            = resolver->host && spudnet_posix_abort_init(&resolver->abort) && pipe(ends) == 0;
 	resolver->done_read  = ends[0];
 	resolver->done_write = ends[1];
 	if (!made || !spudnet_posix_set_descriptor_flags(ends[0]) || !spudnet_posix_set_descriptor_flags(ends[1])) {
@@ -781,7 +792,6 @@ SPUDRESULT spudnet_resolver_create(
 		spudnet_posix_resolver_release(resolver);
 		return out_of_memory ? SPUDRESULT_OUT_OF_MEMORY : SPUDRESULT_GENERAL_FAILURE;
 	}
-	memcpy(resolver->host, desc->host, host_size);
 
 	atomic_store(&resolver->references, 2);
 	*out_resolver = resolver;
@@ -825,6 +835,7 @@ SPUDRESULT spudnet_resolver_run(spudnet_resolver resolver) {
 	spudnet_error_clear(&error);
 	char (*addresses)[SPUDNET_MAX_ADDRESS_STRING_LEN] = NULL;
 	uint32_t address_count                            = 0;
+	uint32_t address_capacity                         = 0;
 
 	// An abort that came first spares the lookup; one that comes during it
 	// can't stop it.
@@ -855,8 +866,14 @@ SPUDRESULT spudnet_resolver_run(spudnet_resolver resolver) {
 			for (struct addrinfo *entry = found; entry != NULL; entry = entry->ai_next)
 				entries++;
 			result = SPUDRESULT_SPUDNET_RESOLVE_FAILED; // until an address turns up
-			if (entries > 0)
-				addresses = (char (*)[SPUDNET_MAX_ADDRESS_STRING_LEN])calloc(entries, SPUDNET_MAX_ADDRESS_STRING_LEN);
+			// On the caller's thread in run, through the resolver's own
+			// allocator (the instance may be gone by now).
+			if (entries > 0) {
+				addresses = (char (*)[SPUDNET_MAX_ADDRESS_STRING_LEN])spud_allocate_array(
+				    &resolver->head.allocator, entries, SPUDNET_MAX_ADDRESS_STRING_LEN, 1, true);
+				if (addresses)
+					address_capacity = entries;
+			}
 			if (entries > 0 && !addresses)
 				result = SPUDRESULT_OUT_OF_MEMORY;
 
@@ -889,8 +906,9 @@ SPUDRESULT spudnet_resolver_run(spudnet_resolver resolver) {
 	pthread_mutex_lock(&resolver->lock);
 	resolver->finished      = true;
 	resolver->result        = result;
-	resolver->addresses     = addresses;
-	resolver->address_count = address_count;
+	resolver->addresses        = addresses;
+	resolver->address_count    = address_count;
+	resolver->address_capacity = address_capacity;
 	resolver->error         = error;
 	pthread_mutex_unlock(&resolver->lock);
 	char byte = 1;

@@ -65,8 +65,9 @@ static void spudgpu_d3d12___free_descriptor_sets(
 	while (pool->_sets != until) {
 		spudgpu_descriptor_set_d3d12 *set = pool->_sets;
 		pool->_sets                       = set->_next;
-		free((void *)set->_debug_name);
-		free(set);
+		const SPUD_ALLOCATOR allocator    = set->head.allocator;
+		spud_string_free(&allocator, set->head.debug_name);
+		SPUD_DELETE(&allocator, spudgpu_descriptor_set_d3d12, set);
 	}
 }
 
@@ -75,13 +76,15 @@ static void spudgpu_d3d12___free_descriptor_sets(
 // ============================================================================
 
 // Makes [heap] a shader-visible heap of [type] holding [capacity]
-// descriptors, all unused. Leaves it empty on failure.
+// descriptors, all unused, its free list made through [allocator] (the
+// device's). Leaves it empty on failure.
 static SPUDRESULT spudgpu_d3d12___create_shader_heap(
+    const SPUD_ALLOCATOR *allocator,
     ID3D12Device *d3dDevice,
     D3D12_DESCRIPTOR_HEAP_TYPE type,
     uint32_t capacity,
     spudgpu_d3d12_shader_heap &heap) {
-	spudgpu_d3d12_heap_range *ranges = (spudgpu_d3d12_heap_range *)malloc(sizeof(spudgpu_d3d12_heap_range));
+	spudgpu_d3d12_heap_range *ranges = SPUD_NEW_ARRAY(allocator, spudgpu_d3d12_heap_range, 1);
 	if (!ranges)
 		return SPUDRESULT_OUT_OF_MEMORY;
 	D3D12_DESCRIPTOR_HEAP_DESC heapDesc = {};
@@ -90,7 +93,7 @@ static SPUDRESULT spudgpu_d3d12___create_shader_heap(
 	heapDesc.Flags                      = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
 	heapDesc.NodeMask                   = 0;
 	if (FAILED(d3dDevice->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(&heap.heap)))) {
-		free(ranges);
+		SPUD_DELETE_ARRAY(allocator, spudgpu_d3d12_heap_range, ranges, 1);
 		return SPUDRESULT_API_SPECIFIC_FAILURE;
 	}
 	heap.increment     = d3dDevice->GetDescriptorHandleIncrementSize(type);
@@ -111,15 +114,15 @@ static SPUDRESULT spudgpu_d3d12___ensure_shader_heaps(spudgpu_device_d3d12 *devi
 		return SPUD_SUCCESS;
 	ID3D12Device *d3dDevice = device->_d3d_device.Get();
 	SPUDRESULT sr           = spudgpu_d3d12___create_shader_heap(
-        d3dDevice, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, D3D12_MAX_SHADER_VISIBLE_DESCRIPTOR_HEAP_SIZE_TIER_1, device->_csv_heap);
+        &device->head.allocator, d3dDevice, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, D3D12_MAX_SHADER_VISIBLE_DESCRIPTOR_HEAP_SIZE_TIER_1, device->_csv_heap);
 	if (sr != SPUD_SUCCESS)
 		return sr;
 	sr = spudgpu_d3d12___create_shader_heap(
-	    d3dDevice, D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER, D3D12_MAX_SHADER_VISIBLE_SAMPLER_HEAP_SIZE, device->_sampler_heap);
+	    &device->head.allocator, d3dDevice, D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER, D3D12_MAX_SHADER_VISIBLE_SAMPLER_HEAP_SIZE, device->_sampler_heap);
 	if (sr != SPUD_SUCCESS) {
 		// Both or neither: _csv_heap.heap is what says they exist.
 		device->_csv_heap.heap.Reset();
-		free(device->_csv_heap.free_ranges);
+		SPUD_DELETE_ARRAY(&device->head.allocator, spudgpu_d3d12_heap_range, device->_csv_heap.free_ranges, device->_csv_heap.free_capacity);
 		device->_csv_heap.free_ranges   = nullptr;
 		device->_csv_heap.free_count    = 0;
 		device->_csv_heap.free_capacity = 0;
@@ -152,8 +155,13 @@ static SPUDRESULT spudgpu_d3d12___heap_take(spudgpu_d3d12_shader_heap &heap, uin
 }
 
 // Gives [count] descriptors at [offset] back to [heap], merged with the
-// unused ranges either side. The caller holds device->_shader_heap_mutex.
-static void spudgpu_d3d12___heap_give_back(spudgpu_d3d12_shader_heap &heap, uint32_t offset, uint32_t count) {
+// unused ranges either side; [allocator] is the device's, which a longer
+// free list is made through. The caller holds device->_shader_heap_mutex.
+static void spudgpu_d3d12___heap_give_back(
+    const SPUD_ALLOCATOR *allocator,
+    spudgpu_d3d12_shader_heap &heap,
+    uint32_t offset,
+    uint32_t count) {
 	if (count == 0)
 		return;
 	// The first unused range after the one given back.
@@ -179,9 +187,9 @@ static void spudgpu_d3d12___heap_give_back(spudgpu_d3d12_shader_heap &heap, uint
 	}
 	if (heap.free_count == heap.free_capacity) {
 		uint32_t capacity = heap.free_capacity * 2;
-		auto *grown       = (spudgpu_d3d12_heap_range *)realloc(heap.free_ranges, capacity * sizeof(spudgpu_d3d12_heap_range));
-		// Out of memory: the range stays taken. The heap is smaller from
-		// now on, and nothing else is wrong.
+		auto *grown       = SPUD_RESIZE_ARRAY(allocator, spudgpu_d3d12_heap_range, heap.free_ranges, heap.free_capacity, capacity);
+		// Out of memory: the old list is untouched and the range stays
+		// taken. The heap is smaller from now on, and nothing else is wrong.
 		if (!grown)
 			return;
 		heap.free_ranges   = grown;
@@ -210,7 +218,7 @@ static SPUDRESULT spudgpu_d3d12___take_shader_heap_ranges(
 		return sr;
 	sr = spudgpu_d3d12___heap_take(device->_sampler_heap, sampler_count, out_sampler_offset);
 	if (sr != SPUD_SUCCESS) {
-		spudgpu_d3d12___heap_give_back(device->_csv_heap, *out_csv_offset, csv_count);
+		spudgpu_d3d12___heap_give_back(&device->head.allocator, device->_csv_heap, *out_csv_offset, csv_count);
 		return sr;
 	}
 	return SPUD_SUCCESS;
@@ -223,8 +231,8 @@ static void spudgpu_d3d12___give_back_shader_heap_ranges(
     uint32_t sampler_offset,
     uint32_t sampler_count) {
 	std::lock_guard<std::mutex> lock(device->_shader_heap_mutex);
-	spudgpu_d3d12___heap_give_back(device->_csv_heap, csv_offset, csv_count);
-	spudgpu_d3d12___heap_give_back(device->_sampler_heap, sampler_offset, sampler_count);
+	spudgpu_d3d12___heap_give_back(&device->head.allocator, device->_csv_heap, csv_offset, csv_count);
+	spudgpu_d3d12___heap_give_back(&device->head.allocator, device->_sampler_heap, sampler_offset, sampler_count);
 }
 
 // Descriptor [index] of [heap], for the CPU to write and for a root table.
@@ -266,9 +274,10 @@ SPUDRESULT spudgpu_create_sampler(
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
 
 	spudgpu_sampler_d3d12 *pResult =
-	    (spudgpu_sampler_d3d12 *)calloc(1, sizeof(spudgpu_sampler_d3d12));
+	    SPUD_NEW_ZEROED(&device->head.allocator, spudgpu_sampler_d3d12);
 	if (!pResult)
 		return SPUDRESULT_OUT_OF_MEMORY;
+	pResult->head.allocator   = device->head.allocator;
 	pResult->_d3d_desc.Filter = spudgpu_d3d12_filter(
 	    desc->min_filter, desc->mag_filter, desc->mipmap_filter, desc->max_anisotropy);
 	pResult->_d3d_desc.AddressU       = spudgpu_d3d12_address_mode(desc->address_mode_u);
@@ -300,8 +309,9 @@ SPUDRESULT spudgpu_create_sampler(
 void spudgpu_destroy_sampler(spudgpu_sampler sampler) {
 	if (!sampler)
 		return;
-	free((void *)sampler->_debug_name);
-	free(sampler);
+	const SPUD_ALLOCATOR allocator = sampler->head.allocator;
+	spud_string_free(&allocator, sampler->head.debug_name);
+	SPUD_DELETE(&allocator, spudgpu_sampler_d3d12, sampler);
 }
 
 SPUDRESULT spudgpu_create_descriptor_set_layout(
@@ -321,12 +331,12 @@ SPUDRESULT spudgpu_create_descriptor_set_layout(
 		return SPUDRESULT_GPU_TOO_MANY_DESCRIPTOR_BINDINGS;
 
 	spudgpu_descriptor_set_layout_d3d12 *pResult =
-	    (spudgpu_descriptor_set_layout_d3d12 *)calloc(
-	        1, sizeof(spudgpu_descriptor_set_layout_d3d12));
+	    SPUD_NEW_ZEROED(&device->head.allocator, spudgpu_descriptor_set_layout_d3d12);
 	if (!pResult)
 		return SPUDRESULT_OUT_OF_MEMORY;
-	pResult->_device = device;
-	pResult->_desc   = *desc;
+	pResult->head.allocator = device->head.allocator;
+	pResult->_device        = device;
+	pResult->_desc          = *desc;
 
 	// Pre-compute per-binding offsets into the set's heap range.
 	uint32_t csv_cursor     = 0;
@@ -355,7 +365,7 @@ SPUDRESULT spudgpu_create_descriptor_set_layout(
 		spudgpu_destroy_descriptor_set_layout(pResult);
 		return SPUDRESULT_OUT_OF_MEMORY;
 	}
-	pResult->_desc.debug_name = pResult->_debug_name;
+	pResult->_desc.debug_name = pResult->head.debug_name;
 
 	*out_layout = pResult;
 	return SPUD_SUCCESS;
@@ -364,8 +374,9 @@ SPUDRESULT spudgpu_create_descriptor_set_layout(
 void spudgpu_destroy_descriptor_set_layout(spudgpu_descriptor_set_layout layout) {
 	if (!layout)
 		return;
-	free((void *)layout->_debug_name);
-	free(layout);
+	const SPUD_ALLOCATOR allocator = layout->head.allocator;
+	spud_string_free(&allocator, layout->head.debug_name);
+	SPUD_DELETE(&allocator, spudgpu_descriptor_set_layout_d3d12, layout);
 }
 
 SPUDRESULT spudgpu_create_descriptor_pool(
@@ -400,11 +411,11 @@ SPUDRESULT spudgpu_create_descriptor_pool(
 	}
 
 	spudgpu_descriptor_pool_d3d12 *pResult =
-	    (spudgpu_descriptor_pool_d3d12 *)malloc(
-	        sizeof(spudgpu_descriptor_pool_d3d12));
+	    SPUD_NEW(&device->head.allocator, spudgpu_descriptor_pool_d3d12);
 	if (!pResult)
 		return SPUDRESULT_OUT_OF_MEMORY;
 	pResult                        = new (pResult) spudgpu_descriptor_pool_d3d12();
+	pResult->head.allocator        = device->head.allocator;
 	pResult->_device               = device;
 	pResult->_desc                 = *desc;
 	pResult->_cbv_srv_uav_capacity = csvCapacity;
@@ -418,7 +429,7 @@ SPUDRESULT spudgpu_create_descriptor_pool(
 	    device, csvCapacity, samplerCapacity, &pResult->_cbv_srv_uav_offset, &pResult->_sampler_offset);
 	if (sr != SPUD_SUCCESS) {
 		pResult->~spudgpu_descriptor_pool_d3d12();
-		free(pResult);
+		SPUD_DELETE(&device->head.allocator, spudgpu_descriptor_pool_d3d12, pResult);
 		return sr;
 	}
 
@@ -426,7 +437,7 @@ SPUDRESULT spudgpu_create_descriptor_pool(
 		spudgpu_destroy_descriptor_pool(pResult);
 		return SPUDRESULT_OUT_OF_MEMORY;
 	}
-	pResult->_desc.debug_name = pResult->_debug_name;
+	pResult->_desc.debug_name = pResult->head.debug_name;
 
 	*out_pool = pResult;
 	return SPUD_SUCCESS;
@@ -449,9 +460,10 @@ void spudgpu_destroy_descriptor_pool(spudgpu_descriptor_pool pool) {
 	spudgpu_d3d12___free_descriptor_sets(p, nullptr);
 	spudgpu_d3d12___give_back_shader_heap_ranges(
 	    p->_device, p->_cbv_srv_uav_offset, p->_cbv_srv_uav_capacity, p->_sampler_offset, p->_sampler_capacity);
-	free((void *)p->_debug_name);
+	const SPUD_ALLOCATOR allocator = p->head.allocator;
+	spud_string_free(&allocator, p->head.debug_name);
 	p->~spudgpu_descriptor_pool_d3d12();
-	free(p);
+	SPUD_DELETE(&allocator, spudgpu_descriptor_pool_d3d12, p);
 }
 
 SPUDRESULT spudgpu_create_descriptor_sets(
@@ -507,12 +519,12 @@ SPUDRESULT spudgpu_create_descriptor_sets(
 		}
 
 		spudgpu_descriptor_set_d3d12 *pSet =
-		    (spudgpu_descriptor_set_d3d12 *)calloc(
-		        1, sizeof(spudgpu_descriptor_set_d3d12));
+		    SPUD_NEW_ZEROED(&pool->head.allocator, spudgpu_descriptor_set_d3d12);
 		if (!pSet) {
 			sr = SPUDRESULT_OUT_OF_MEMORY;
 			break;
 		}
+		pSet->head.allocator    = pool->head.allocator;
 		pSet->_pool             = pool;
 		pSet->_layout           = layout;
 		pSet->_cbv_srv_uav_base = pool->_cbv_srv_uav_cursor;
@@ -750,12 +762,12 @@ static SPUDRESULT spudgpud3d12___ensure_bindless_state(spudgpu_device_d3d12 *dev
 	// range as DESCRIPTORS_VOLATILE | DATA_VOLATILE by default, so the
 	// update-after-bind write pattern below is already valid with zero
 	// changes to that shared helper.
-	auto *layout = (spudgpu_descriptor_set_layout_d3d12 *)
-	    calloc(1, sizeof(spudgpu_descriptor_set_layout_d3d12));
+	auto *layout = SPUD_NEW_ZEROED(&device->head.allocator, spudgpu_descriptor_set_layout_d3d12);
 	if (!layout) {
 		spudgpu_d3d12___give_back_shader_heap_ranges(device, offset, 3 * SPUDGPU_BINDLESS_MAX_SLOTS_PER_CLASS, 0, 0);
 		return SPUDRESULT_OUT_OF_MEMORY;
 	}
+	layout->head.allocator       = device->head.allocator;
 	layout->_device              = device;
 	layout->_desc.binding_count  = 3;
 
@@ -787,10 +799,9 @@ static SPUDRESULT spudgpud3d12___ensure_bindless_state(spudgpu_device_d3d12 *dev
 
 	// Both are released with the device (spudgpud3d12context.cpp).
 	spudgpu_bindless_state_d3d12 *state =
-	    (spudgpu_bindless_state_d3d12 *)malloc(
-	        sizeof(spudgpu_bindless_state_d3d12));
+	    SPUD_NEW(&device->head.allocator, spudgpu_bindless_state_d3d12);
 	if (!state) {
-		free(layout);
+		SPUD_DELETE(&device->head.allocator, spudgpu_descriptor_set_layout_d3d12, layout);
 		spudgpu_d3d12___give_back_shader_heap_ranges(device, offset, 3 * SPUDGPU_BINDLESS_MAX_SLOTS_PER_CLASS, 0, 0);
 		return SPUDRESULT_OUT_OF_MEMORY;
 	}

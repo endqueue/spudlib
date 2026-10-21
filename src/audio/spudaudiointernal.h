@@ -7,6 +7,13 @@
 extern "C" {
 #endif
 
+// The checks every backend's create makes of its desc, in this order, before
+// anything else: SPUDRESULT_NULL_DESC, the struct base's,
+// SPUDRESULT_NULL_OUTPUT_PARAMETER (and *out set to NULL from there on), then
+// the allocator's (SPUDRESULT_NULL_ALLOCATOR, SPUDRESULT_INVALID_ALLOCATOR).
+// The native API is each backend's to check, after these.
+SPUDRESULT spudaudio_validate_instance_desc(const SPUDAUDIO_INSTANCE_DESC *desc, spudaudio_instance *out_instance);
+
 // Backend-independent SPUDAUDIO_STREAM_DESC checks shared by every
 // backend's probe and create. Doesn't check `callback` (the probe ignores
 // it) or whether buffer_frames == 0 is required/forbidden (that's a

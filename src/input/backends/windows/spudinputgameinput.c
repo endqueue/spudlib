@@ -77,6 +77,9 @@ typedef struct spudinput_gameinput_instance {
 	IGameInput *game_input;
 	IGameInputDispatcher *dispatcher;
 	GameInputCallbackToken device_token;
+	/* The instance's allocator, for the device callback, which is given only
+	 * this struct. */
+	const SPUD_ALLOCATOR *allocator;
 
 	/* Guards what follows, which the device callback writes. */
 	SRWLOCK lock;
@@ -165,7 +168,7 @@ static void CALLBACK spudinput_gameinput_device_callback(
 		if (backend->connected_count == backend->connected_capacity) {
 			const uint32_t capacity = backend->connected_capacity ? backend->connected_capacity * 2 : 4;
 			IGameInputDevice **connected =
-			    (IGameInputDevice **)realloc(backend->connected, (size_t)capacity * sizeof(IGameInputDevice *));
+			    SPUD_RESIZE_ARRAY(backend->allocator, IGameInputDevice *, backend->connected, backend->connected_capacity, capacity);
 			if (!connected) {
 				backend->lost = true;
 				ReleaseSRWLockExclusive(&backend->lock);
@@ -353,13 +356,15 @@ static void spudinput_gameinput_read_battery(spudinput_gamepad_record *record) {
 /* ---- Backend ---- */
 
 SPUDINPUT_BACKEND_FUNCTION SPUDRESULT spudinput_gameinput_create(spudinput_instance instance) {
-	spudinput_gameinput_instance *backend = (spudinput_gameinput_instance *)calloc(1, sizeof(spudinput_gameinput_instance));
+	const SPUD_ALLOCATOR *allocator       = &instance->allocator;
+	spudinput_gameinput_instance *backend = SPUD_NEW_ZEROED(allocator, spudinput_gameinput_instance);
 	if (!backend)
 		return SPUDRESULT_OUT_OF_MEMORY;
+	backend->allocator = allocator;
 	InitializeSRWLock(&backend->lock);
 
 	if (FAILED(GameInputCreate(&backend->game_input))) {
-		free(backend);
+		SPUD_DELETE(allocator, spudinput_gameinput_instance, backend);
 		return SPUDRESULT_API_SPECIFIC_FAILURE;
 	}
 
@@ -374,7 +379,8 @@ SPUDINPUT_BACKEND_FUNCTION SPUDRESULT spudinput_gameinput_create(spudinput_insta
 	const SPUDRESULT result = spudinput_gameinput_register(backend, GameInputBlockingEnumeration);
 	if (result != SPUD_SUCCESS) {
 		backend->game_input->lpVtbl->Release(backend->game_input);
-		free(backend);
+		SPUD_DELETE_ARRAY(allocator, IGameInputDevice *, backend->connected, backend->connected_capacity);
+		SPUD_DELETE(allocator, spudinput_gameinput_instance, backend);
 		return result;
 	}
 
@@ -383,9 +389,9 @@ SPUDINPUT_BACKEND_FUNCTION SPUDRESULT spudinput_gameinput_create(spudinput_insta
 	if (FAILED(backend->game_input->lpVtbl->CreateDispatcher(backend->game_input, &backend->dispatcher))) {
 		spudinput_gameinput_unregister(backend);
 		spudinput_gameinput_clear_connected(backend);
-		free(backend->connected);
+		SPUD_DELETE_ARRAY(allocator, IGameInputDevice *, backend->connected, backend->connected_capacity);
 		backend->game_input->lpVtbl->Release(backend->game_input);
-		free(backend);
+		SPUD_DELETE(allocator, spudinput_gameinput_instance, backend);
 		return SPUDRESULT_API_SPECIFIC_FAILURE;
 	}
 
@@ -398,10 +404,10 @@ SPUDINPUT_BACKEND_FUNCTION void spudinput_gameinput_destroy(spudinput_instance i
 
 	spudinput_gameinput_unregister(backend);
 	spudinput_gameinput_clear_connected(backend);
-	free(backend->connected);
+	SPUD_DELETE_ARRAY(backend->allocator, IGameInputDevice *, backend->connected, backend->connected_capacity);
 	backend->dispatcher->lpVtbl->Release(backend->dispatcher);
 	backend->game_input->lpVtbl->Release(backend->game_input);
-	free(backend);
+	SPUD_DELETE(&instance->allocator, spudinput_gameinput_instance, backend);
 	instance->backend = NULL;
 }
 
@@ -449,17 +455,17 @@ SPUDINPUT_BACKEND_FUNCTION SPUDRESULT spudinput_gameinput_poll(spudinput_instanc
 
 	spudinput_gameinput_pad **arrived = NULL;
 	if (arrived_count) {
-		arrived = (spudinput_gameinput_pad **)calloc(arrived_count, sizeof(spudinput_gameinput_pad *));
+		arrived = SPUD_NEW_ARRAY_ZEROED(&instance->allocator, spudinput_gameinput_pad *, arrived_count);
 		if (!arrived) {
 			ReleaseSRWLockShared(&backend->lock);
 			return SPUDRESULT_OUT_OF_MEMORY;
 		}
 		for (uint32_t i = 0; i < arrived_count; ++i) {
-			arrived[i] = (spudinput_gameinput_pad *)calloc(1, sizeof(spudinput_gameinput_pad));
+			arrived[i] = SPUD_NEW_ZEROED(&instance->allocator, spudinput_gameinput_pad);
 			if (!arrived[i]) {
 				for (uint32_t j = 0; j < i; ++j)
-					free(arrived[j]);
-				free(arrived);
+					SPUD_DELETE(&instance->allocator, spudinput_gameinput_pad, arrived[j]);
+				SPUD_DELETE_ARRAY(&instance->allocator, spudinput_gameinput_pad *, arrived, arrived_count);
 				ReleaseSRWLockShared(&backend->lock);
 				return SPUDRESULT_OUT_OF_MEMORY;
 			}
@@ -468,8 +474,8 @@ SPUDINPUT_BACKEND_FUNCTION SPUDRESULT spudinput_gameinput_poll(spudinput_instanc
 	const SPUDRESULT reserved = spudinput_shared_reserve(instance, arrived_count);
 	if (reserved != SPUD_SUCCESS) {
 		for (uint32_t i = 0; i < arrived_count; ++i)
-			free(arrived[i]);
-		free(arrived);
+			SPUD_DELETE(&instance->allocator, spudinput_gameinput_pad, arrived[i]);
+		SPUD_DELETE_ARRAY(&instance->allocator, spudinput_gameinput_pad *, arrived, arrived_count);
 		ReleaseSRWLockShared(&backend->lock);
 		return reserved;
 	}
@@ -507,7 +513,7 @@ SPUDINPUT_BACKEND_FUNCTION SPUDRESULT spudinput_gameinput_poll(spudinput_instanc
 		spudinput_gameinput_read_battery(record);
 	}
 	ReleaseSRWLockShared(&backend->lock);
-	free(arrived);
+	SPUD_DELETE_ARRAY(&instance->allocator, spudinput_gameinput_pad *, arrived, arrived_count);
 
 	return SPUD_SUCCESS;
 }
@@ -515,13 +521,12 @@ SPUDINPUT_BACKEND_FUNCTION SPUDRESULT spudinput_gameinput_poll(spudinput_instanc
 SPUDINPUT_BACKEND_FUNCTION void spudinput_gameinput_release_gamepad(
     spudinput_instance instance,
     spudinput_gamepad_record *record) {
-	(void)instance;
 	spudinput_gameinput_pad *pad = (spudinput_gameinput_pad *)record->native;
 	spudinput_gameinput_stop_rumble(pad->device);
 	if (pad->reading)
 		pad->reading->lpVtbl->Release(pad->reading);
 	pad->device->lpVtbl->Release(pad->device);
-	free(pad);
+	SPUD_DELETE(&instance->allocator, spudinput_gameinput_pad, pad);
 	record->native = NULL;
 }
 

@@ -1,6 +1,7 @@
 #if SPUDAUDIO_COMPILE_WASAPI
 
 #include "../../spudaudiointernal.h"
+#include "../../../spudallocator.h"
 #include "../../../spudstructbase.h"
 
 #define COBJMACROS
@@ -13,6 +14,7 @@
 #include <process.h>
 #include <propidl.h>
 
+#include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -53,7 +55,7 @@ static const GUID spudaudio_subtype_ieee_float        = {0x00000003, 0x0000, 0x0
 static const PROPERTYKEY spudaudio_pkey_device_friendly_name = {{0xa45c254e, 0xdf1c, 0x4efd, {0x80, 0x20, 0x67, 0xd1, 0x46, 0xa8, 0x50, 0xe0}}, 14};
 
 struct spudaudio_device_t {
-	const char *debug_name;
+	spud_object_head head;                 // allocator: a copy of its instance's
 	struct spudaudio_instance_t *instance; // for its enumerator
 	IMMDevice *mm_device;
 	SPUDAUDIO_DIRECTION direction;
@@ -69,7 +71,7 @@ struct spudaudio_device_t {
  * spudaudio_stream_get_status's contract.
  */
 struct spudaudio_stream_t {
-	const char *debug_name;
+	spud_object_head head; // allocator: a copy of its device's
 	IAudioClient *client;
 	IAudioRenderClient *render;   // OUTPUT streams
 	IAudioCaptureClient *capture; // INPUT streams
@@ -83,7 +85,7 @@ struct spudaudio_stream_t {
 	UINT32 buffer_size;     // IAudioClient::GetBufferSize, frames
 	UINT64 clock_frequency; // IAudioClock::GetFrequency, position units/s
 	uint32_t block_align;   // bytes per frame
-	BYTE *silence;          // capture: zeroed stand-in for SILENT packets
+	BYTE *silence;          // capture: zeroed stand-in for SILENT packets, buffer_size frames
 
 	SPUDAUDIO_THREAD_PRIORITY priority;
 	WCHAR mmcss_task[SPUDAUDIO_MAX_MMCSS_TASK_NAME];
@@ -134,6 +136,9 @@ struct wasapi_endpoint {
 struct wasapi_watch {
 	IMMNotificationClient client; // first, so the interface pointer is the watch
 	volatile LONG refs;
+	// A copy of the instance's, not a pointer to it: the last Release, which
+	// frees the watch, may come after the instance has gone.
+	SPUD_ALLOCATOR allocator;
 	SPUDAUDIO_DEVICE_EVENT_CALLBACK callback;
 	void *user_data;
 	IMMDeviceEnumerator *enumerator; // the instance's; not used once stopped
@@ -146,15 +151,16 @@ struct wasapi_watch {
 	bool have_baseline; // changes before the baseline is taken are not events
 	struct wasapi_endpoint *endpoints;
 	uint32_t endpoint_count;
-	uint32_t endpoint_capacity;
+	uint32_t endpoint_capacity; // what `endpoints` was allocated, and is freed, with
 };
 
 struct spudaudio_instance_t {
-	const char *debug_name;
+	spud_object_head head;
 	CO_MTA_USAGE_COOKIE mta_cookie;
 	IMMDeviceEnumerator *enumerator;
 	struct spudaudio_device_t *devices; // every endpoint ever enumerated
 	spudaudio_device *enumerated[2];    // latest array per direction
+	uint32_t enumerated_capacity[2];    // what each was allocated, and is freed, with
 	struct wasapi_watch *watch;         // NULL while no device-event callback is set
 };
 
@@ -644,11 +650,13 @@ static int wasapi_watch_find(const struct wasapi_watch *w, const char *id) {
 	return -1;
 }
 
-// Lock held. False if the record couldn't grow.
+// Lock held. False if the record couldn't grow. Called on MMDevice's
+// notification threads as well as the caller's, so the allocator is called
+// there too.
 static bool wasapi_watch_add(struct wasapi_watch *w, const char *id, SPUDAUDIO_DIRECTION direction) {
 	if (w->endpoint_count == w->endpoint_capacity) {
 		const uint32_t capacity        = w->endpoint_capacity ? w->endpoint_capacity * 2 : 16;
-		struct wasapi_endpoint *bigger = (struct wasapi_endpoint *)realloc(w->endpoints, (size_t)capacity * sizeof(*bigger));
+		struct wasapi_endpoint *bigger = SPUD_RESIZE_ARRAY(&w->allocator, struct wasapi_endpoint, w->endpoints, w->endpoint_capacity, capacity);
 		if (!bigger)
 			return false;
 		w->endpoints         = bigger;
@@ -728,8 +736,9 @@ static ULONG STDMETHODCALLTYPE wasapi_watch_release(IMMNotificationClient *self)
 	struct wasapi_watch *w = (struct wasapi_watch *)self;
 	const LONG refs        = InterlockedDecrement(&w->refs);
 	if (refs == 0) {
-		free(w->endpoints);
-		free(w);
+		const SPUD_ALLOCATOR allocator = w->allocator;
+		SPUD_DELETE_ARRAY(&allocator, struct wasapi_endpoint, w->endpoints, w->endpoint_capacity);
+		SPUD_DELETE(&allocator, struct wasapi_watch, w);
 	}
 	return (ULONG)refs;
 }
@@ -872,11 +881,12 @@ static void wasapi_watch_destroy(struct wasapi_watch *w) {
 }
 
 static SPUDRESULT wasapi_watch_create(spudaudio_instance instance, SPUDAUDIO_DEVICE_EVENT_CALLBACK callback, void *user_data, struct wasapi_watch **out_watch) {
-	struct wasapi_watch *w = (struct wasapi_watch *)calloc(1, sizeof(*w));
+	struct wasapi_watch *w = SPUD_NEW_ZEROED(&instance->head.allocator, struct wasapi_watch);
 	if (!w)
 		return SPUDRESULT_OUT_OF_MEMORY;
 	w->client.lpVtbl = &wasapi_watch_vtbl;
 	w->refs          = 1;
+	w->allocator     = instance->head.allocator;
 	w->callback      = callback;
 	w->user_data     = user_data;
 	w->enumerator    = instance->enumerator;
@@ -885,7 +895,7 @@ static SPUDRESULT wasapi_watch_create(spudaudio_instance instance, SPUDAUDIO_DEV
 	// Registered first, baseline second: see wasapi_watch_take_baseline.
 	HRESULT hr = IMMDeviceEnumerator_RegisterEndpointNotificationCallback(w->enumerator, &w->client);
 	if (FAILED(hr)) {
-		free(w);
+		SPUD_DELETE(&instance->head.allocator, struct wasapi_watch, w);
 		return wasapi_result(hr);
 	}
 	SPUDRESULT r = wasapi_watch_take_baseline(w);
@@ -908,27 +918,28 @@ static bool wasapi_in_device_event_callback(spudaudio_instance instance) {
 // --------------------------------------------------------------------------
 
 SPUDRESULT spudaudio_create_instance(
-    SPUDAUDIO_NATIVE_API api,
+    const SPUDAUDIO_INSTANCE_DESC *desc,
     spudaudio_instance *out_instance) {
-	if (!out_instance)
-		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
-	*out_instance = NULL;
-	if (api != SPUDAUDIO_NATIVE_API_WASAPI)
+	const SPUDRESULT desc_result = spudaudio_validate_instance_desc(desc, out_instance);
+	if (desc_result != SPUD_SUCCESS)
+		return desc_result;
+	if (desc->native_api != SPUDAUDIO_NATIVE_API_WASAPI)
 		return SPUDRESULT_INVALID_API;
 
-	struct spudaudio_instance_t *inst = (struct spudaudio_instance_t *)calloc(1, sizeof(*inst));
+	struct spudaudio_instance_t *inst = SPUD_NEW_ZEROED(desc->allocator, struct spudaudio_instance_t);
 	if (!inst)
 		return SPUDRESULT_OUT_OF_MEMORY;
+	inst->head.allocator = *desc->allocator;
 
 	HRESULT hr = CoIncrementMTAUsage(&inst->mta_cookie);
 	if (FAILED(hr)) {
-		free(inst);
+		SPUD_DELETE(desc->allocator, struct spudaudio_instance_t, inst);
 		return wasapi_result(hr);
 	}
 	hr = CoCreateInstance(&spudaudio_clsid_mmdevice_enumerator, NULL, CLSCTX_ALL, &spudaudio_iid_immdevice_enumerator, (void **)&inst->enumerator);
 	if (FAILED(hr)) {
 		CoDecrementMTAUsage(inst->mta_cookie);
-		free(inst);
+		SPUD_DELETE(desc->allocator, struct spudaudio_instance_t, inst);
 		return wasapi_result(hr);
 	}
 	*out_instance = inst;
@@ -941,20 +952,21 @@ SPUDRESULT spudaudio_destroy_instance(spudaudio_instance instance) {
 	if (wasapi_in_device_event_callback(instance))
 		return SPUDRESULT_GENERAL_FAILURE;
 	wasapi_watch_destroy(instance->watch);
+	const SPUD_ALLOCATOR allocator = instance->head.allocator;
 	struct spudaudio_device_t *dev = instance->devices;
 	while (dev) {
 		struct spudaudio_device_t *next = dev->next;
 		IMMDevice_Release(dev->mm_device);
-		free((void *)dev->debug_name);
-		free(dev);
+		spud_string_free(&allocator, dev->head.debug_name);
+		SPUD_DELETE(&allocator, struct spudaudio_device_t, dev);
 		dev = next;
 	}
-	free(instance->enumerated[0]);
-	free(instance->enumerated[1]);
+	SPUD_DELETE_ARRAY(&allocator, spudaudio_device, instance->enumerated[0], instance->enumerated_capacity[0]);
+	SPUD_DELETE_ARRAY(&allocator, spudaudio_device, instance->enumerated[1], instance->enumerated_capacity[1]);
 	IMMDeviceEnumerator_Release(instance->enumerator);
 	CoDecrementMTAUsage(instance->mta_cookie);
-	free((void *)instance->debug_name);
-	free(instance);
+	spud_string_free(&allocator, instance->head.debug_name);
+	SPUD_DELETE(&allocator, struct spudaudio_instance_t, instance);
 	return SPUD_SUCCESS;
 }
 
@@ -973,13 +985,14 @@ static struct spudaudio_device_t *wasapi_find_or_add_device(
 		if (d->direction == direction && strcmp(d->persistent_id, id) == 0)
 			return d;
 
-	struct spudaudio_device_t *d = (struct spudaudio_device_t *)calloc(1, sizeof(*d));
+	struct spudaudio_device_t *d = SPUD_NEW_ZEROED(&instance->head.allocator, struct spudaudio_device_t);
 	if (!d)
 		return NULL;
 	IMMDevice_AddRef(mm_device);
-	d->instance  = instance;
-	d->mm_device = mm_device;
-	d->direction = direction;
+	d->head.allocator = instance->head.allocator;
+	d->instance       = instance;
+	d->mm_device      = mm_device;
+	d->direction      = direction;
 	strncpy(d->persistent_id, id, sizeof(d->persistent_id) - 1);
 	d->next           = instance->devices;
 	instance->devices = d;
@@ -1007,7 +1020,7 @@ SPUDRESULT spudaudio_enumerate_devices(
 
 	UINT count = 0;
 	IMMDeviceCollection_GetCount(collection, &count);
-	spudaudio_device *list = count ? (spudaudio_device *)calloc(count, sizeof(spudaudio_device)) : NULL;
+	spudaudio_device *list = count ? SPUD_NEW_ARRAY_ZEROED(&instance->head.allocator, spudaudio_device, count) : NULL;
 	if (count && !list) {
 		IMMDeviceCollection_Release(collection);
 		return SPUDRESULT_OUT_OF_MEMORY;
@@ -1035,14 +1048,15 @@ SPUDRESULT spudaudio_enumerate_devices(
 	}
 	IMMDeviceCollection_Release(collection);
 	if (SPUDFAIL(r)) {
-		free(list);
+		SPUD_DELETE_ARRAY(&instance->head.allocator, spudaudio_device, list, count);
 		return r;
 	}
 
-	free(instance->enumerated[direction]);
-	instance->enumerated[direction] = list;
-	*out_devices                    = list;
-	*out_device_count               = written;
+	SPUD_DELETE_ARRAY(&instance->head.allocator, spudaudio_device, instance->enumerated[direction], instance->enumerated_capacity[direction]);
+	instance->enumerated[direction]          = list;
+	instance->enumerated_capacity[direction] = count;
+	*out_devices                             = list;
+	*out_device_count                        = written;
 	return SPUD_SUCCESS;
 }
 
@@ -1249,9 +1263,11 @@ static void wasapi_free_stream(struct spudaudio_stream_t *s) {
 		CloseHandle(s->stop_event);
 	if (s->startup_event)
 		CloseHandle(s->startup_event);
-	free(s->silence);
-	free((void *)s->debug_name);
-	free(s);
+	const SPUD_ALLOCATOR allocator = s->head.allocator;
+	// Bytes read as the stream's samples.
+	spud_free_array(&allocator, s->silence, s->buffer_size, s->block_align, SPUD_ALIGNOF(max_align_t));
+	spud_string_free(&allocator, s->head.debug_name);
+	SPUD_DELETE(&allocator, struct spudaudio_stream_t, s);
 }
 
 SPUDRESULT spudaudio_create_stream(
@@ -1269,9 +1285,10 @@ SPUDRESULT spudaudio_create_stream(
 	if (SPUDFAIL(r))
 		return r;
 
-	struct spudaudio_stream_t *s = (struct spudaudio_stream_t *)calloc(1, sizeof(*s));
+	struct spudaudio_stream_t *s = SPUD_NEW_ZEROED(&desc->device->head.allocator, struct spudaudio_stream_t);
 	if (!s)
 		return SPUDRESULT_OUT_OF_MEMORY;
+	s->head.allocator          = desc->device->head.allocator;
 	s->direction               = desc->device->direction;
 	s->callback                = desc->callback;
 	s->user_data               = desc->user_data;
@@ -1282,7 +1299,7 @@ SPUDRESULT spudaudio_create_stream(
 	s->error                   = SPUD_SUCCESS;
 	if (s->priority == SPUDAUDIO_THREAD_PRIORITY_MMCSS &&
 	    !MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, desc->thread.mmcss_task, -1, s->mmcss_task, SPUDAUDIO_MAX_MMCSS_TASK_NAME)) {
-		free(s);
+		SPUD_DELETE(&desc->device->head.allocator, struct spudaudio_stream_t, s);
 		return SPUDRESULT_DESC_INVALID_PARAMETERS;
 	}
 
@@ -1321,7 +1338,9 @@ SPUDRESULT spudaudio_create_stream(
 		return wasapi_result(hr);
 	}
 	if (s->direction == SPUDAUDIO_DIRECTION_INPUT) {
-		s->silence = (BYTE *)calloc(s->buffer_size, s->block_align);
+		// Made now, so the audio thread never allocates; wasapi_free_stream
+		// frees it with buffer_size and block_align, which don't change.
+		s->silence = (BYTE *)spud_allocate_array(&s->head.allocator, s->buffer_size, s->block_align, SPUD_ALIGNOF(max_align_t), true);
 		if (!s->silence) {
 			wasapi_free_stream(s);
 			return SPUDRESULT_OUT_OF_MEMORY;

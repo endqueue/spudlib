@@ -8,8 +8,8 @@
  * Four things live here:
  *
  * - What a spudnet_instance is, which is the same everywhere: nothing but
- *   the fact that it was made. Each platform makes and destroys it where
- *   it starts and stops its networking.
+ *   the fact that it was made, and the caller's allocator. Each platform
+ *   makes and destroys it where it starts and stops its networking.
  * - Small helpers that are the same on every platform: a spudnet_error
  *   record's handling, the checks on a spudnet_tls_desc and a
  *   spudnet_proxy_desc that don't depend on the stack, the walk through a
@@ -25,6 +25,7 @@
  */
 
 #include "spudnet.h"
+#include "../spudallocator.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -37,21 +38,30 @@ extern "C" {
 // Instance
 // --------------------------------------------------------------------------
 
-/* An instance holds one start of the platform's networking and nothing of
- * SpudNet's own; what it started is the platform's, and the platform keeps
- * the count. Made and destroyed by the file that makes the platform's
+/* An instance holds one start of the platform's networking and, of SpudNet's
+ * own, only its head: its debug name and the caller's allocator, which every
+ * object made with it copies into its own head. What it started is the
+ * platform's, and the platform keeps the count. Made and destroyed by the file that makes the platform's
  * calls: spudnetwindows.c (Winsock), spudnetcurl.c (libcurl) and
  * spudneturlsession.m (nothing to start).
  *
  * The objects a wait set can hold keep the instance they were made with -
  * an accepted socket keeps its listener's - which is how a set tells a
  * member of another instance from one of its own. The rest (an HTTP
- * client, a resolver) take theirs only to refuse NULL. */
+ * client, a resolver) take theirs only to refuse NULL and to copy its
+ * allocator. */
 struct spudnet_instance_t {
-	const char *debug_name;
-	// So that the struct has a size, and two instances two addresses.
-	char held;
+	spud_object_head head;
 };
+
+/* The checks every platform's spudnet_instance_create makes of its desc, in
+ * this order, before anything else: SPUDRESULT_NULL_DESC, the struct base's,
+ * SPUDRESULT_NULL_OUTPUT_PARAMETER (and *out_instance set to NULL from there
+ * on), then the allocator's (SPUDRESULT_NULL_ALLOCATOR,
+ * SPUDRESULT_INVALID_ALLOCATOR). Defined in src/spudnet.c. */
+SPUDRESULT spudnet_instance_desc_check(
+    const spudnet_instance_desc *desc,
+    spudnet_instance *out_instance);
 
 // --------------------------------------------------------------------------
 // Text
@@ -125,18 +135,22 @@ struct spudnet_proxy {
 };
 
 /* Checks a proxy desc (the rules are with spudnet_proxy_desc in spudnet.h)
- * and copies it into `out_proxy`, which the caller frees with
- * spudnet_proxy_free whatever this returned. */
-SPUDRESULT spudnet_proxy_parse(const spudnet_proxy_desc *desc, struct spudnet_proxy *out_proxy);
-void       spudnet_proxy_free(struct spudnet_proxy *proxy);
+ * and copies it into `out_proxy` through `allocator`, which the caller frees
+ * with spudnet_proxy_free and the same allocator whatever this returned. */
+SPUDRESULT spudnet_proxy_parse(const SPUD_ALLOCATOR *allocator, const spudnet_proxy_desc *desc, struct spudnet_proxy *out_proxy);
+void       spudnet_proxy_free(const SPUD_ALLOCATOR *allocator, struct spudnet_proxy *proxy);
 
 // --------------------------------------------------------------------------
 // HTTP: a response's status and headers
 // --------------------------------------------------------------------------
 
+/* Each string is allocated with its length and a terminator, through the
+ * allocator the head's functions are given. */
 struct spudnet_http_header_entry {
-	char *name;
-	char *value;
+	char  *name;
+	size_t name_length;
+	char  *value;
+	size_t value_length;
 };
 
 /* Each name once: a value added under a name that is already there is
@@ -145,14 +159,19 @@ struct spudnet_http_head {
 	uint32_t                          status;
 	struct spudnet_http_header_entry *entries;
 	uint32_t                          count;
-	uint32_t                          capacity;
+	uint32_t                          capacity; // the entries `entries` was allocated with
 };
 
+/* Every call that allocates or frees takes the allocator of the object
+ * that holds the head (a transfer's head.allocator), the same one each
+ * time. */
+
 /* Frees what a head holds and leaves it empty. */
-void spudnet_head_clear(struct spudnet_http_head *head);
+void spudnet_head_clear(const SPUD_ALLOCATOR *allocator, struct spudnet_http_head *head);
 
 /* The add calls return false when out of memory. */
 bool spudnet_head_add_header(
+    const SPUD_ALLOCATOR *allocator,
     struct spudnet_http_head *head,
     const char *name,
     size_t name_length,
@@ -164,6 +183,7 @@ bool spudnet_head_add_header(
  * headers collected so far - they belonged to a response a redirect or an
  * interim reply replaced - and anything else is skipped. */
 bool spudnet_head_add_header_line(
+    const SPUD_ALLOCATOR *allocator,
     struct spudnet_http_head *head,
     const char *line,
     size_t length);
@@ -204,10 +224,15 @@ enum spudnet_http_phase {
 
 /* The public object. Everything in it is the front end's
  * (src/net/spudnethttp.c) to change; a backend reads what it needs, fills
- * `head` when the response arrives, records its failures in `error`, and
- * keeps its own state behind `backend`. */
+ * `response` when the response arrives (through `head.allocator`), records
+ * its failures in `error`, and keeps its own state behind `backend`, made
+ * and freed through `head.allocator` too.
+ *
+ * `head.allocator` is a copy of the client's: every backend's
+ * spudnet_http_client_t starts with its spud_object_head, which is how the
+ * front end reaches it. */
 struct spudnet_http_transfer_t {
-	const char *debug_name;
+	spud_object_head        head;
 	spudnet_http_client     client;
 	enum spudnet_http_phase phase;
 
@@ -218,7 +243,7 @@ struct spudnet_http_transfer_t {
 	bool              is_head; // the method is exactly "HEAD"
 	bool              follow_redirects;
 
-	struct spudnet_http_head head;
+	struct spudnet_http_head response; // its status and headers
 	spudnet_error            error;
 
 	void *backend;

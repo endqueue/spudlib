@@ -58,20 +58,28 @@
  * WSAStartup, libcurl its global init), and so a wait set can tell which
  * objects were made together. */
 SPUDRESULT spudnet_instance_create(
+    const spudnet_instance_desc *desc,
     spudnet_instance *out_instance,
     spudnet_error *out_error) {
 	spudnet_error_clear(out_error);
-	if (!out_instance)
-		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
-	*out_instance = (struct spudnet_instance_t *)calloc(1, sizeof(struct spudnet_instance_t));
-	return *out_instance ? SPUD_SUCCESS : SPUDRESULT_OUT_OF_MEMORY;
+	const SPUDRESULT desc_result = spudnet_instance_desc_check(desc, out_instance);
+	if (desc_result != SPUD_SUCCESS)
+		return desc_result;
+
+	struct spudnet_instance_t *instance = SPUD_NEW_ZEROED(desc->allocator, struct spudnet_instance_t);
+	if (!instance)
+		return SPUDRESULT_OUT_OF_MEMORY;
+	instance->head.allocator = *desc->allocator;
+	*out_instance            = instance;
+	return SPUD_SUCCESS;
 }
 
 void spudnet_instance_destroy(spudnet_instance instance) {
 	if (!instance)
 		return;
-	free((void *)instance->debug_name);
-	free(instance);
+	const SPUD_ALLOCATOR allocator = instance->head.allocator;
+	spud_string_free(&allocator, instance->head.debug_name);
+	SPUD_DELETE(&allocator, struct spudnet_instance_t, instance);
 }
 
 // --------------------------------------------------------------------------
@@ -612,7 +620,7 @@ static BOOL spudnet_apple_answer_challenge(
 @end
 
 struct spudnet_http_client_t {
-	const char *debug_name;
+	spud_object_head     head; // first: spudnethttp.c reaches the allocator through it
 	NSURLSession        *session;
 	SpudNetHTTPDelegate *delegate;
 };
@@ -642,20 +650,22 @@ SPUDRESULT spudnet_http_client_create(
 	SPUDRESULT  result = spudnet_apple_tls_create(&desc->tls, &tls);
 	if (SPUDFAIL(result))
 		return result;
-	struct spudnet_proxy proxy;
-	result = spudnet_proxy_parse(&desc->proxy, &proxy);
+	const SPUD_ALLOCATOR *allocator = &instance->head.allocator;
+	struct spudnet_proxy  proxy;
+	result = spudnet_proxy_parse(allocator, &desc->proxy, &proxy);
 	if (SPUDFAIL(result)) {
-		spudnet_proxy_free(&proxy);
+		spudnet_proxy_free(allocator, &proxy);
 		[tls release];
 		return result;
 	}
 
-	struct spudnet_http_client_t *client = (struct spudnet_http_client_t *)calloc(1, sizeof(struct spudnet_http_client_t));
+	struct spudnet_http_client_t *client = SPUD_NEW_ZEROED(allocator, struct spudnet_http_client_t);
 	if (!client) {
-		spudnet_proxy_free(&proxy);
+		spudnet_proxy_free(allocator, &proxy);
 		[tls release];
 		return SPUDRESULT_OUT_OF_MEMORY;
 	}
+	client->head.allocator = *allocator;
 
 	@autoreleasepool {
 		NSURLSessionConfiguration *configuration = spudnet_apple_configuration(&proxy);
@@ -669,12 +679,12 @@ SPUDRESULT spudnet_http_client_create(
 		if (configuration && client->delegate)
 			client->session = [[NSURLSession sessionWithConfiguration:configuration delegate:client->delegate delegateQueue:nil] retain];
 	}
-	spudnet_proxy_free(&proxy);
+	spudnet_proxy_free(allocator, &proxy);
 	if (!client->delegate || !client->session) {
 		[client->session invalidateAndCancel];
 		[client->session release];
 		[client->delegate release];
-		free(client);
+		SPUD_DELETE(allocator, struct spudnet_http_client_t, client);
 		return SPUDRESULT_GENERAL_FAILURE;
 	}
 
@@ -689,8 +699,9 @@ void spudnet_http_client_destroy(spudnet_http_client client) {
 	[client->session invalidateAndCancel];
 	[client->session release];
 	[client->delegate release];
-	free((void *)client->debug_name);
-	free(client);
+	const SPUD_ALLOCATOR allocator = client->head.allocator;
+	spud_string_free(&allocator, client->head.debug_name);
+	SPUD_DELETE(&allocator, struct spudnet_http_client_t, client);
 }
 
 /* The record and the result for a transfer NSURLSession ended with
@@ -706,14 +717,14 @@ static SPUDRESULT spudnet_apple_http_failed(struct spudnet_http_transfer_t *tran
 }
 
 SPUDRESULT spudnet_http_backend_create(struct spudnet_http_transfer_t *transfer) {
-	struct spudnet_apple_http *http = (struct spudnet_apple_http *)calloc(1, sizeof(struct spudnet_apple_http));
+	struct spudnet_apple_http *http = SPUD_NEW_ZEROED(&transfer->head.allocator, struct spudnet_apple_http);
 	if (!http)
 		return SPUDRESULT_OUT_OF_MEMORY;
 	http->client = transfer->client;
 	http->state  = [[SpudNetTransferState alloc] init];
 	if (!http->state || !http->state->condition) {
 		[http->state release];
-		free(http);
+		SPUD_DELETE(&transfer->head.allocator, struct spudnet_apple_http, http);
 		return SPUDRESULT_OUT_OF_MEMORY;
 	}
 	transfer->backend = http;
@@ -756,7 +767,7 @@ void spudnet_http_backend_destroy(struct spudnet_http_transfer_t *transfer) {
 	[delegate->lock unlock];
 
 	[state release];
-	free(http);
+	SPUD_DELETE(&transfer->head.allocator, struct spudnet_apple_http, http);
 	transfer->backend = NULL;
 }
 
@@ -941,8 +952,8 @@ SPUDRESULT spudnet_http_backend_receive_response(
 		} else if (state->response) {
 			// NSURLSession gives the headers with a repeated name already
 			// joined into one value, which is the form spudnet.h promises.
-			transfer->head.status = (uint32_t)state->response.statusCode;
-			__block bool stored   = true;
+			transfer->response.status = (uint32_t)state->response.statusCode;
+			__block bool stored       = true;
 			[state->response.allHeaderFields enumerateKeysAndObjectsUsingBlock:^(id key, id object, BOOL *stop) {
 				if (![key isKindOfClass:[NSString class]] || ![object isKindOfClass:[NSString class]])
 					return;
@@ -950,7 +961,8 @@ SPUDRESULT spudnet_http_backend_receive_response(
 				const char *value = [(NSString *)object UTF8String];
 				if (!name || !value)
 					return;
-				if (!spudnet_head_add_header(&transfer->head, name, strlen(name), value, strlen(value))) {
+				// On the caller's thread: enumerating runs the block here.
+				if (!spudnet_head_add_header(&transfer->head.allocator, &transfer->response, name, strlen(name), value, strlen(value))) {
 					stored = false;
 					*stop  = YES;
 				}
@@ -1156,7 +1168,7 @@ SPUDRESULT spudnet_http_backend_recv(
 @end
 
 struct spudnet_websocket_t {
-	const char *debug_name;
+	spud_object_head       head;
 	spudnet_instance       instance;
 	SpudNetWebSocketState *state;
 	// Made by connect, under the state's condition; nil until then.
@@ -1178,14 +1190,15 @@ SPUDRESULT spudnet_websocket_create(
 	if (!instance)
 		return SPUDRESULT_SPUDNET_INVALID_INSTANCE;
 
-	struct spudnet_websocket_t *socket = (struct spudnet_websocket_t *)calloc(1, sizeof(struct spudnet_websocket_t));
+	struct spudnet_websocket_t *socket = SPUD_NEW_ZEROED(&instance->head.allocator, struct spudnet_websocket_t);
 	if (!socket)
 		return SPUDRESULT_OUT_OF_MEMORY;
-	socket->instance = instance;
-	socket->state    = [[SpudNetWebSocketState alloc] init];
+	socket->head.allocator = instance->head.allocator;
+	socket->instance       = instance;
+	socket->state          = [[SpudNetWebSocketState alloc] init];
 	if (!socket->state || !socket->state->condition) {
 		[socket->state release];
-		free(socket);
+		SPUD_DELETE(&instance->head.allocator, struct spudnet_websocket_t, socket);
 		return SPUDRESULT_OUT_OF_MEMORY;
 	}
 
@@ -1206,8 +1219,9 @@ void spudnet_websocket_destroy(spudnet_websocket socket) {
 	[socket->task release];
 	[socket->session release];
 	[socket->state release];
-	free((void *)socket->debug_name);
-	free(socket);
+	const SPUD_ALLOCATOR allocator = socket->head.allocator;
+	spud_string_free(&allocator, socket->head.debug_name);
+	SPUD_DELETE(&allocator, struct spudnet_websocket_t, socket);
 }
 
 void spudnet_websocket_get_error(
@@ -1263,9 +1277,9 @@ SPUDRESULT spudnet_websocket_connect(
 		// The proxy is only needed for as long as it takes to put it in a
 		// configuration, which is made here, ahead of the lock.
 		struct spudnet_proxy proxy;
-		SPUDRESULT           proxy_result = spudnet_proxy_parse(&desc->proxy, &proxy);
+		SPUDRESULT           proxy_result = spudnet_proxy_parse(&socket->head.allocator, &desc->proxy, &proxy);
 		NSURLSessionConfiguration *configuration = SPUDFAIL(proxy_result) ? nil : spudnet_apple_configuration(&proxy);
-		spudnet_proxy_free(&proxy);
+		spudnet_proxy_free(&socket->head.allocator, &proxy);
 		if (!configuration) {
 			[tls release];
 			return SPUDFAIL(proxy_result) ? proxy_result : SPUDRESULT_DESC_INVALID_PARAMETERS;

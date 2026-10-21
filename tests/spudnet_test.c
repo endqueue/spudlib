@@ -24,6 +24,8 @@
 
 #include <spudnet.h>
 
+#include "spudtest_allocator.h"
+
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -205,6 +207,20 @@ static uint8_t pattern_at(uint64_t position) { return (uint8_t)(((position % 256
  * main. "Instance" below makes others beside it. */
 static spudnet_instance g_instance = NULL;
 
+/* What g_instance and every other instance is made with, but the tracked one
+ * in "Instance": most of this test runs SpudNet on several threads, and the
+ * tracker (spudtest_allocator.h) is for one thread at a time. Set by main. */
+static SPUD_ALLOCATOR g_system;
+
+/* A desc that makes an instance through `allocator`. */
+static spudnet_instance_desc instance_desc(const SPUD_ALLOCATOR *allocator) {
+	spudnet_instance_desc desc;
+	memset(&desc, 0, sizeof(desc));
+	desc.base.type = SPUD_STRUCT_TYPE_NET_INSTANCE_DESC;
+	desc.allocator = allocator;
+	return desc;
+}
+
 // --------------------------------------------------------------------------
 // Instance
 // --------------------------------------------------------------------------
@@ -212,24 +228,54 @@ static spudnet_instance g_instance = NULL;
 /* Makes an instance and destroys it again, on a thread of its own, while
  * the main thread goes on using g_instance. */
 static test_thread_result TEST_THREAD_CALL make_instance_elsewhere(void *argument) {
-	SPUDRESULT      *result = (SPUDRESULT *)argument;
-	spudnet_instance other  = NULL;
-	*result                 = spudnet_instance_create(&other, NULL);
+	SPUDRESULT                 *result = (SPUDRESULT *)argument;
+	const spudnet_instance_desc desc   = instance_desc(&g_system);
+	spudnet_instance            other  = NULL;
+	*result                            = spudnet_instance_create(&desc, &other, NULL);
 	sleep_ms(100);
 	spudnet_instance_destroy(other);
 	return 0;
 }
 
+/* Defined after the HTTP helpers it uses. */
+static void test_instance_memory(void);
+
 static void test_instance(void) {
 	part("Instance");
 
-	spudnet_error error;
-	expect(spudnet_instance_create(NULL, &error), SPUDRESULT_NULL_OUTPUT_PARAMETER, "create with nowhere to put it");
+	// The desc's checks, in the order spudnet.h lists them.
+	spudnet_error         error;
+	spudnet_instance      made = (spudnet_instance)(uintptr_t)1;
+	spudnet_instance_desc desc = instance_desc(&g_system);
+	expect(spudnet_instance_create(NULL, &made, &error), SPUDRESULT_NULL_DESC, "create with no desc");
+	desc.base.type = SPUD_STRUCT_TYPE_NET_RESOLVER_DESC;
+	expect(spudnet_instance_create(&desc, &made, &error), SPUDRESULT_STRUCT_WRONG_TYPE, "create with another desc's type");
+	desc.base.type                    = SPUD_STRUCT_TYPE_NET_INSTANCE_DESC;
+	const SPUD_STRUCT_BASE chained_on = {SPUD_STRUCT_TYPE_NET_RESOLVER_DESC, NULL};
+	desc.base.next                    = &chained_on;
+	expect(spudnet_instance_create(&desc, &made, &error), SPUDRESULT_STRUCT_UNKNOWN_IN_CHAIN, "create with something chained on");
+	desc.base.next = NULL;
+	expect(spudnet_instance_create(&desc, NULL, &error), SPUDRESULT_NULL_OUTPUT_PARAMETER, "create with nowhere to put it");
+	desc.allocator = NULL;
+	expect(spudnet_instance_create(&desc, &made, &error), SPUDRESULT_NULL_ALLOCATOR, "create with no allocator");
+	check(made == NULL, "and nothing handed back");
+	SPUD_ALLOCATOR lacking = g_system;
+	lacking.allocate       = NULL;
+	desc.allocator         = &lacking;
+	made                   = (spudnet_instance)(uintptr_t)1;
+	expect(spudnet_instance_create(&desc, &made, &error), SPUDRESULT_INVALID_ALLOCATOR, "create with an allocator lacking allocate");
+	check(made == NULL, "and nothing handed back");
+	lacking      = g_system;
+	lacking.free = NULL;
+	expect(spudnet_instance_create(&desc, &made, &error), SPUDRESULT_INVALID_ALLOCATOR, "create with an allocator lacking free");
+	desc = instance_desc(&g_system);
 	spudnet_instance_destroy(NULL);
+
+	test_instance_memory();
 
 	// A second one, beside main's, and gone again while main's stays up.
 	spudnet_instance second = NULL;
-	expect(spudnet_instance_create(&second, &error), SPUD_SUCCESS, "a second instance while the first exists");
+	expect(spudnet_instance_create(&desc, &second, &error), SPUD_SUCCESS, "a second instance while the first exists");
 	check(second != NULL && second != g_instance, "which is an instance of its own");
 
 	// One made and destroyed on another thread, while this one is in use.
@@ -286,7 +332,7 @@ static void test_instance(void) {
 	// instance: the order spudnet.h allows a lookup still out to be left
 	// in. (Run afterwards, aborted, as every resolver has to be run.)
 	spudnet_instance third = NULL;
-	if (expect(spudnet_instance_create(&third, &error), SPUD_SUCCESS, "a third instance, for a resolver to outlast")) {
+	if (expect(spudnet_instance_create(&desc, &third, &error), SPUD_SUCCESS, "a third instance, for a resolver to outlast")) {
 		resolver = NULL;
 		expect(spudnet_resolver_create(third, &resolver_desc, &resolver), SPUD_SUCCESS, "a resolver made with it");
 		spudnet_resolver_abort(resolver);
@@ -914,6 +960,173 @@ static long server_stat(const char *name) {
 	return value;
 }
 #endif
+
+/* Everything here is made, used and destroyed on this thread alone,
+ * through a tracker, and checked at the end to have been freed with the
+ * size and alignment it was allocated with: an instance, one object of
+ * every kind made with it, an accepted socket (its listener's allocator), a
+ * transfer (its client's) with a response's headers, and a resolver freed
+ * after its instance has gone. */
+static void test_instance_memory(void) {
+	spudtest_allocator    tracker;
+	SPUD_ALLOCATOR        allocator = spudtest_allocator_make(&tracker);
+	spudnet_instance_desc desc      = instance_desc(&allocator);
+	spudnet_error         error;
+
+	// No memory: refused, with nothing made and nothing kept.
+	spudnet_instance instance = (spudnet_instance)(uintptr_t)1;
+	tracker.refuse_after      = 0;
+	expect(spudnet_instance_create(&desc, &instance, &error), SPUDRESULT_OUT_OF_MEMORY, "an instance with no memory to be had");
+	check(instance == NULL && tracker.live_blocks == 0, "makes nothing and keeps nothing");
+	tracker.refuse_after = SIZE_MAX;
+
+	// The caller's allocator struct need not outlive the call: the instance
+	// keeps a copy, so this one is overwritten once it is made.
+	SPUD_ALLOCATOR passed = allocator;
+	desc.allocator        = &passed;
+	if (!expect(spudnet_instance_create(&desc, &instance, &error), SPUD_SUCCESS, "an instance through the caller's allocator"))
+		return;
+	memset(&passed, 0, sizeof(passed));
+	check(tracker.given > 0, "allocates through it");
+	expect(spud_debug_name_set(instance, "tracked instance"), SPUD_SUCCESS, "a name for the instance");
+
+	// A client that keeps a proxy, roots and a pin (the copies each stack
+	// keeps of them), made and destroyed without a transfer.
+	{
+		spudnet_tls_certificate root;
+		root.data = g_server.cert_der;
+		root.size = g_server.cert_der_size;
+		spudnet_tls_pin pin;
+		memcpy(pin.sha256, g_server.pin, sizeof(pin.sha256));
+		char proxy_url[64];
+		snprintf(proxy_url, sizeof(proxy_url), "http://127.0.0.1:%d", g_server.proxy_port);
+
+		spudnet_http_client_desc client_desc;
+		memset(&client_desc, 0, sizeof(client_desc));
+		client_desc.base.type      = SPUD_STRUCT_TYPE_NET_HTTP_CLIENT_DESC;
+		client_desc.tls.trust      = SPUDNET_TLS_TRUST_ROOTS;
+		client_desc.tls.roots      = &root;
+		client_desc.tls.root_count = 1;
+		client_desc.tls.pins       = &pin;
+		client_desc.tls.pin_count  = 1;
+		client_desc.proxy.mode     = SPUDNET_PROXY_EXPLICIT;
+		client_desc.proxy.url      = proxy_url;
+		spudnet_http_client client = NULL;
+		expect(spudnet_http_client_create(instance, &client_desc, &client), SPUD_SUCCESS, "tracked: an HTTP client with a proxy, a root and a pin");
+		spudnet_http_client_destroy(client);
+	}
+
+	// A whole exchange: the response's headers, a repeated one joined, are
+	// the transfer's, through its client's allocator.
+	{
+		spudnet_http_client_desc client_desc;
+		memset(&client_desc, 0, sizeof(client_desc));
+		client_desc.base.type      = SPUD_STRUCT_TYPE_NET_HTTP_CLIENT_DESC;
+		client_desc.proxy.mode     = SPUDNET_PROXY_NONE;
+		spudnet_http_client client = NULL;
+		if (expect(spudnet_http_client_create(instance, &client_desc, &client), SPUD_SUCCESS, "tracked: a plain HTTP client")) {
+			expect(spud_debug_name_set(client, "tracked client"), SPUD_SUCCESS, "a name for the client");
+			struct exchange x;
+			memset(&x, 0, sizeof(x));
+			x.method = "GET";
+			x.path   = "/hello";
+			x.keep   = true;
+			if (exchange_ok(client, &x, "tracked: GET /hello")) {
+				const char *multi = spudnet_http_transfer_get_header(x.transfer, "x-multi");
+				check(multi && strcmp(multi, "a, b") == 0, "tracked: the joined header (\"%s\")", multi ? multi : "(none)");
+				expect(spud_debug_name_set(x.transfer, "tracked transfer"), SPUD_SUCCESS, "a name for the transfer");
+			}
+			exchange_free(&x);
+			spudnet_http_client_destroy(client);
+		}
+	}
+
+#if SPUDNET_EXT_WEBSOCKET
+	{
+		spudnet_websocket socket = NULL;
+		if (expect(spudnet_websocket_create(instance, &socket), SPUD_SUCCESS, "tracked: a WebSocket")) {
+			expect(spud_debug_name_set(socket, "tracked WebSocket"), SPUD_SUCCESS, "a name for the WebSocket");
+			spudnet_websocket_destroy(socket);
+		}
+	}
+#endif
+
+#if SPUDNET_EXT_TCP
+	// A listener, a socket connected to it and the one it accepts, and a
+	// wait set holding them. Connecting on loopback finishes without the
+	// accept, so all of it is on this thread.
+	{
+		spudnet_tcp_listener      listener = NULL;
+		spudnet_tcp_listener_desc listen_desc;
+		memset(&listen_desc, 0, sizeof(listen_desc));
+		listen_desc.base.type = SPUD_STRUCT_TYPE_NET_TCP_LISTENER_DESC;
+		listen_desc.address   = "127.0.0.1";
+		listen_desc.port      = 0;
+		listen_desc.backlog   = 4;
+		uint16_t           port     = 0;
+		spudnet_tcp_socket client   = NULL;
+		spudnet_tcp_socket accepted = NULL;
+		spudnet_wait_set   set      = NULL;
+		if (expect(spudnet_tcp_listener_create(instance, &listen_desc, &listener, &error), SPUD_SUCCESS, "tracked: a listener") &&
+		    expect(spudnet_tcp_listener_get_port(listener, &port), SPUD_SUCCESS, "on a port of its own") &&
+		    expect(spudnet_tcp_socket_create(instance, &client), SPUD_SUCCESS, "tracked: a socket")) {
+			expect(spud_debug_name_set(listener, "tracked listener"), SPUD_SUCCESS, "a name for the listener");
+			spudnet_tcp_socket_connect_desc connect_desc;
+			memset(&connect_desc, 0, sizeof(connect_desc));
+			connect_desc.base.type  = SPUD_STRUCT_TYPE_NET_TCP_SOCKET_CONNECT_DESC;
+			connect_desc.address    = "127.0.0.1";
+			connect_desc.port       = port;
+			connect_desc.timeout_ms = PATIENCE_MS;
+			if (expect(spudnet_tcp_socket_connect(client, &connect_desc), SPUD_SUCCESS, "tracked: connected to the listener") &&
+			    expect(spudnet_tcp_listener_accept(listener, PATIENCE_MS, &accepted), SPUD_SUCCESS, "tracked: and accepted")) {
+				expect(spud_debug_name_set(accepted, "tracked accepted socket"), SPUD_SUCCESS, "a name for the accepted socket");
+				int tag = 0;
+				if (expect(spudnet_wait_set_create(instance, &set, &error), SPUD_SUCCESS, "tracked: a wait set")) {
+					expect(spudnet_wait_set_add_tcp_listener(set, listener, &tag), SPUD_SUCCESS, "holding the listener");
+					expect(spudnet_wait_set_add_tcp_socket(set, accepted, SPUDNET_WAIT_FOR_INCOMING, &tag), SPUD_SUCCESS, "and the accepted socket");
+					// Something for the accepted socket to read, so the wait
+					// has a member to name.
+					uint64_t sent = 0;
+					expect(spudnet_tcp_socket_send(client, "x", 1, PATIENCE_MS, &sent), SPUD_SUCCESS, "tracked: a byte sent");
+					spudnet_wait_event events[4];
+					uint32_t           count = 0;
+					expect(spudnet_wait_set_wait(set, PATIENCE_MS, events, 4, &count), SPUD_SUCCESS, "tracked: a wait");
+					check(count >= 1, "names the accepted socket (%u named)", count);
+				}
+			}
+		}
+		spudnet_wait_set_destroy(set);
+		spudnet_tcp_socket_destroy(accepted);
+		spudnet_tcp_socket_destroy(client);
+		spudnet_tcp_listener_destroy(listener);
+	}
+
+	// A resolver outlasting its instance: destroyed unrun, the instance
+	// destroyed, and only then run, which is what frees it - through the
+	// copy of the allocator it kept, the instance's being gone.
+	spudnet_resolver      resolver = NULL;
+	spudnet_resolver_desc resolver_desc;
+	memset(&resolver_desc, 0, sizeof(resolver_desc));
+	resolver_desc.base.type = SPUD_STRUCT_TYPE_NET_RESOLVER_DESC;
+	resolver_desc.host      = "localhost";
+	resolver_desc.family    = SPUDNET_ADDRESS_FAMILY_IPV4;
+	bool made_resolver      = expect(spudnet_resolver_create(instance, &resolver_desc, &resolver), SPUD_SUCCESS, "tracked: a resolver");
+	if (made_resolver) {
+		expect(spud_debug_name_set(resolver, "tracked resolver"), SPUD_SUCCESS, "a name for the resolver");
+		spudnet_resolver_abort(resolver);
+		spudnet_resolver_destroy(resolver);
+	}
+	spudnet_instance_destroy(instance);
+	if (made_resolver) {
+		check(tracker.live_blocks > 0, "the resolver is still held after its instance has gone");
+		expect(spudnet_resolver_run(resolver), SPUDRESULT_SPUDNET_ABORTED, "tracked: run after the instance has gone");
+	}
+#else
+	spudnet_instance_destroy(instance);
+#endif
+
+	check(spudtest_allocator_clean(&tracker), "everything tracked was freed with the size and alignment it was allocated with (%zu allocations)", tracker.given);
+}
 
 struct abort_transfer_later {
 	uint32_t              delay_ms;
@@ -2009,8 +2222,10 @@ int main(int argc, char **argv) {
 	}
 	const char *only = argc > 2 ? argv[2] : NULL;
 
-	spudnet_error error;
-	if (SPUDFAIL(spudnet_instance_create(&g_instance, &error))) {
+	g_system                         = spud_allocator_system();
+	const spudnet_instance_desc desc = instance_desc(&g_system);
+	spudnet_error               error;
+	if (SPUDFAIL(spudnet_instance_create(&desc, &g_instance, &error))) {
 		fprintf(stderr, "spudnet_test: spudnet_instance_create failed (result %d, source %d, code %lld) %s\n", (int)error.result, (int)error.source, (long long)error.code, error.text);
 		return 2;
 	}

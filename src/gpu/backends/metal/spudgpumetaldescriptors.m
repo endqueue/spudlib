@@ -96,8 +96,12 @@ SPUDRESULT spudgpu_create_sampler(
 	if (!state)
 		return SPUDRESULT_API_SPECIFIC_FAILURE;
 
-	spudgpu_sampler_metal *sampler_metal =
-	    (spudgpu_sampler_metal *)calloc(1, sizeof(spudgpu_sampler_metal));
+	spudgpu_sampler_metal *sampler_metal = SPUD_NEW_ZEROED(&device_metal->head.allocator, spudgpu_sampler_metal);
+	if (!sampler_metal) {
+		[state release];
+		return SPUDRESULT_OUT_OF_MEMORY;
+	}
+	sampler_metal->head.allocator     = device_metal->head.allocator;
 	sampler_metal->_sampler_state_mtl = [state retain];
 
 	if (spud_debug_name_set(sampler_metal, desc->debug_name) != SPUD_SUCCESS) {
@@ -114,8 +118,9 @@ void spudgpu_destroy_sampler(spudgpu_sampler sampler) {
 	if (!sampler_metal)
 		return;
 	[sampler_metal->_sampler_state_mtl release];
-	free((void *)sampler_metal->_debug_name);
-	free(sampler_metal);
+	const SPUD_ALLOCATOR allocator = sampler_metal->head.allocator;
+	spud_string_free(&allocator, sampler_metal->head.debug_name);
+	SPUD_DELETE(&allocator, spudgpu_sampler_metal, sampler_metal);
 }
 
 static MTLBindingAccess spudgpumetal___internal_descriptor_argument_access(SPUDGPU_DESCRIPTOR_TYPE type) {
@@ -147,11 +152,12 @@ SPUDRESULT spudgpu_create_descriptor_set_layout(
 	SPUDRESULT sr = SPUD_SUCCESS;
 
 	spudgpu_descriptor_set_layout_metal *layout_metal =
-	    (spudgpu_descriptor_set_layout_metal *)calloc(1, sizeof(spudgpu_descriptor_set_layout_metal));
+	    SPUD_NEW_ZEROED(&device->head.allocator, spudgpu_descriptor_set_layout_metal);
 	if (!layout_metal) {
 		sr = SPUDRESULT_GENERAL_FAILURE;
 		goto failedattempt;
 	}
+	layout_metal->head.allocator = device->head.allocator;
 	layout_metal->_parent_device = (spudgpu_device_metal *)device;
 	layout_metal->_desc          = *desc;
 
@@ -197,7 +203,7 @@ SPUDRESULT spudgpu_create_descriptor_set_layout(
 		spudgpu_destroy_descriptor_set_layout((spudgpu_descriptor_set_layout)layout_metal);
 		return SPUDRESULT_OUT_OF_MEMORY;
 	}
-	layout_metal->_desc.debug_name = layout_metal->_debug_name;
+	layout_metal->_desc.debug_name = layout_metal->head.debug_name;
 
 	*out_layout = (spudgpu_descriptor_set_layout)layout_metal;
 
@@ -208,7 +214,7 @@ failedattempt:
 		if (layout_metal->_argument_encoder_mtl) {
 			[layout_metal->_argument_encoder_mtl release];
 		}
-		free(layout_metal);
+		SPUD_DELETE(&device->head.allocator, spudgpu_descriptor_set_layout_metal, layout_metal);
 	}
 	return sr;
 }
@@ -219,8 +225,9 @@ void spudgpu_destroy_descriptor_set_layout(spudgpu_descriptor_set_layout layout)
 		if (layout_metal->_argument_encoder_mtl) {
 			[layout_metal->_argument_encoder_mtl release];
 		}
-		free((void *)layout_metal->_debug_name);
-		free(layout_metal);
+		const SPUD_ALLOCATOR allocator = layout_metal->head.allocator;
+		spud_string_free(&allocator, layout_metal->head.debug_name);
+		SPUD_DELETE(&allocator, spudgpu_descriptor_set_layout_metal, layout_metal);
 	}
 }
 
@@ -242,12 +249,12 @@ SPUDRESULT spudgpu_create_descriptor_pool(
 
 	SPUDRESULT sr = SPUD_SUCCESS;
 
-	spudgpu_descriptor_pool_metal *pool_metal =
-	    (spudgpu_descriptor_pool_metal *)calloc(1, sizeof(spudgpu_descriptor_pool_metal));
+	spudgpu_descriptor_pool_metal *pool_metal = SPUD_NEW_ZEROED(&device->head.allocator, spudgpu_descriptor_pool_metal);
 	if (!pool_metal) {
 		sr = SPUDRESULT_GENERAL_FAILURE;
 		goto failedattempt;
 	}
+	pool_metal->head.allocator = device->head.allocator;
 	pool_metal->_parent_device = (spudgpu_device_metal *)device;
 	pool_metal->_desc          = *desc;
 
@@ -257,9 +264,10 @@ SPUDRESULT spudgpu_create_descriptor_pool(
 	// can free every set's MTLBuffer in bulk, matching those calls' "free
 	// all sets allocated from this pool" contract instead of leaking one
 	// small GPU buffer per set on every per-frame reset.
+	// _desc.max_sets long, which is the count it is freed with.
 	pool_metal->_tracked_sets_mtl =
-	    (spudgpu_descriptor_set_metal **)calloc(desc->max_sets, sizeof(spudgpu_descriptor_set_metal *));
-	if (desc->max_sets > 0 && !pool_metal->_tracked_sets_mtl) {
+	    SPUD_NEW_ARRAY_ZEROED(&pool_metal->head.allocator, spudgpu_descriptor_set_metal *, desc->max_sets);
+	if (!pool_metal->_tracked_sets_mtl) {
 		sr = SPUDRESULT_GENERAL_FAILURE;
 		goto failedattempt;
 	}
@@ -268,7 +276,7 @@ SPUDRESULT spudgpu_create_descriptor_pool(
 		spudgpu_destroy_descriptor_pool((spudgpu_descriptor_pool)pool_metal);
 		return SPUDRESULT_OUT_OF_MEMORY;
 	}
-	pool_metal->_desc.debug_name = pool_metal->_debug_name;
+	pool_metal->_desc.debug_name = pool_metal->head.debug_name;
 
 	*out_pool = (spudgpu_descriptor_pool)pool_metal;
 
@@ -276,8 +284,10 @@ SPUDRESULT spudgpu_create_descriptor_pool(
 
 failedattempt:
 	if (pool_metal) {
-		free(pool_metal->_tracked_sets_mtl);
-		free(pool_metal);
+		SPUD_DELETE_ARRAY(
+		    &device->head.allocator, spudgpu_descriptor_set_metal *, pool_metal->_tracked_sets_mtl,
+		    pool_metal->_desc.max_sets);
+		SPUD_DELETE(&device->head.allocator, spudgpu_descriptor_pool_metal, pool_metal);
 	}
 	return sr;
 }
@@ -290,8 +300,9 @@ static void spudgpumetal___internal_free_tracked_sets(spudgpu_descriptor_pool_me
 		if (set_metal->_argument_buffer_mtl) {
 			[set_metal->_argument_buffer_mtl release];
 		}
-		free((void *)set_metal->_debug_name);
-		free(set_metal);
+		const SPUD_ALLOCATOR allocator = set_metal->head.allocator;
+		spud_string_free(&allocator, set_metal->head.debug_name);
+		SPUD_DELETE(&allocator, spudgpu_descriptor_set_metal, set_metal);
 	}
 	pool_metal->_allocated_set_count = 0;
 }
@@ -308,9 +319,10 @@ void spudgpu_destroy_descriptor_pool(spudgpu_descriptor_pool pool) {
 	if (!pool_metal)
 		return;
 	spudgpumetal___internal_free_tracked_sets(pool_metal);
-	free(pool_metal->_tracked_sets_mtl);
-	free((void *)pool_metal->_debug_name);
-	free(pool_metal);
+	const SPUD_ALLOCATOR allocator = pool_metal->head.allocator;
+	SPUD_DELETE_ARRAY(&allocator, spudgpu_descriptor_set_metal *, pool_metal->_tracked_sets_mtl, pool_metal->_desc.max_sets);
+	spud_string_free(&allocator, pool_metal->head.debug_name);
+	SPUD_DELETE(&allocator, spudgpu_descriptor_pool_metal, pool_metal);
 }
 
 SPUDRESULT spudgpu_create_descriptor_sets(
@@ -344,17 +356,18 @@ SPUDRESULT spudgpu_create_descriptor_sets(
 			return SPUDRESULT_GPU_INVALID_DESCRIPTOR_SET_LAYOUT;
 
 		spudgpu_descriptor_set_metal *set_metal =
-		    (spudgpu_descriptor_set_metal *)calloc(1, sizeof(spudgpu_descriptor_set_metal));
+		    SPUD_NEW_ZEROED(&pool_metal->head.allocator, spudgpu_descriptor_set_metal);
 		if (!set_metal)
 			return SPUDRESULT_GPU_INTERNAL_DESCRIPTOR_SET_ALLOCATION_FAIL;
 
-		set_metal->_parent_pool = pool_metal;
+		set_metal->head.allocator = pool_metal->head.allocator;
+		set_metal->_parent_pool   = pool_metal;
 		set_metal->_layout      = layout_metal;
 		set_metal->_argument_buffer_mtl =
 		    [pool_metal->_parent_device->_device_mtl newBufferWithLength:layout_metal->_argument_encoder_mtl.encodedLength
 		                                                          options:MTLResourceStorageModeShared];
 		if (!set_metal->_argument_buffer_mtl) {
-			free(set_metal);
+			SPUD_DELETE(&pool_metal->head.allocator, spudgpu_descriptor_set_metal, set_metal);
 			return SPUDRESULT_API_SPECIFIC_FAILURE;
 		}
 

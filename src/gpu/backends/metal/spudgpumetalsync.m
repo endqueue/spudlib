@@ -32,11 +32,12 @@ SPUDRESULT spudgpu_create_fence(
 
 	SPUDRESULT sr = SPUD_SUCCESS;
 
-	spudgpu_fence_metal *fence_metal = (spudgpu_fence_metal *)calloc(1, sizeof(spudgpu_fence_metal));
+	spudgpu_fence_metal *fence_metal = SPUD_NEW_ZEROED(&device->head.allocator, spudgpu_fence_metal);
 	if (!fence_metal) {
 		sr = SPUDRESULT_OUT_OF_MEMORY;
 		goto failedattempt;
 	}
+	fence_metal->head.allocator = device->head.allocator;
 	fence_metal->_parent_device = (spudgpu_device_metal *)device;
 	fence_metal->_flags         = flags;
 
@@ -57,7 +58,7 @@ SPUDRESULT spudgpu_create_fence(
 	return sr;
 
 failedattempt:
-	free(fence_metal);
+	SPUD_DELETE(&device->head.allocator, spudgpu_fence_metal, fence_metal);
 	return sr;
 }
 
@@ -67,8 +68,9 @@ void spudgpu_destroy_fence(spudgpu_fence fence) {
 		if (fence_metal->_shared_event_mtl) {
 			[fence_metal->_shared_event_mtl release];
 		}
-		free((void *)fence_metal->_debug_name);
-		free(fence_metal);
+		const SPUD_ALLOCATOR allocator = fence_metal->head.allocator;
+		spud_string_free(&allocator, fence_metal->head.debug_name);
+		SPUD_DELETE(&allocator, spudgpu_fence_metal, fence_metal);
 	}
 }
 
@@ -202,11 +204,12 @@ SPUDRESULT spudgpu_create_semaphore(
 
 	SPUDRESULT sr = SPUD_SUCCESS;
 
-	spudgpu_semaphore_metal *semaphore_metal = (spudgpu_semaphore_metal *)calloc(1, sizeof(spudgpu_semaphore_metal));
+	spudgpu_semaphore_metal *semaphore_metal = SPUD_NEW_ZEROED(&device->head.allocator, spudgpu_semaphore_metal);
 	if (!semaphore_metal) {
 		sr = SPUDRESULT_GENERAL_FAILURE;
 		goto failedattempt;
 	}
+	semaphore_metal->head.allocator = device->head.allocator;
 	semaphore_metal->_parent_device = (spudgpu_device_metal *)device;
 
 	semaphore_metal->_event_mtl = [semaphore_metal->_parent_device->_device_mtl newEvent];
@@ -220,7 +223,7 @@ SPUDRESULT spudgpu_create_semaphore(
 	return sr;
 
 failedattempt:
-	free(semaphore_metal);
+	SPUD_DELETE(&device->head.allocator, spudgpu_semaphore_metal, semaphore_metal);
 	return sr;
 }
 
@@ -230,8 +233,9 @@ void spudgpu_destroy_semaphore(spudgpu_semaphore semaphore) {
 		if (semaphore_metal->_event_mtl) {
 			[semaphore_metal->_event_mtl release];
 		}
-		free((void *)semaphore_metal->_debug_name);
-		free(semaphore_metal);
+		const SPUD_ALLOCATOR allocator = semaphore_metal->head.allocator;
+		spud_string_free(&allocator, semaphore_metal->head.debug_name);
+		SPUD_DELETE(&allocator, spudgpu_semaphore_metal, semaphore_metal);
 	}
 }
 

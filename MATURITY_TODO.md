@@ -123,13 +123,37 @@ Long-lived C APIs have these and spudlib does not:
   and the switch has no `default`, so clang's `-Wswitch` (on by default)
   and GCC's (in `-Wall`) report a result added without one. MSVC's C4062
   is off by default, so a Windows-only change is not caught.
-- **The caller's allocator.** `VkAllocationCallbacks`, `SQLITE_CONFIG_MALLOC`,
-  `lua_Alloc`, zlib's `zalloc`/`zfree`. spudlib calls `malloc` itself, which
-  is a decision made for the caller. An optional allocator on each module's
-  instance desc fits the rule. Decide it before item 4 writes SpudFiles'
-  desc. On a desc already based (SpudGPU, SpudAudio, SpudNet, and SpudInput
-  after item 2) it is a chained struct, or, while no version has been
-  released, a new field.
+- **The caller's allocator: done (2026-10-21), but for SpudFiles.**
+  `VkAllocationCallbacks`, `SQLITE_CONFIG_MALLOC`, `lua_Alloc`, zlib's
+  `zalloc`/`zfree`. `spudcore.h`'s "The caller's allocator" group has
+  `SPUD_ALLOCATOR` (frozen: `user_data`, `allocate(size, alignment)`,
+  `free(memory, size, alignment)`, sized and aligned both ways, so an arena
+  or pool needs no header per block), the contract, and
+  `spud_allocator_system()`, the system heap by name. There is no default:
+  a create call refuses a NULL allocator (`SPUDRESULT_NULL_ALLOCATOR`, 15)
+  and one missing a function (`SPUDRESULT_INVALID_ALLOCATOR`, 16).
+  - SpudGPU, SpudAudio, SpudNet and SpudInput each take it as a required
+    `allocator` field of a based instance desc (`spudgpu_instance_desc`,
+    `SPUDAUDIO_INSTANCE_DESC` and `spudnet_instance_desc` are new;
+    `spudgpu_create_instance`'s four loose parameters moved into its desc).
+    The first checks of each create are written once per module.
+  - Every handle starts with a `spud_object_head` (`src/spudallocator.h`):
+    its debug name and its own copy of the allocator, so that a handle
+    freed after its instance (a SpudNet resolver; perhaps WASAPI's device
+    watch) still has it. `spud_debug_name_set` copies through it.
+  - Every allocation of every backend goes through it, freed with its own
+    size and alignment. `tests/spudtest_allocator.h` checks that in
+    `spudinput_test` and `spudnet_test`.
+  - Left: SpudFiles, until item 4 gives it an instance (its `sfs_file`
+    head holds `spud_allocator_system()`); the D3D12 backend's
+    `std::vector`/`std::string`; memory the platforms and drivers allocate
+    themselves (SpudGPU passes Vulkan no `VkAllocationCallbacks`).
+  - Which threads call it is in each module's header: a SpudAudio stream's
+    callback thread never does, its device watch does.
+  - SpudMemory's arena is still to move out of SpudLib (it decides
+    alignment, growth and zeroing, and its alignment macro, destroy and
+    create are broken), leaving SpudMemory the virtual-memory calls, with a
+    POSIX backend for Linux and Apple.
 - **A stated stability and threading policy.** `CLAUDE.md` says a released
   layout never changes, but nothing says what "released" is: there are no
   tags or versions, and spudlib is STATIC only, pinned by commit in each

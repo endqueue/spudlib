@@ -8,11 +8,12 @@
 #define SPUDLIB_SPUDGPUVULKAN_H
 
 #include "spudgpu.h"
+#include "../../../spudallocator.h"
 #include <vulkan/vulkan.h>
 #include <stdatomic.h>
 
 typedef struct spudgpu_instance_t {
-    const char *_debug_name;
+    spud_object_head head;
     VkInstance _instance_vk;
     // The array spudgpu_enumerate_devices hands out, made by its first call
     // and freed with the instance, devices and all.
@@ -43,7 +44,7 @@ typedef struct spudgpu_bindless_state_vulkan {
 } spudgpu_bindless_state_vulkan;
 
 typedef struct spudgpu_device_t {
-    const char *_debug_name;
+    spud_object_head head;
     VkDevice _logical_device_vk;
     VkPhysicalDevice _physical_device_vk;
     spudgpu_instance_vulkan _instance;
@@ -92,13 +93,13 @@ typedef struct spudgpu_device_t {
 } spudgpu_device_vulkan;
 
 typedef struct spudgpu_command_queue_t {
-    const char *_debug_name;
+    spud_object_head head;
     VkQueue _queue_vk;
     uint32_t _queue_family_index;
 } spudgpu_command_queue_vulkan;
 
 typedef struct spudgpu_command_allocator_t {
-    const char *_debug_name;
+    spud_object_head head;
     VkCommandPool _command_pool_vk;
     spudgpu_device_vulkan _device;
     uint32_t _queue_family_index;
@@ -116,7 +117,7 @@ typedef struct spudgpu_command_allocator_t {
 } spudgpu_command_allocator_vulkan;
 
 typedef struct spudgpu_command_list_t {
-    const char *_debug_name;
+    spud_object_head head;
     VkCommandBuffer _command_buffer_vk;
     spudgpu_command_allocator_vulkan _allocator;
 #if _DEBUG
@@ -147,7 +148,7 @@ typedef struct spudgpu_command_list_t {
 } spudgpu_command_list_vulkan;
 
 typedef struct spudgpu_timestamp_set_t {
-    const char *_debug_name;
+    spud_object_head head;
     VkQueryPool _query_pool_vk;
     VkDevice _logical_device_vk;
     uint32_t _count;
@@ -156,7 +157,7 @@ typedef struct spudgpu_timestamp_set_t {
 } spudgpu_timestamp_set_vulkan;
 
 typedef struct spudgpu_buffer_t {
-    const char *_debug_name;
+    spud_object_head head;
     VkBuffer _buffer_vk;
     // The buffer's own allocation, or its heap's when _heap is set: the
     // buffer is bound at _memory_offset_vk of it (0 for its own) and covers
@@ -178,13 +179,13 @@ typedef struct spudgpu_buffer_t {
 } spudgpu_buffer_vulkan;
 
 typedef struct spudgpu_buffer_view_t {
-    const char *_debug_name;
+    spud_object_head head;
     VkBufferView _buffer_view_vk;
     spudgpu_buffer_view_desc _desc;
 } spudgpu_buffer_view_vulkan;
 
 typedef struct spudgpu_image_t {
-    const char *_debug_name;
+    spud_object_head head;
     VkImage _image_vk;
     // The image's own allocation, or its heap's when _heap is set.
     VkDeviceMemory _memory_vk;
@@ -197,7 +198,7 @@ typedef struct spudgpu_image_t {
 } spudgpu_image_vulkan;
 
 typedef struct spudgpu_heap_t {
-    const char *_debug_name;
+    spud_object_head head;
 #if _DEBUG
     // Buffers and images placed in the heap and not yet destroyed.
     // spudgpu_destroy_heap asserts it is 0. Atomic, because resources in
@@ -219,19 +220,19 @@ typedef struct spudgpu_heap_t {
 } spudgpu_heap_vulkan;
 
 typedef struct spudgpu_image_view_t {
-    const char *_debug_name;
+    spud_object_head head;
     VkImageView _image_view_vk;
     spudgpu_image_view_desc _desc;
 } spudgpu_image_view_vulkan;
 
 typedef struct spudgpu_surface_t {
-    const char *_debug_name;
+    spud_object_head head;
     VkSurfaceKHR _surface_vk;
     spudgpu_instance_vulkan _instance;
 } spudgpu_surface_vulkan;
 
 typedef struct spudgpu_fence_t {
-    const char *_debug_name;
+    spud_object_head head;
     // A timeline semaphore, not a VkFence: spudgpu_fence is a counter that
     // only goes up, which is what a timeline semaphore is and a VkFence
     // (one bit, reset by hand) is not.
@@ -240,13 +241,13 @@ typedef struct spudgpu_fence_t {
 } spudgpu_fence_vulkan;
 
 typedef struct spudgpu_semaphore_t {
-    const char *_debug_name;
+    spud_object_head head;
     VkSemaphore _semaphore_vk;
     VkDevice _device_vk;
 } spudgpu_semaphore_vulkan;
 
 typedef struct spudgpu_swap_chain_t {
-    const char *_debug_name;
+    spud_object_head head;
     VkSwapchainKHR _swapchain_vk;
     spudgpu_swap_chain_desc _desc;
     spudgpu_device_vulkan _device;
@@ -259,8 +260,14 @@ typedef struct spudgpu_swap_chain_t {
     spudgpu_image_view_vulkan *_swapchain_image_views_vk;
     uint32_t _swapchain_image_views_count;
 
+    // Made and freed with the counts beside them: _swapchain_images_count
+    // images, _swapchain_image_views_count views (each with its own image
+    // handle as parent), _max_frames_in_flight image-available semaphores
+    // and in-flight fences, _render_finished_semaphores_count
+    // render-finished semaphores.
     spudgpu_semaphore_vulkan *_image_available_semaphores; // One per frame-in-flight
-    spudgpu_semaphore_vulkan *_render_finished_semaphores; // One per frame-in-flight
+    spudgpu_semaphore_vulkan *_render_finished_semaphores; // One per swap chain image
+    uint32_t _render_finished_semaphores_count;
     // One per frame-in-flight. Plain VkFences, internal to the swap chain:
     // signaled by a submission made with it, waited on and reset by acquire.
     VkFence *_in_flight_fences_vk;
@@ -270,7 +277,7 @@ typedef struct spudgpu_swap_chain_t {
 } spudgpu_swap_chain_vulkan;
 
 typedef struct spudgpu_shader_module_t {
-    const char *_debug_name;
+    spud_object_head head;
     VkShaderModule _shader_module_vk;
     VkShaderStageFlagBits _stage_vk;
     spudgpu_device_vulkan _device;
@@ -278,7 +285,7 @@ typedef struct spudgpu_shader_module_t {
 
 
 typedef struct spudgpu_shader_pipeline_t {
-    const char *_debug_name;
+    spud_object_head head;
     VkPipeline _pipeline_vk;
     VkPipelineLayout _pipeline_layout_vk;
     spudgpu_device_vulkan _device;
@@ -286,7 +293,7 @@ typedef struct spudgpu_shader_pipeline_t {
 } spudgpu_shader_pipeline_vulkan;
 
 typedef struct spudgpu_compute_pipeline_t {
-    const char *_debug_name;
+    spud_object_head head;
     VkPipeline _pipeline_vk;
     VkPipelineLayout _pipeline_layout_vk;
     spudgpu_device_vulkan _device;
@@ -294,29 +301,37 @@ typedef struct spudgpu_compute_pipeline_t {
 } spudgpu_compute_pipeline_vulkan;
 
 typedef struct spudgpu_sampler_t {
-    const char *_debug_name;
+    spud_object_head head;
     VkSampler _sampler_vk;
     spudgpu_device_vulkan _device;
 } spudgpu_sampler_vulkan;
 
 typedef struct spudgpu_descriptor_set_layout_t {
-    const char *_debug_name;
+    spud_object_head head;
     VkDescriptorSetLayout _layout_vk;
     spudgpu_device_vulkan _device;
     spudgpu_descriptor_set_layout_desc _desc;
 } spudgpu_descriptor_set_layout_vulkan;
 
 typedef struct spudgpu_descriptor_pool_t {
-    const char *_debug_name;
+    spud_object_head head;
     VkDescriptorPool _pool_vk;
     spudgpu_device_vulkan _device;
     spudgpu_descriptor_pool_desc _desc;
+    // Every set handle made from the pool and not yet released, newest
+    // first, linked through their _next. spudgpu.h has the pool release its
+    // sets when it is reset or destroyed, handles and all.
+    struct spudgpu_descriptor_set_t *_sets;
 } spudgpu_descriptor_pool_vulkan;
 
 typedef struct spudgpu_descriptor_set_t {
-    const char *_debug_name;
+    spud_object_head head;
     VkDescriptorSet _set_vk;
+    // A copy of the pool when the set was made: its _sets is stale and
+    // never read.
     spudgpu_descriptor_pool_vulkan _pool;
+    // The next set in the pool's _sets list.
+    struct spudgpu_descriptor_set_t *_next;
 } spudgpu_descriptor_set_vulkan;
 
 VkFormat convert_spud_to_vulkan_format(SPUDGPU_FORMAT format);

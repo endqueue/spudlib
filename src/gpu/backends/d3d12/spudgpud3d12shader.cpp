@@ -429,7 +429,7 @@ static SPUDRESULT spudgpu_d3d12___create_mesh_shader_pipeline(
 	    &streamDesc, IID_PPV_ARGS(&pResult->_d3d_pipeline_state));
 	if (FAILED(hr)) {
 		pResult->~spudgpu_shader_pipeline_d3d12();
-		free(pResult);
+		SPUD_DELETE(&device->head.allocator, spudgpu_shader_pipeline_d3d12, pResult);
 		return SPUDRESULT_API_SPECIFIC_FAILURE;
 	}
 
@@ -443,7 +443,7 @@ static SPUDRESULT spudgpu_d3d12___create_mesh_shader_pipeline(
 		spudgpu_destroy_shader_pipeline(pResult);
 		return SPUDRESULT_OUT_OF_MEMORY;
 	}
-	pResult->_desc.debug_name = pResult->_debug_name;
+	pResult->_desc.debug_name = pResult->head.debug_name;
 
 	*out_pipeline = pResult;
 	return SPUD_SUCCESS;
@@ -453,12 +453,17 @@ static SPUDRESULT spudgpu_d3d12___create_mesh_shader_pipeline(
 // an RWTexture2DArray there, with the face (or cube * 6 + face) as its array
 // index, which is the third coordinate a SPIR-V store to a cube image already
 // takes. The storage view it is bound to is a 2D array of the same layers
-// (spudgpud3d12image.cpp). Returns a malloc'd copy of [words] with every
-// storage cube image type made a 2D array image type, NULL with
-// [out_needed] false if there is none, or NULL with [out_needed] true when
-// the copy can't be allocated. An imageSize() of a cube, a 2-component
-// result, takes the width and height of the array's three.
-static uint32_t *spudgpu_d3d12_storage_cubes_as_arrays(const uint32_t *words, size_t word_count, bool *out_needed) {
+// (spudgpud3d12image.cpp). Returns a copy of [words] made through
+// [allocator], [word_count] uint32_t's to free with it, with every storage
+// cube image type made a 2D array image type, NULL with [out_needed] false
+// if there is none, or NULL with [out_needed] true when the copy can't be
+// allocated. An imageSize() of a cube, a 2-component result, takes the
+// width and height of the array's three.
+static uint32_t *spudgpu_d3d12_storage_cubes_as_arrays(
+    const SPUD_ALLOCATOR *allocator,
+    const uint32_t *words,
+    size_t word_count,
+    bool *out_needed) {
 	// The header, then instructions: word 0 is the word count << 16 | opcode.
 	// OpTypeImage (25) is: result, sampled type, Dim, Depth, Arrayed, MS,
 	// Sampled, Format.
@@ -477,7 +482,7 @@ static uint32_t *spudgpu_d3d12_storage_cubes_as_arrays(const uint32_t *words, si
 		if (opcode == op_type_image && count >= 9 && words[i + 3] == dim_cube && words[i + 7] == sampled_storage) {
 			if (!copy) {
 				*out_needed = true;
-				copy        = (uint32_t *)malloc(word_count * sizeof(uint32_t));
+				copy        = SPUD_NEW_ARRAY(allocator, uint32_t, word_count);
 				if (!copy)
 					return nullptr;
 				memcpy(copy, words, word_count * sizeof(uint32_t));
@@ -516,12 +521,12 @@ SPUDRESULT spudgpu_create_shader_module(
 	size_t word_count           = desc->spirv_size / sizeof(uint32_t);
 
 	bool cubes_needed           = false;
-	uint32_t *cubes_as_arrays   = spudgpu_d3d12_storage_cubes_as_arrays(spirv_words, word_count, &cubes_needed);
+	uint32_t *cubes_as_arrays   = spudgpu_d3d12_storage_cubes_as_arrays(&pDev->head.allocator, spirv_words, word_count, &cubes_needed);
 	if (cubes_needed && !cubes_as_arrays)
 		return SPUDRESULT_OUT_OF_MEMORY;
 	// The compiler parses the words when it is made and keeps none of them.
 	spirv_cross::CompilerHLSL hlsl_compiler(cubes_as_arrays ? cubes_as_arrays : spirv_words, word_count);
-	free(cubes_as_arrays);
+	SPUD_DELETE_ARRAY(&pDev->head.allocator, uint32_t, cubes_as_arrays, word_count);
 
 	spirv_cross::CompilerHLSL::Options opts;
 	// Mesh/task shaders need SM 6.5+ (DXC's ms_6_5/as_6_5 profiles below
@@ -616,11 +621,11 @@ SPUDRESULT spudgpu_create_shader_module(
 		return SPUDRESULT_API_SPECIFIC_FAILURE;
 
 	spudgpu_shader_module_d3d12 *pResult =
-	    (spudgpu_shader_module_d3d12 *)malloc(
-	        sizeof(spudgpu_shader_module_d3d12));
+	    SPUD_NEW(&pDev->head.allocator, spudgpu_shader_module_d3d12);
 	if (!pResult)
 		return SPUDRESULT_OUT_OF_MEMORY;
-	pResult = new (pResult) spudgpu_shader_module_d3d12();
+	pResult                 = new (pResult) spudgpu_shader_module_d3d12();
+	pResult->head.allocator = pDev->head.allocator;
 
 	pResult->_desc   = *desc;
 	pResult->_device = pDev;
@@ -630,7 +635,7 @@ SPUDRESULT spudgpu_create_shader_module(
 		spudgpu_destroy_shader_module(pResult);
 		return SPUDRESULT_OUT_OF_MEMORY;
 	}
-	pResult->_desc.debug_name = pResult->_debug_name;
+	pResult->_desc.debug_name = pResult->head.debug_name;
 
 	*out_module = (spudgpu_shader_module)pResult;
 	return SPUD_SUCCESS;
@@ -639,9 +644,10 @@ SPUDRESULT spudgpu_create_shader_module(
 void spudgpu_destroy_shader_module(spudgpu_shader_module shader_module) {
 	if (!shader_module)
 		return;
-	free((void *)shader_module->_debug_name);
+	const SPUD_ALLOCATOR allocator = shader_module->head.allocator;
+	spud_string_free(&allocator, shader_module->head.debug_name);
 	shader_module->~spudgpu_shader_module_d3d12();
-	free(shader_module);
+	SPUD_DELETE(&allocator, spudgpu_shader_module_d3d12, shader_module);
 }
 
 SPUDRESULT spudgpu_create_shader_pipeline(
@@ -669,11 +675,11 @@ SPUDRESULT spudgpu_create_shader_pipeline(
 		return outputs;
 
 	spudgpu_shader_pipeline_d3d12 *pResult =
-	    (spudgpu_shader_pipeline_d3d12 *)malloc(
-	        sizeof(spudgpu_shader_pipeline_d3d12));
+	    SPUD_NEW(&device->head.allocator, spudgpu_shader_pipeline_d3d12);
 	if (!pResult)
 		return SPUDRESULT_OUT_OF_MEMORY;
 	pResult                   = new (pResult) spudgpu_shader_pipeline_d3d12();
+	pResult->head.allocator   = device->head.allocator;
 	pResult->_device          = device;
 	pResult->_desc            = *desc;
 	pResult->_is_mesh_pipeline = desc->mesh_module != nullptr;
@@ -691,7 +697,7 @@ SPUDRESULT spudgpu_create_shader_pipeline(
 	    &pResult->_d3d_root_signature, &pResult->_root_layout);
 	if (FAILED(hr)) {
 		pResult->~spudgpu_shader_pipeline_d3d12();
-		free(pResult);
+		SPUD_DELETE(&device->head.allocator, spudgpu_shader_pipeline_d3d12, pResult);
 		return SPUDRESULT_API_SPECIFIC_FAILURE;
 	}
 
@@ -829,7 +835,7 @@ SPUDRESULT spudgpu_create_shader_pipeline(
 	    &streamDesc, IID_PPV_ARGS(&pResult->_d3d_pipeline_state));
 	if (FAILED(hr)) {
 		pResult->~spudgpu_shader_pipeline_d3d12();
-		free(pResult);
+		SPUD_DELETE(&device->head.allocator, spudgpu_shader_pipeline_d3d12, pResult);
 		return SPUDRESULT_API_SPECIFIC_FAILURE;
 	}
 
@@ -839,7 +845,7 @@ SPUDRESULT spudgpu_create_shader_pipeline(
 		spudgpu_destroy_shader_pipeline(pResult);
 		return SPUDRESULT_OUT_OF_MEMORY;
 	}
-	pResult->_desc.debug_name = pResult->_debug_name;
+	pResult->_desc.debug_name = pResult->head.debug_name;
 
 	*out_pipeline = pResult;
 	return SPUD_SUCCESS;
@@ -848,9 +854,10 @@ SPUDRESULT spudgpu_create_shader_pipeline(
 void spudgpu_destroy_shader_pipeline(spudgpu_shader_pipeline pipeline) {
 	if (!pipeline)
 		return;
-	free((void *)pipeline->_debug_name);
+	const SPUD_ALLOCATOR allocator = pipeline->head.allocator;
+	spud_string_free(&allocator, pipeline->head.debug_name);
 	pipeline->~spudgpu_shader_pipeline_d3d12();
-	free(pipeline);
+	SPUD_DELETE(&allocator, spudgpu_shader_pipeline_d3d12, pipeline);
 }
 
 SPUDRESULT spudgpu_get_shader_pipeline_desc(
@@ -941,13 +948,13 @@ SPUDRESULT spudgpu_create_compute_pipeline(
 		return SPUDRESULT_GPU_INVALID_COMPUTE_MODULE;
 
 	spudgpu_compute_pipeline_d3d12 *pResult =
-	    (spudgpu_compute_pipeline_d3d12 *)malloc(
-	        sizeof(spudgpu_compute_pipeline_d3d12));
+	    SPUD_NEW(&device->head.allocator, spudgpu_compute_pipeline_d3d12);
 	if (!pResult)
 		return SPUDRESULT_OUT_OF_MEMORY;
-	pResult          = new (pResult) spudgpu_compute_pipeline_d3d12();
-	pResult->_device = device;
-	pResult->_desc   = *desc;
+	pResult                 = new (pResult) spudgpu_compute_pipeline_d3d12();
+	pResult->head.allocator = device->head.allocator;
+	pResult->_device        = device;
+	pResult->_desc          = *desc;
 
 	HRESULT hr = spudgpu_d3d12_build_root_signature(
 	    device->_d3d_device.Get(), desc->descriptor_set_layout_count,
@@ -957,7 +964,7 @@ SPUDRESULT spudgpu_create_compute_pipeline(
 	    &pResult->_root_layout);
 	if (FAILED(hr)) {
 		pResult->~spudgpu_compute_pipeline_d3d12();
-		free(pResult);
+		SPUD_DELETE(&device->head.allocator, spudgpu_compute_pipeline_d3d12, pResult);
 		return SPUDRESULT_API_SPECIFIC_FAILURE;
 	}
 
@@ -975,7 +982,7 @@ SPUDRESULT spudgpu_create_compute_pipeline(
 	    &psoDesc, IID_PPV_ARGS(&pResult->_d3d_pipeline_state));
 	if (FAILED(hr)) {
 		pResult->~spudgpu_compute_pipeline_d3d12();
-		free(pResult);
+		SPUD_DELETE(&device->head.allocator, spudgpu_compute_pipeline_d3d12, pResult);
 		return SPUDRESULT_API_SPECIFIC_FAILURE;
 	}
 
@@ -983,7 +990,7 @@ SPUDRESULT spudgpu_create_compute_pipeline(
 		spudgpu_destroy_compute_pipeline(pResult);
 		return SPUDRESULT_OUT_OF_MEMORY;
 	}
-	pResult->_desc.debug_name = pResult->_debug_name;
+	pResult->_desc.debug_name = pResult->head.debug_name;
 
 	*out_pipeline = pResult;
 	return SPUD_SUCCESS;
@@ -992,9 +999,10 @@ SPUDRESULT spudgpu_create_compute_pipeline(
 void spudgpu_destroy_compute_pipeline(spudgpu_compute_pipeline pipeline) {
 	if (!pipeline)
 		return;
-	free((void *)pipeline->_debug_name);
+	const SPUD_ALLOCATOR allocator = pipeline->head.allocator;
+	spud_string_free(&allocator, pipeline->head.debug_name);
 	pipeline->~spudgpu_compute_pipeline_d3d12();
-	free(pipeline);
+	SPUD_DELETE(&allocator, spudgpu_compute_pipeline_d3d12, pipeline);
 }
 
 SPUDRESULT spudgpu_get_compute_pipeline_desc(

@@ -45,9 +45,10 @@ SPUDRESULT spudgpu_create_timestamp_set(
 	if (!device_metal->_properties.pass_timestamps)
 		return SPUDRESULT_GPU_TIMESTAMPS_NOT_SUPPORTED;
 
-	spudgpu_timestamp_set_metal *set = (spudgpu_timestamp_set_metal *)calloc(1, sizeof(spudgpu_timestamp_set_metal));
+	spudgpu_timestamp_set_metal *set = SPUD_NEW_ZEROED(&device_metal->head.allocator, spudgpu_timestamp_set_metal);
 	if (!set)
 		return SPUDRESULT_OUT_OF_MEMORY;
+	set->head.allocator = device_metal->head.allocator;
 
 	MTLCounterSampleBufferDescriptor *buffer_desc = [[MTLCounterSampleBufferDescriptor alloc] init];
 	id<MTLCounterSet> counter_set                 = spudgpumetal___internal_timestamp_counter_set(device_metal->_device_mtl);
@@ -60,7 +61,7 @@ SPUDRESULT spudgpu_create_timestamp_set(
 	[buffer_desc release];
 	if (!buffer) {
 		printf("spudgpu: MTLCounterSampleBuffer creation failed: %s\n", error ? error.localizedDescription.UTF8String : "(unknown)");
-		free(set);
+		SPUD_DELETE(&device_metal->head.allocator, spudgpu_timestamp_set_metal, set);
 		return SPUDRESULT_API_SPECIFIC_FAILURE;
 	}
 	set->_sample_buffer_mtl = buffer;
@@ -77,8 +78,9 @@ void spudgpu_destroy_timestamp_set(spudgpu_timestamp_set set) {
 	spudgpu_timestamp_set_metal *set_metal = (spudgpu_timestamp_set_metal *)set;
 	[set_metal->_sample_buffer_mtl release];
 	[set_metal->_device_mtl release];
-	free((void *)set_metal->_debug_name);
-	free(set_metal);
+	const SPUD_ALLOCATOR allocator = set_metal->head.allocator;
+	spud_string_free(&allocator, set_metal->head.debug_name);
+	SPUD_DELETE(&allocator, spudgpu_timestamp_set_metal, set_metal);
 }
 
 void spudgpu_cmd_reset_timestamps(

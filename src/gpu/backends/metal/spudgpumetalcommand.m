@@ -196,11 +196,12 @@ SPUDRESULT spudgpu_create_command_allocator(
 	SPUDRESULT sr = SPUD_SUCCESS;
 
 	spudgpu_command_allocator_metal *allocator_metal =
-	    (spudgpu_command_allocator_metal *)calloc(1, sizeof(spudgpu_command_allocator_metal));
+	    SPUD_NEW_ZEROED(&device->head.allocator, spudgpu_command_allocator_metal);
 	if (!allocator_metal) {
 		sr = SPUDRESULT_GENERAL_FAILURE;
 		goto failedattempt;
 	}
+	allocator_metal->head.allocator = device->head.allocator;
 	allocator_metal->_parent_device = (spudgpu_device_metal *)device;
 	allocator_metal->_desc          = *desc;
 	allocator_metal->_parent_queue  =
@@ -220,8 +221,9 @@ void spudgpu_destroy_command_allocator(spudgpu_command_allocator allocator) {
 		// _parent_queue is a borrowed reference into the device's cached
 		// queue families (owned/released by spudgpu_destroy_instance) - not
 		// this allocator's to release.
-		free((void *)allocator_metal->_debug_name);
-		free(allocator_metal);
+		const SPUD_ALLOCATOR memory_allocator = allocator_metal->head.allocator;
+		spud_string_free(&memory_allocator, allocator_metal->head.debug_name);
+		SPUD_DELETE(&memory_allocator, spudgpu_command_allocator_metal, allocator_metal);
 	}
 }
 
@@ -253,11 +255,12 @@ SPUDRESULT spudgpu_create_command_list(
 	SPUDRESULT sr = SPUD_SUCCESS;
 
 	spudgpu_command_list_metal *cmd_list_metal =
-	    (spudgpu_command_list_metal *)calloc(1, sizeof(spudgpu_command_list_metal));
+	    SPUD_NEW_ZEROED(&allocator->head.allocator, spudgpu_command_list_metal);
 	if (!cmd_list_metal) {
 		sr = SPUDRESULT_GENERAL_FAILURE;
 		goto failedattempt;
 	}
+	cmd_list_metal->head.allocator    = allocator->head.allocator;
 	cmd_list_metal->_parent_allocator = (spudgpu_command_allocator_metal *)allocator;
 
 	spudgpumetal___internal_acquire_command_buffer(cmd_list_metal);
@@ -281,8 +284,9 @@ void spudgpu_destroy_command_list(spudgpu_command_list cmd) {
 		if (cmd_list_metal->_parent_allocator->_open_list == cmd)
 			cmd_list_metal->_parent_allocator->_open_list = NULL;
 #endif
-		free((void *)cmd_list_metal->_debug_name);
-		free(cmd_list_metal);
+		const SPUD_ALLOCATOR allocator = cmd_list_metal->head.allocator;
+		spud_string_free(&allocator, cmd_list_metal->head.debug_name);
+		SPUD_DELETE(&allocator, spudgpu_command_list_metal, cmd_list_metal);
 	}
 }
 

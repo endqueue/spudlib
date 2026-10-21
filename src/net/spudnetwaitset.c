@@ -102,7 +102,7 @@ struct spudnet_wait_member {
 };
 
 struct spudnet_wait_set_t {
-	const char *debug_name;
+	spud_object_head head;
 	// The one it was made with, and every member's.
 	spudnet_instance            instance;
 	struct spudnet_wait_member *members;
@@ -301,16 +301,17 @@ SPUDRESULT spudnet_wait_set_create(
 	if (!instance)
 		return SPUDRESULT_SPUDNET_INVALID_INSTANCE;
 
-	struct spudnet_wait_set_t *set = (struct spudnet_wait_set_t *)calloc(1, sizeof(struct spudnet_wait_set_t));
+	struct spudnet_wait_set_t *set = SPUD_NEW_ZEROED(&instance->head.allocator, struct spudnet_wait_set_t);
 	if (!set)
 		return SPUDRESULT_OUT_OF_MEMORY;
-	set->instance = instance;
+	set->head.allocator = instance->head.allocator;
+	set->instance       = instance;
 	spudnet_wait_wake_reset(set);
 	if (!spudnet_wait_wake_create(set)) {
 		// Recorded before the cleanup that could replace the system's error.
 		SPUDRESULT result = spudnet_wait_failed(out_error, SPUDRESULT_GENERAL_FAILURE);
 		spudnet_wait_wake_destroy(set);
-		free(set);
+		SPUD_DELETE(&instance->head.allocator, struct spudnet_wait_set_t, set);
 		return result;
 	}
 
@@ -330,10 +331,11 @@ void spudnet_wait_set_destroy(spudnet_wait_set set) {
 	}
 #endif
 	spudnet_wait_wake_destroy(set);
-	free(set->members);
-	free(set->entries);
-	free((void *)set->debug_name);
-	free(set);
+	const SPUD_ALLOCATOR allocator = set->head.allocator;
+	SPUD_DELETE_ARRAY(&allocator, struct spudnet_wait_member, set->members, set->member_capacity);
+	SPUD_DELETE_ARRAY(&allocator, spudnet_poll_entry, set->entries, set->entry_capacity);
+	spud_string_free(&allocator, set->head.debug_name);
+	SPUD_DELETE(&allocator, struct spudnet_wait_set_t, set);
 }
 
 void spudnet_wait_set_abort(spudnet_wait_set set) {
@@ -381,7 +383,8 @@ static struct spudnet_wait_member *spudnet_wait_grow(struct spudnet_wait_set_t *
 		if (set->member_capacity > SPUD_UINT32_MAX / 2)
 			return NULL;
 		uint32_t                    capacity = set->member_capacity ? set->member_capacity * 2 : 16;
-		struct spudnet_wait_member *moved    = (struct spudnet_wait_member *)realloc(set->members, (size_t)capacity * sizeof(struct spudnet_wait_member));
+		struct spudnet_wait_member *moved =
+		    SPUD_RESIZE_ARRAY(&set->head.allocator, struct spudnet_wait_member, set->members, set->member_capacity, capacity);
 		if (!moved)
 			return NULL;
 		set->members         = moved;
@@ -548,7 +551,7 @@ SPUDRESULT spudnet_wait_set_wait(
 	// One entry for the wake socket and one for each member at most.
 	if (set->entry_capacity < set->member_count + 1) {
 		uint32_t            needed = set->member_capacity + 1;
-		spudnet_poll_entry *moved  = (spudnet_poll_entry *)realloc(set->entries, (size_t)needed * sizeof(spudnet_poll_entry));
+		spudnet_poll_entry *moved  = SPUD_RESIZE_ARRAY(&set->head.allocator, spudnet_poll_entry, set->entries, set->entry_capacity, needed);
 		if (!moved)
 			return SPUDRESULT_OUT_OF_MEMORY;
 		set->entries        = moved;
