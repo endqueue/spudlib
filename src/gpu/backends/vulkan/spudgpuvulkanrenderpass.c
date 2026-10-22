@@ -142,10 +142,22 @@ static void spudgpuvulkan___cmd_image_barrier_raw(
 	barrier.srcAccessMask        = layout_to_access(old_layout);
 	barrier.dstAccessMask        = layout_to_access(new_layout);
 
+	// Out of UNDEFINED or PRESENT_SRC there is nothing to make visible, but
+	// the layout transition is a write and still has to wait for what last
+	// used the image: a swap chain image's acquire semaphore, which a submit
+	// waits on at COLOR_ATTACHMENT_OUTPUT, or earlier work in the queue. A
+	// source stage of TOP_OF_PIPE waits for neither; the destination stage
+	// chains to both (synchronization validation's WRITE_AFTER_READ against
+	// vkAcquireNextImageKHR otherwise).
+	VkPipelineStageFlags src_stage       = layout_to_stage(old_layout);
+	const VkPipelineStageFlags dst_stage = layout_to_stage(new_layout);
+	if (old_layout == VK_IMAGE_LAYOUT_UNDEFINED || old_layout == VK_IMAGE_LAYOUT_PRESENT_SRC_KHR)
+		src_stage = dst_stage;
+
 	vkCmdPipelineBarrier(
 	    cmd_buf,
-	    layout_to_stage(old_layout), // srcStageMask
-	    layout_to_stage(new_layout), // dstStageMask
+	    src_stage,                   // srcStageMask
+	    dst_stage,                   // dstStageMask
 	    0,                           // dependencyFlags
 	    0, NULL,                     // memory barriers
 	    0, NULL,                     // buffer barriers

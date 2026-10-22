@@ -392,6 +392,7 @@ static bool spudgpuvulkan___read_adapter_facts(const SPUD_ALLOCATOR *allocator, 
     if (available.depthBiasClamp) features |= SPUDGPU_FEATURE_DEPTH_BIAS_CLAMP;
     if (available.independentBlend) features |= SPUDGPU_FEATURE_INDEPENDENT_BLEND;
     if (available.multiDrawIndirect) features |= SPUDGPU_FEATURE_MULTI_DRAW_INDIRECT;
+    if (available.drawIndirectFirstInstance) features |= SPUDGPU_FEATURE_DRAW_INDIRECT_FIRST_INSTANCE;
     if (available.imageCubeArray) features |= SPUDGPU_FEATURE_CUBE_ARRAY_VIEWS;
     if (available.depthBounds) features |= SPUDGPU_FEATURE_DEPTH_BOUNDS_TEST;
 
@@ -762,6 +763,7 @@ static VkResult spudgpuvulkan___create_logical_device(
     deviceFeatures.depthBiasClamp    = (features & SPUDGPU_FEATURE_DEPTH_BIAS_CLAMP) ? VK_TRUE : VK_FALSE;
     deviceFeatures.independentBlend  = (features & SPUDGPU_FEATURE_INDEPENDENT_BLEND) ? VK_TRUE : VK_FALSE;
     deviceFeatures.multiDrawIndirect = (features & SPUDGPU_FEATURE_MULTI_DRAW_INDIRECT) ? VK_TRUE : VK_FALSE;
+    deviceFeatures.drawIndirectFirstInstance = (features & SPUDGPU_FEATURE_DRAW_INDIRECT_FIRST_INSTANCE) ? VK_TRUE : VK_FALSE;
     deviceFeatures.imageCubeArray    = (features & SPUDGPU_FEATURE_CUBE_ARRAY_VIEWS) ? VK_TRUE : VK_FALSE;
     deviceFeatures.depthBounds       = (features & SPUDGPU_FEATURE_DEPTH_BOUNDS_TEST) ? VK_TRUE : VK_FALSE;
 

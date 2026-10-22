@@ -1265,7 +1265,7 @@ static void wasapi_free_stream(struct spudaudio_stream_t *s) {
 		CloseHandle(s->startup_event);
 	const SPUD_ALLOCATOR allocator = s->head.allocator;
 	// Bytes read as the stream's samples.
-	spud_free_array(&allocator, s->silence, s->buffer_size, s->block_align, SPUD_ALIGNOF(max_align_t));
+	spud_free_array(&allocator, s->silence, s->buffer_size, s->block_align, SPUD_MAX_ALIGN);
 	spud_string_free(&allocator, s->head.debug_name);
 	SPUD_DELETE(&allocator, struct spudaudio_stream_t, s);
 }
@@ -1340,7 +1340,7 @@ SPUDRESULT spudaudio_create_stream(
 	if (s->direction == SPUDAUDIO_DIRECTION_INPUT) {
 		// Made now, so the audio thread never allocates; wasapi_free_stream
 		// frees it with buffer_size and block_align, which don't change.
-		s->silence = (BYTE *)spud_allocate_array(&s->head.allocator, s->buffer_size, s->block_align, SPUD_ALIGNOF(max_align_t), true);
+		s->silence = (BYTE *)spud_allocate_array(&s->head.allocator, s->buffer_size, s->block_align, SPUD_MAX_ALIGN, true);
 		if (!s->silence) {
 			wasapi_free_stream(s);
 			return SPUDRESULT_OUT_OF_MEMORY;

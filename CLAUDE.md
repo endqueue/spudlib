@@ -674,7 +674,23 @@ text`, as Vulkan's validation layer does with no messenger; nothing is
 registered when the layer is off or the runtime predates
 `ID3D12InfoQueue1`. Run without a debugger on both devices: silent on the
 tests as they are, and a mismatched clear value put in for the test
-printed its 6 warnings on each.
+printed its 6 warnings on each. On 2026-10-22 every `spudgpusamples` sample
+ran on D3D12 (both devices and WARP, GPU-based validation too) and Vulkan
+(both devices, under synchronization and GPU-assisted validation as well),
+which found two Vulkan bugs: an image barrier out of `UNDEFINED` or
+`PRESENT_SRC` (`SPUDGPU_RESOURCE_STATE_PRESENT`/`_COMMON`) started at
+`TOP_OF_PIPE`/`BOTTOM_OF_PIPE`, not chained to the acquire semaphore's wait,
+and now starts at its destination stage; and `drawIndirectFirstInstance` was
+never enabled, so an indirect draw's non-zero `first_instance` was outside
+Vulkan's rules. That is `SPUDGPU_FEATURE_DRAW_INDIRECT_FIRST_INSTANCE` now
+(every D3D12 and Metal adapter; the Metal line is written, not compiled).
+Rerun, every sample clean in every mode. The same day a caller's fragment
+shader that read only locations 1 and 2 of its vertex shader's outputs
+failed to link on D3D12 (debug layer error 660), which matches the stages
+by register in order, while Vulkan and Metal match by location and took it;
+`spudgpu_create_shader_pipeline`'s comment now states the rule that holds
+on all three (declare every output from location 0 up to the last one
+read).
 
 - **Vulkan** — reference backend, plain C23, complete. Build against this first;
   D3D12 and Metal follow its shape.

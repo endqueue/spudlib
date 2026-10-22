@@ -1058,7 +1058,7 @@ static void alsa_free_stream(struct spudaudio_stream_t *s) {
 	const SPUD_ALLOCATOR allocator = s->head.allocator;
 	SPUD_DELETE_ARRAY(&allocator, void *, s->planes, s->planes_count);
 	// Bytes read as the stream's samples.
-	spud_free_array(&allocator, s->scratch, s->scratch_frames, s->frame_bytes, SPUD_ALIGNOF(max_align_t));
+	spud_free_array(&allocator, s->scratch, s->scratch_frames, s->frame_bytes, SPUD_MAX_ALIGN);
 	spud_string_free(&allocator, s->head.debug_name);
 	SPUD_DELETE(&allocator, struct spudaudio_stream_t, s);
 }
@@ -1112,7 +1112,7 @@ SPUDRESULT spudaudio_create_stream(
 		s->frame_bytes                  = s->sample_bytes * channels;
 		s->scratch_frames               = period;
 		s->planes_count                 = channels;
-		s->scratch                      = (uint8_t *)spud_allocate_array(allocator, period, s->frame_bytes, SPUD_ALIGNOF(max_align_t), true);
+		s->scratch                      = (uint8_t *)spud_allocate_array(allocator, period, s->frame_bytes, SPUD_MAX_ALIGN, true);
 		s->planes                       = SPUD_NEW_ARRAY_ZEROED(allocator, void *, channels);
 		s->stop_fd                      = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
 		if (!s->scratch || !s->planes)

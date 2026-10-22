@@ -490,6 +490,14 @@ typedef uint64_t SPUDGPU_FEATURES;
  * A device that never presents (tests, an offline render) need not ask, and a
  * GPU with no display is still listed for compute. */
 #define SPUDGPU_FEATURE_PRESENT (UINT64_C(1) << 11)
+/** An indirect draw whose arguments' first_instance is other than 0
+ * (spudgpu_draw_indirect_args, spudgpu_draw_indexed_indirect_args). Without
+ * it every first_instance an indirect draw reads must be 0; what a draw with
+ * another value does is undefined, on every backend, since the arguments are
+ * the GPU's to read and no call can refuse them. Vulkan:
+ * `VkPhysicalDeviceFeatures::drawIndirectFirstInstance`. D3D12 and Metal:
+ * every adapter. */
+#define SPUDGPU_FEATURE_DRAW_INDIRECT_FIRST_INSTANCE (UINT64_C(1) << 12)
 
 /** @brief The kinds of queue, as bits, for SPUDGPU_QUEUE_POOL. */
 typedef uint32_t SPUDGPU_QUEUE_KINDS;
@@ -4743,6 +4751,16 @@ typedef struct spudgpu_shader_pipeline_desc {
 /**
  * @brief Creates a graphics pipeline.
  *
+ * One rule links the stages on every backend, whatever the graphics API
+ * underneath matches by: the fragment shader declares the inputs the vertex
+ * (or mesh) shader outputs from location 0 up to the last one it reads, each
+ * at the same location with the same type and interpolation, whether it
+ * reads it or not. It may leave out only the outputs after that. Vulkan and
+ * Metal match inputs to outputs by location, but D3D12 matches them by
+ * hardware register, in order, so a fragment shader that skips a lower
+ * location doesn't link there, and the pipeline fails with
+ * SPUDRESULT_API_SPECIFIC_FAILURE.
+ *
  * @param[in]  device       Device to create the pipeline on.
  * @param[in]  desc         Pipeline configuration.
  * @param[out] out_pipeline Receives the new pipeline on success.
@@ -5020,7 +5038,8 @@ typedef struct spudgpu_draw_indirect_args {
 	uint32_t instance_count;
 	/** Index of the first vertex. */
 	uint32_t first_vertex;
-	/** Index of the first instance. */
+	/** Index of the first instance. 0 unless the device was created with
+	 * SPUDGPU_FEATURE_DRAW_INDIRECT_FIRST_INSTANCE. */
 	uint32_t first_instance;
 } spudgpu_draw_indirect_args;
 
@@ -5041,7 +5060,8 @@ typedef struct spudgpu_draw_indexed_indirect_args {
 	uint32_t first_index;
 	/** Added to each index before it selects a vertex. */
 	int32_t base_vertex;
-	/** Index of the first instance. */
+	/** Index of the first instance. 0 unless the device was created with
+	 * SPUDGPU_FEATURE_DRAW_INDIRECT_FIRST_INSTANCE. */
 	uint32_t first_instance;
 } spudgpu_draw_indexed_indirect_args;
 

@@ -162,12 +162,13 @@ static bool spudgpu_d3d12___read_adapter_facts(spudgpu_adapter_d3d12 *adapter) {
 	const bool have_options = SUCCEEDED(probe->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS, &options, sizeof(options)));
 	if (have_options && options.VPAndRTArrayIndexFromAnyShaderFeedingRasterizerSupportedWithoutGSEmulation)
 		features |= SPUDGPU_FEATURE_LAYERED_RENDERING;
-	// DepthBiasClamp, IndependentBlendEnable, any ExecuteIndirect count,
-	// TEXTURECUBEARRAY views, a direct queue's timestamps, heaps of every
-	// kind and presenting: on every device of the minimum level.
+	// DepthBiasClamp, IndependentBlendEnable, any ExecuteIndirect count and
+	// StartInstanceLocation, TEXTURECUBEARRAY views, a direct queue's
+	// timestamps, heaps of every kind and presenting: on every device of the
+	// minimum level.
 	features |= SPUDGPU_FEATURE_DEPTH_BIAS_CLAMP | SPUDGPU_FEATURE_INDEPENDENT_BLEND | SPUDGPU_FEATURE_MULTI_DRAW_INDIRECT |
 	            SPUDGPU_FEATURE_CUBE_ARRAY_VIEWS | SPUDGPU_FEATURE_PASS_TIMESTAMPS | SPUDGPU_FEATURE_MAPPABLE_HEAPS |
-	            SPUDGPU_FEATURE_PRESENT;
+	            SPUDGPU_FEATURE_PRESENT | SPUDGPU_FEATURE_DRAW_INDIRECT_FIRST_INSTANCE;
 	// SPUDGPU_MEMORY_KIND_DEVICE_MAPPABLE is a custom heap in pool L0 that
 	// the CPU can map, which holds a resource in any state only on a UMA
 	// adapter.

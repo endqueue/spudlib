@@ -87,9 +87,11 @@ static void spudgpumetal___internal_read_adapter_facts(spudgpu_adapter_metal *ad
 	features |= SPUDGPU_FEATURE_LAYERED_RENDERING;
 	// setDepthBias:slopeScale:clamp: takes a clamp, each colour attachment of
 	// a render pipeline descriptor blends on its own, an indirect draw loops
-	// any count, and MTLTextureTypeCubeArray exists, on every GPU.
+	// any count and reads its arguments' baseInstance (Apple3 and Mac2 and
+	// later), and MTLTextureTypeCubeArray exists, on every GPU.
 	features |= SPUDGPU_FEATURE_DEPTH_BIAS_CLAMP | SPUDGPU_FEATURE_INDEPENDENT_BLEND |
-	            SPUDGPU_FEATURE_MULTI_DRAW_INDIRECT | SPUDGPU_FEATURE_CUBE_ARRAY_VIEWS;
+	            SPUDGPU_FEATURE_MULTI_DRAW_INDIRECT | SPUDGPU_FEATURE_CUBE_ARRAY_VIEWS |
+	            SPUDGPU_FEATURE_DRAW_INDIRECT_FIRST_INSTANCE;
 	// A pass's timestamps are samples of the timestamp counter set at its
 	// stage boundaries.
 	id<MTLCounterSet> timestamp_counter_set = spudgpumetal___internal_timestamp_counter_set(mtl);

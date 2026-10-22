@@ -884,8 +884,16 @@ void spudgpu_cmd_pipeline_barrier(
         vk_image_barriers[i].subresourceRange.baseArrayLayer = 0;
         vk_image_barriers[i].subresourceRange.layerCount = VK_REMAINING_ARRAY_LAYERS;
 
-        src_stage |= spudgpu_vk___resource_state_to_stage(b->state_before);
-        dst_stage |= spudgpu_vk___resource_state_to_stage(b->state_after);
+        // Out of PRESENT or COMMON (UNDEFINED) the layout transition waits at
+        // the destination stage, so that it chains to a swap chain image's
+        // acquire semaphore and to earlier work, as
+        // spudgpuvulkan___cmd_image_barrier_raw explains.
+        const VkPipelineStageFlags after_stage = spudgpu_vk___resource_state_to_stage(b->state_after);
+        if (b->state_before == SPUDGPU_RESOURCE_STATE_PRESENT || b->state_before == SPUDGPU_RESOURCE_STATE_COMMON)
+            src_stage |= after_stage;
+        else
+            src_stage |= spudgpu_vk___resource_state_to_stage(b->state_before);
+        dst_stage |= after_stage;
     }
 
     if (!src_stage) src_stage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;

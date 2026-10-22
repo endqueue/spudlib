@@ -208,12 +208,12 @@ static struct ca_property ca_get_alloc(
 	if (!AudioObjectHasProperty(obj, &a) || AudioObjectGetPropertyDataSize(obj, &a, 0, NULL, &size) != noErr || size == 0)
 		return p;
 	// Cast to HAL structs (AudioBufferList, AudioChannelLayout, ...).
-	void *data = spud_allocate(allocator, size, SPUD_ALIGNOF(max_align_t));
+	void *data = spud_allocate(allocator, size, SPUD_MAX_ALIGN);
 	if (!data)
 		return p;
 	const UInt32 capacity = size;
 	if (AudioObjectGetPropertyData(obj, &a, 0, NULL, &size, data) != noErr) {
-		spud_free(allocator, data, capacity, SPUD_ALIGNOF(max_align_t));
+		spud_free(allocator, data, capacity, SPUD_MAX_ALIGN);
 		return p;
 	}
 	p.data     = data;
@@ -226,7 +226,7 @@ static struct ca_property ca_get_alloc(
 static void ca_property_free(
     const SPUD_ALLOCATOR *allocator,
     const struct ca_property *p) {
-	spud_free(allocator, p->data, p->capacity, SPUD_ALIGNOF(max_align_t));
+	spud_free(allocator, p->data, p->capacity, SPUD_MAX_ALIGN);
 }
 
 static void ca_get_string(AudioObjectID obj, AudioObjectPropertySelector sel, char *out, size_t out_size) {
@@ -1352,7 +1352,7 @@ static void ca_free_stream(struct spudaudio_stream_t *s) {
 		dispatch_release(s->listener_queue);
 	const SPUD_ALLOCATOR allocator = s->head.allocator;
 	SPUD_DELETE_ARRAY(&allocator, void *, s->client_planes, s->client_planes_count);
-	spud_free_array(&allocator, s->client, s->client_samples, s->client_sample_bytes, SPUD_ALIGNOF(max_align_t));
+	spud_free_array(&allocator, s->client, s->client_samples, s->client_sample_bytes, SPUD_MAX_ALIGN);
 	SPUD_DELETE_ARRAY(&allocator, float *, s->planes, s->planes_count);
 	SPUD_DELETE_ARRAY(&allocator, float, s->scratch, s->scratch_count);
 	spud_string_free(&allocator, s->head.debug_name);
@@ -1437,7 +1437,7 @@ SPUDRESULT spudaudio_create_stream(
 		s->client_planes_count          = channels;
 		s->scratch                      = SPUD_NEW_ARRAY_ZEROED(allocator, float, s->scratch_count);
 		// Bytes read as the stream's samples (int16_t, int32_t, float).
-		s->client        = (uint8_t *)spud_allocate_array(allocator, s->client_samples, s->client_sample_bytes, SPUD_ALIGNOF(max_align_t), true);
+		s->client        = (uint8_t *)spud_allocate_array(allocator, s->client_samples, s->client_sample_bytes, SPUD_MAX_ALIGN, true);
 		s->client_planes = SPUD_NEW_ARRAY_ZEROED(allocator, void *, channels);
 		if (!s->scratch || !s->client || !s->client_planes)
 			r = SPUDRESULT_OUT_OF_MEMORY;

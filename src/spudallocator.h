@@ -21,12 +21,23 @@
 #include "spudcore.h"
 #include <assert.h>
 #include <stdbool.h>
+#include <stddef.h>
 #include <string.h>
 
 #if defined(__cplusplus)
 #define SPUD_ALIGNOF(T) alignof(T)
 #else
 #define SPUD_ALIGNOF(T) _Alignof(T)
+#endif
+
+// The alignment of max_align_t: what a block that may hold any scalar type is
+// allocated and freed with. MSVC's C compiler has no max_align_t (its
+// <stddef.h> declares one for C++ only, as double), so there it is double's,
+// the same value MSVC's C++ gives.
+#if defined(_MSC_VER) && !defined(__clang__) && !defined(__cplusplus)
+#define SPUD_MAX_ALIGN _Alignof(double)
+#else
+#define SPUD_MAX_ALIGN SPUD_ALIGNOF(max_align_t)
 #endif
 
 typedef struct spud_object_head {
