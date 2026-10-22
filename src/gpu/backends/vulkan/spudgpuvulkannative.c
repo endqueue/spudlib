@@ -12,8 +12,8 @@ VkInstance spudgpu_get_vk_instance(spudgpu_instance instance) {
     return instance ? instance->_instance_vk : NULL;
 }
 
-VkPhysicalDevice spudgpu_get_vk_physical_device(spudgpu_device device) {
-    return device ? device->_physical_device_vk : NULL;
+VkPhysicalDevice spudgpu_get_vk_physical_device(spudgpu_adapter adapter) {
+    return adapter ? adapter->_physical_device_vk : NULL;
 }
 
 VkDevice spudgpu_get_vk_device(spudgpu_device device) {

@@ -180,7 +180,7 @@ static void spudgpuvulkan___internal_placement_requirements(
 static SPUDRESULT spudgpuvulkan___internal_check_buffer_placement(
     spudgpu_heap heap,
     const spudgpu_buffer_desc *desc) {
-    const SPUDRESULT sr = spudgpuvulkan___check_buffer_desc(&heap->_device._properties, desc);
+    const SPUDRESULT sr = spudgpuvulkan___check_buffer_desc(heap->_device._features, desc);
     if (sr != SPUD_SUCCESS) return sr;
     if (heap->_desc.resource_class != SPUDGPU_HEAP_RESOURCE_CLASS_BUFFERS ||
         desc->memory_kind != heap->_desc.memory_kind)
@@ -246,9 +246,9 @@ SPUDRESULT spudgpu_create_heap(
         return SPUDRESULT_GPU_INVALID_MEMORY_KIND;
     if (desc->resource_class != SPUDGPU_HEAP_RESOURCE_CLASS_BUFFERS && desc->memory_kind != SPUDGPU_MEMORY_KIND_DEVICE)
         return SPUDRESULT_GPU_INVALID_MEMORY_KIND;
-    if (desc->memory_kind != SPUDGPU_MEMORY_KIND_DEVICE && !device->_properties.mappable_heaps)
+    if (desc->memory_kind != SPUDGPU_MEMORY_KIND_DEVICE && !(device->_features & SPUDGPU_FEATURE_MAPPABLE_HEAPS))
         return SPUDRESULT_GPU_MEMORY_KIND_NOT_SUPPORTED;
-    if (desc->memory_kind == SPUDGPU_MEMORY_KIND_DEVICE_MAPPABLE && !device->_properties.device_mappable_memory)
+    if (desc->memory_kind == SPUDGPU_MEMORY_KIND_DEVICE_MAPPABLE && !(device->_features & SPUDGPU_FEATURE_DEVICE_MAPPABLE_MEMORY))
         return SPUDRESULT_GPU_MEMORY_KIND_NOT_SUPPORTED;
 
     VkDevice vk_device = device->_logical_device_vk;
@@ -299,6 +299,7 @@ SPUDRESULT spudgpu_create_heap(
     heap->_desc = *desc;
     heap->_device = *device;
 
+    SPUDGPU___LIVE_ADD(&device->_shared->live, SPUDGPU___OBJECT_HEAP);
     if (spud_debug_name_set(heap, desc->debug_name) != SPUD_SUCCESS) {
         spudgpu_destroy_heap(heap);
         return SPUDRESULT_OUT_OF_MEMORY;
@@ -319,6 +320,7 @@ void spudgpu_destroy_heap(spudgpu_heap heap) {
     if (heap->_mapped)
         vkUnmapMemory(heap->_device._logical_device_vk, heap->_memory_vk);
     vkFreeMemory(heap->_device._logical_device_vk, heap->_memory_vk, NULL);
+    SPUDGPU___LIVE_REMOVE(&heap->_device._shared->live, SPUDGPU___OBJECT_HEAP);
     const SPUD_ALLOCATOR allocator = heap->head.allocator;
     spud_string_free(&allocator, heap->head.debug_name);
     SPUD_DELETE(&allocator, spudgpu_heap_vulkan, heap);
@@ -449,6 +451,7 @@ SPUDRESULT spudgpu_create_placed_buffer(
     addressInfo.sType = VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO;
     addressInfo.buffer = vk_buffer;
     buffer->_gpu_address_vk = vkGetBufferDeviceAddress(vk_device, &addressInfo);
+    SPUDGPU___LIVE_ADD(&heap->_device._shared->live, SPUDGPU___OBJECT_BUFFER);
 
 #if _DEBUG
     // Counted before the name is copied: a failed copy destroys the buffer,
@@ -511,6 +514,7 @@ SPUDRESULT spudgpu_create_placed_image(
     image->_desc = *desc;
     image->_device = heap->_device;
     image->_heap = heap;
+    SPUDGPU___LIVE_ADD(&heap->_device._shared->live, SPUDGPU___OBJECT_IMAGE);
 
 #if _DEBUG
     heap->_placed_count++;

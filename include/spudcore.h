@@ -154,6 +154,8 @@ typedef enum SPUDRESULT {
 	/** An allocator's `allocate` or `free` is NULL. */
 	SPUDRESULT_INVALID_ALLOCATOR         = 16,
 
+	/** spudgpu_create_instance(): the graphics API could not list its GPUs.
+	 * No GPU is not this: it is an instance with no adapters. */
 	SPUDRESULT_GPU_DEVICE_ENUMERATION_FAILURE                  = 199,
 	SPUDRESULT_GPU_INVALID_INSTANCE                            = 200,
 	SPUDRESULT_GPU_INVALID_DEVICE                              = 201,
@@ -166,6 +168,23 @@ typedef enum SPUDRESULT {
 	SPUDRESULT_GPU_INVALID_WINDOW_HANDLE                       = 208,
 	SPUDRESULT_GPU_INVALID_DISPLAY_HANDLE                      = 209,
 	SPUDRESULT_GPU_INVALID_COMMAND_LIST_TYPE                   = 210,
+	/** An adapter argument is NULL. */
+	SPUDRESULT_GPU_INVALID_ADAPTER                             = 211,
+	/** A SPUDGPU_FEATURE_* bit was asked for that the adapter doesn't
+	 * support, or a call needs one the device wasn't created with and has
+	 * no result of its own for it. */
+	SPUDRESULT_GPU_FEATURE_NOT_SUPPORTED                       = 212,
+	/** A device desc asks for more queues of one of the adapter's queue
+	 * pools than the pool holds. */
+	SPUDRESULT_GPU_TOO_MANY_QUEUES                             = 213,
+	/** The adapter already has a device: one device per adapter at a time. */
+	SPUDRESULT_GPU_ADAPTER_IN_USE                              = 214,
+	/* 215 is kept for SPUDRESULT_GPU_DEVICE_LOST (SPUDGPU_DEVICE_TODO.md). */
+	/** A descriptor pool, or the bindless table, doesn't fit in what is left
+	 * of the device's descriptor budget. */
+	SPUDRESULT_GPU_OUT_OF_DESCRIPTORS                          = 216,
+	/** A device desc's descriptor budget is above the adapter's limit. */
+	SPUDRESULT_GPU_DESCRIPTOR_BUDGET_TOO_LARGE                 = 217,
 	SPUDRESULT_GPU_INVALID_MEMORY_KIND                         = 220,
 	SPUDRESULT_GPU_INVALID_BUFFER_USAGE                        = 221,
 	SPUDRESULT_GPU_INVALID_IMAGE_USAGE                         = 222,
@@ -234,17 +253,18 @@ typedef enum SPUDRESULT {
 	 * @name Extension not supported by the device
 	 *
 	 * One SPUDRESULT_GPU_EXT_<NAME>_NOT_SUPPORTED per SPUDGPU_EXT_<NAME>
-	 * compile-time capability macro in spudgpu.h. Returned by that
-	 * extension's runtime entry points when the active backend compiles the
-	 * extension in (the macro is 1) but the specific device/driver still
-	 * doesn't support it. Never returned when the macro is 0: the extension's
-	 * functions aren't declared at all in that case, so calling one is a
-	 * compile/link error, not a runtime result.
+	 * compile-time capability macro in spudgpu.h that pairs with a
+	 * SPUDGPU_FEATURE_<NAME> bit. Returned by that extension's entry points
+	 * when the device wasn't created with the feature, which covers a GPU
+	 * that lacks it, since such a GPU can't be asked for it. Never returned
+	 * when the macro is 0: the extension's functions aren't declared at all
+	 * in that case, so calling one is a compile/link error, not a runtime
+	 * result.
 	 * @{
 	 */
-	SPUDRESULT_GPU_EXT_BINDLESS_DESCRIPTOR_INDEXING_NOT_SUPPORTED = 325,
-	SPUDRESULT_GPU_EXT_MESH_SHADING_NOT_SUPPORTED                 = 326,
-	SPUDRESULT_GPU_EXT_DEPTH_BOUNDS_TEST_NOT_SUPPORTED            = 327,
+	SPUDRESULT_GPU_EXT_BINDLESS_NOT_SUPPORTED          = 325,
+	SPUDRESULT_GPU_EXT_MESH_SHADING_NOT_SUPPORTED      = 326,
+	SPUDRESULT_GPU_EXT_DEPTH_BOUNDS_TEST_NOT_SUPPORTED = 327,
 	/** @} */
 
 	SPUDRESULT_GPU_INVALID_RESOURCE_STATE                      = 350,
@@ -377,9 +397,10 @@ typedef enum SPUD_STRUCT_TYPE {
 	/** Never valid: a struct left zeroed is refused, not misread. */
 	SPUD_STRUCT_TYPE_UNKNOWN  = 0,
 
-	/* SpudGPU */
-	/** SPUDGPU_DEVICE_PROPERTIES (SPUD_STRUCT_BASE_OUT). */
-	SPUD_STRUCT_TYPE_GPU_DEVICE_PROPERTIES          = 1000,
+	/* SpudGPU. Retired, never reused: 1000 (SPUDGPU_DEVICE_PROPERTIES),
+	 * 1017 (spudgpu_bindless_capabilities), 1020
+	 * (spudgpu_mesh_shading_capabilities), 1021
+	 * (spudgpu_depth_bounds_capabilities). */
 	/** spudgpu_submit_desc (SPUD_STRUCT_BASE). */
 	SPUD_STRUCT_TYPE_GPU_SUBMIT_DESC                = 1001,
 	/** spudgpu_command_allocator_desc (SPUD_STRUCT_BASE). */
@@ -412,16 +433,10 @@ typedef enum SPUD_STRUCT_TYPE {
 	SPUD_STRUCT_TYPE_GPU_SAMPLER_DESC               = 1015,
 	/** spudgpu_write_descriptor_set (SPUD_STRUCT_BASE). */
 	SPUD_STRUCT_TYPE_GPU_WRITE_DESCRIPTOR_SET       = 1016,
-	/** spudgpu_bindless_capabilities (SPUD_STRUCT_BASE_OUT). */
-	SPUD_STRUCT_TYPE_GPU_BINDLESS_CAPABILITIES      = 1017,
 	/** spudgpu_shader_module_desc (SPUD_STRUCT_BASE). */
 	SPUD_STRUCT_TYPE_GPU_SHADER_MODULE_DESC         = 1018,
 	/** spudgpu_shader_pipeline_desc (SPUD_STRUCT_BASE). */
 	SPUD_STRUCT_TYPE_GPU_SHADER_PIPELINE_DESC       = 1019,
-	/** spudgpu_mesh_shading_capabilities (SPUD_STRUCT_BASE_OUT). */
-	SPUD_STRUCT_TYPE_GPU_MESH_SHADING_CAPABILITIES  = 1020,
-	/** spudgpu_depth_bounds_capabilities (SPUD_STRUCT_BASE_OUT). */
-	SPUD_STRUCT_TYPE_GPU_DEPTH_BOUNDS_CAPABILITIES  = 1021,
 	/** spudgpu_compute_pipeline_desc (SPUD_STRUCT_BASE). */
 	SPUD_STRUCT_TYPE_GPU_COMPUTE_PIPELINE_DESC      = 1022,
 	/** spudgpu_rendering_begin_desc (SPUD_STRUCT_BASE). */
@@ -430,6 +445,16 @@ typedef enum SPUD_STRUCT_TYPE {
 	SPUD_STRUCT_TYPE_GPU_BUNDLE_INHERITANCE_DESC    = 1024,
 	/** spudgpu_instance_desc (SPUD_STRUCT_BASE). */
 	SPUD_STRUCT_TYPE_GPU_INSTANCE_DESC              = 1025,
+	/** SPUDGPU_ADAPTER_PROPERTIES (SPUD_STRUCT_BASE_OUT). */
+	SPUD_STRUCT_TYPE_GPU_ADAPTER_PROPERTIES         = 1026,
+	/** spudgpu_device_desc (SPUD_STRUCT_BASE). */
+	SPUD_STRUCT_TYPE_GPU_DEVICE_DESC                = 1027,
+	/** SPUDGPU_MESH_SHADING_LIMITS (SPUD_STRUCT_BASE_OUT), chained onto
+	 * SPUDGPU_ADAPTER_PROPERTIES. */
+	SPUD_STRUCT_TYPE_GPU_MESH_SHADING_LIMITS        = 1028,
+	/** SPUDGPU_BINDLESS_LIMITS (SPUD_STRUCT_BASE_OUT), chained onto
+	 * SPUDGPU_ADAPTER_PROPERTIES. */
+	SPUD_STRUCT_TYPE_GPU_BINDLESS_LIMITS            = 1029,
 
 	/* SpudAudio */
 	/** SPUDAUDIO_DEVICE_PROPERTIES (SPUD_STRUCT_BASE_OUT). */

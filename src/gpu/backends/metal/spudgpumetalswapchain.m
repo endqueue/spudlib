@@ -154,6 +154,8 @@ SPUDRESULT spudgpu_create_swap_chain(
 		return SPUDRESULT_GPU_INVALID_SURFACE;
 	if (!desc->queue)
 		return SPUDRESULT_GPU_INVALID_COMMAND_QUEUE;
+	if (!(device->_features & SPUDGPU_FEATURE_PRESENT))
+		return SPUDRESULT_GPU_FEATURE_NOT_SUPPORTED;
 	// Metal has no stable, enumerable N-image array the way Vulkan/D3D12 do -
 	// CAMetalLayer hands out one drawable at a time from an internal pool, so
 	// there is exactly one addressable image at any moment. Reject anything
@@ -215,6 +217,7 @@ SPUDRESULT spudgpu_create_swap_chain(
 	swap_chain_metal->_back_buffer_images[0]._desc.array_layers    = 1;
 	swap_chain_metal->_back_buffer_images[0]._desc.mip_levels      = 1;
 	swap_chain_metal->_back_buffer_image_views[0]._parent_image   = &swap_chain_metal->_back_buffer_images[0];
+	swap_chain_metal->_back_buffer_image_views[0]._parent_device  = swap_chain_metal->_parent_device;
 	// What spudgpu_get_image_view_desc reports for the back buffer's view -
 	// the same as the D3D12 backend's, so a caller can get from the view to
 	// the image it copies into.
@@ -284,6 +287,7 @@ SPUDRESULT spudgpu_create_swap_chain(
 		goto failedattempt;
 	}
 
+	SPUDGPU___LIVE_ADD(&swap_chain_metal->_parent_device->_live, SPUDGPU___OBJECT_SWAP_CHAIN);
 	*out_swap_chain = (spudgpu_swap_chain)swap_chain_metal;
 
 	return sr;
@@ -294,6 +298,9 @@ failedattempt:
 }
 
 void spudgpu_destroy_swap_chain(spudgpu_swap_chain swap_chain) {
+	if (!swap_chain)
+		return;
+	SPUDGPU___LIVE_REMOVE(&((spudgpu_swap_chain_metal *)swap_chain)->_parent_device->_live, SPUDGPU___OBJECT_SWAP_CHAIN);
 	spudgpumetal___internal_destroy_swap_chain((spudgpu_swap_chain_metal *)swap_chain);
 }
 

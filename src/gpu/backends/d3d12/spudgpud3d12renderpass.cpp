@@ -3,6 +3,7 @@
 
 #include "spudgpud3d12.hpp"
 #include "../../spudgpushared.h"
+#include <cassert>
 #include <cstdio>
 #include <vector>
 #include "../../../spudstructbase.h"
@@ -506,6 +507,11 @@ void spudgpu_cmd_begin_rendering(
 		return;
 	if (spud_struct_check(&desc->base, SPUD_STRUCT_TYPE_GPU_RENDERING_BEGIN_DESC) != SPUD_SUCCESS)
 		return;
+	// A layered pass needs a device created with
+	// SPUDGPU_FEATURE_LAYERED_RENDERING, on every backend (spudgpu.h,
+	// spudgpu_rendering_begin_desc::layer_count).
+	assert((desc->layer_count == 0 || (cmd->_allocator->_device->_features & SPUDGPU_FEATURE_LAYERED_RENDERING)) &&
+	       "spudgpu_cmd_begin_rendering: a layered pass on a device created without SPUDGPU_FEATURE_LAYERED_RENDERING");
 	// Color attachments, a depth attachment, or both: a depth-only pass (a
 	// shadow map, a depth pre-pass) has no color attachment at all, as on
 	// Vulkan and Metal.

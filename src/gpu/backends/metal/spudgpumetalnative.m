@@ -20,6 +20,13 @@ id<MTLDevice> spudgpu_get_mtl_device(spudgpu_device device) {
 	return device_metal->_device_mtl;
 }
 
+id<MTLDevice> spudgpu_get_mtl_adapter_device(spudgpu_adapter adapter) {
+	spudgpu_adapter_metal *adapter_metal = (spudgpu_adapter_metal *)adapter;
+	if (!adapter_metal)
+		return nil;
+	return adapter_metal->_device_mtl;
+}
+
 id<MTLCommandQueue> spudgpu_get_mtl_command_queue(spudgpu_command_queue queue) {
 	spudgpu_command_queue_metal *queue_metal = (spudgpu_command_queue_metal *)queue;
 	if (!queue_metal)

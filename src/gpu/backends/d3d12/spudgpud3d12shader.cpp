@@ -411,7 +411,10 @@ static SPUDRESULT spudgpu_d3d12___create_mesh_shader_pipeline(
 	stream.SampleMask        = UINT_MAX;
 	stream.RasterizerState   = CD3DX12_RASTERIZER_DESC(rastDesc);
 	CD3DX12_DEPTH_STENCIL_DESC1 meshDsDesc1(dsDesc);
-	meshDsDesc1.DepthBoundsTestEnable = desc->depth_bounds_test_enable ? TRUE : FALSE;
+	// Only on a device created with the feature: without it the pipeline
+	// behaves as if the test were off (spudgpu.h).
+	meshDsDesc1.DepthBoundsTestEnable =
+	    desc->depth_bounds_test_enable && (pResult->_device->_features & SPUDGPU_FEATURE_DEPTH_BOUNDS_TEST) ? TRUE : FALSE;
 	stream.DepthStencilState = meshDsDesc1;
 	stream.DSVFormat         = (desc->depth_format != SPUDGPU_FORMAT_UNKNOWN)
 	                               ? spudgpu_d3d12_get_dxgi_format(desc->depth_format)
@@ -439,6 +442,9 @@ static SPUDRESULT spudgpu_d3d12___create_mesh_shader_pipeline(
 	// [outputtopology(...)] attribute, not the input assembler) - left at
 	// its zero-initialized value.
 
+	// From here spudgpu_destroy_shader_pipeline frees it, and takes the
+	// count back.
+	SPUDGPU___LIVE_ADD(&pResult->_device->_live, SPUDGPU___OBJECT_SHADER_PIPELINE);
 	if (spud_debug_name_set(pResult, desc->debug_name) != SPUD_SUCCESS) {
 		spudgpu_destroy_shader_pipeline(pResult);
 		return SPUDRESULT_OUT_OF_MEMORY;
@@ -631,6 +637,7 @@ SPUDRESULT spudgpu_create_shader_module(
 	pResult->_device = pDev;
 	pResult->_d3d_blob = d3d_blob;
 
+	SPUDGPU___LIVE_ADD(&pDev->_live, SPUDGPU___OBJECT_SHADER_MODULE);
 	if (spud_debug_name_set(pResult, desc->debug_name) != SPUD_SUCCESS) {
 		spudgpu_destroy_shader_module(pResult);
 		return SPUDRESULT_OUT_OF_MEMORY;
@@ -644,6 +651,7 @@ SPUDRESULT spudgpu_create_shader_module(
 void spudgpu_destroy_shader_module(spudgpu_shader_module shader_module) {
 	if (!shader_module)
 		return;
+	SPUDGPU___LIVE_REMOVE(&shader_module->_device->_live, SPUDGPU___OBJECT_SHADER_MODULE);
 	const SPUD_ALLOCATOR allocator = shader_module->head.allocator;
 	spud_string_free(&allocator, shader_module->head.debug_name);
 	shader_module->~spudgpu_shader_module_d3d12();
@@ -670,7 +678,9 @@ SPUDRESULT spudgpu_create_shader_pipeline(
 		return SPUDRESULT_GPU_VERTEX_AND_FRAGMENT_SHADER_REQUIRED;
 	if (desc->vertex_module && desc->mesh_module)
 		return SPUDRESULT_GPU_INVALID_SHADER_STAGE;
-	SPUDRESULT outputs = spudgpu___internal_check_pipeline_outputs(desc, &device->_properties);
+	if (desc->mesh_module && !(device->_features & SPUDGPU_FEATURE_MESH_SHADING))
+		return SPUDRESULT_GPU_EXT_MESH_SHADING_NOT_SUPPORTED;
+	SPUDRESULT outputs = spudgpu___internal_check_pipeline_outputs(desc, device->_features);
 	if (outputs != SPUD_SUCCESS)
 		return outputs;
 
@@ -824,7 +834,8 @@ SPUDRESULT spudgpu_create_shader_pipeline(
 	// creation paths for what should behave identically otherwise.
 	CD3DX12_PIPELINE_STATE_STREAM1 pipelineStateStream(psoDesc);
 	CD3DX12_DEPTH_STENCIL_DESC1 dsDesc1(dsDesc);
-	dsDesc1.DepthBoundsTestEnable = desc->depth_bounds_test_enable ? TRUE : FALSE;
+	dsDesc1.DepthBoundsTestEnable =
+	    desc->depth_bounds_test_enable && (device->_features & SPUDGPU_FEATURE_DEPTH_BOUNDS_TEST) ? TRUE : FALSE;
 	pipelineStateStream.DepthStencilState = dsDesc1;
 
 	D3D12_PIPELINE_STATE_STREAM_DESC streamDesc = {};
@@ -841,6 +852,9 @@ SPUDRESULT spudgpu_create_shader_pipeline(
 
 	pResult->_d3d_primitive_topology = topology;
 
+	// From here spudgpu_destroy_shader_pipeline frees it, and takes the
+	// count back.
+	SPUDGPU___LIVE_ADD(&pResult->_device->_live, SPUDGPU___OBJECT_SHADER_PIPELINE);
 	if (spud_debug_name_set(pResult, desc->debug_name) != SPUD_SUCCESS) {
 		spudgpu_destroy_shader_pipeline(pResult);
 		return SPUDRESULT_OUT_OF_MEMORY;
@@ -854,6 +868,7 @@ SPUDRESULT spudgpu_create_shader_pipeline(
 void spudgpu_destroy_shader_pipeline(spudgpu_shader_pipeline pipeline) {
 	if (!pipeline)
 		return;
+	SPUDGPU___LIVE_REMOVE(&pipeline->_device->_live, SPUDGPU___OBJECT_SHADER_PIPELINE);
 	const SPUD_ALLOCATOR allocator = pipeline->head.allocator;
 	spud_string_free(&allocator, pipeline->head.debug_name);
 	pipeline->~spudgpu_shader_pipeline_d3d12();
@@ -986,6 +1001,7 @@ SPUDRESULT spudgpu_create_compute_pipeline(
 		return SPUDRESULT_API_SPECIFIC_FAILURE;
 	}
 
+	SPUDGPU___LIVE_ADD(&device->_live, SPUDGPU___OBJECT_COMPUTE_PIPELINE);
 	if (spud_debug_name_set(pResult, desc->debug_name) != SPUD_SUCCESS) {
 		spudgpu_destroy_compute_pipeline(pResult);
 		return SPUDRESULT_OUT_OF_MEMORY;
@@ -999,6 +1015,7 @@ SPUDRESULT spudgpu_create_compute_pipeline(
 void spudgpu_destroy_compute_pipeline(spudgpu_compute_pipeline pipeline) {
 	if (!pipeline)
 		return;
+	SPUDGPU___LIVE_REMOVE(&pipeline->_device->_live, SPUDGPU___OBJECT_COMPUTE_PIPELINE);
 	const SPUD_ALLOCATOR allocator = pipeline->head.allocator;
 	spud_string_free(&allocator, pipeline->head.debug_name);
 	pipeline->~spudgpu_compute_pipeline_d3d12();

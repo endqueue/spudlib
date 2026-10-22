@@ -53,6 +53,7 @@ SPUDRESULT spudgpu_create_fence(
 	}
 	fence_metal->_shared_event_mtl.signaledValue = initial_value;
 
+	SPUDGPU___LIVE_ADD(&fence_metal->_parent_device->_live, SPUDGPU___OBJECT_FENCE);
 	*out_fence = (spudgpu_fence)fence_metal;
 
 	return sr;
@@ -68,6 +69,7 @@ void spudgpu_destroy_fence(spudgpu_fence fence) {
 		if (fence_metal->_shared_event_mtl) {
 			[fence_metal->_shared_event_mtl release];
 		}
+		SPUDGPU___LIVE_REMOVE(&fence_metal->_parent_device->_live, SPUDGPU___OBJECT_FENCE);
 		const SPUD_ALLOCATOR allocator = fence_metal->head.allocator;
 		spud_string_free(&allocator, fence_metal->head.debug_name);
 		SPUD_DELETE(&allocator, spudgpu_fence_metal, fence_metal);
@@ -218,6 +220,7 @@ SPUDRESULT spudgpu_create_semaphore(
 		goto failedattempt;
 	}
 
+	SPUDGPU___LIVE_ADD(&semaphore_metal->_parent_device->_live, SPUDGPU___OBJECT_SEMAPHORE);
 	*out_semaphore = (spudgpu_semaphore)semaphore_metal;
 
 	return sr;
@@ -233,6 +236,7 @@ void spudgpu_destroy_semaphore(spudgpu_semaphore semaphore) {
 		if (semaphore_metal->_event_mtl) {
 			[semaphore_metal->_event_mtl release];
 		}
+		SPUDGPU___LIVE_REMOVE(&semaphore_metal->_parent_device->_live, SPUDGPU___OBJECT_SEMAPHORE);
 		const SPUD_ALLOCATOR allocator = semaphore_metal->head.allocator;
 		spud_string_free(&allocator, semaphore_metal->head.debug_name);
 		SPUD_DELETE(&allocator, spudgpu_semaphore_metal, semaphore_metal);

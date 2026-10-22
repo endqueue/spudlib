@@ -189,7 +189,11 @@ SPUDGPU_FORMAT spudgpu_format_from_string(const char *fmt_str);
 
 /** Opaque handle to a SpudGPU instance: one connection to the compiled-in graphics API. */
 typedef struct spudgpu_instance_t *spudgpu_instance;
-/** Opaque handle to a GPU device enumerated from an instance. */
+/** Opaque handle to a GPU the graphics API lists: what it is and what it can
+ * do. Owned by the instance; listing one creates nothing on it. */
+typedef struct spudgpu_adapter_t *spudgpu_adapter;
+/** Opaque handle to a device: the caller's connection to one adapter, with
+ * the features and queues it asked for. */
 typedef struct spudgpu_device_t *spudgpu_device;
 /** Opaque handle to a GPU buffer. */
 typedef struct spudgpu_buffer_t *spudgpu_buffer;
@@ -295,8 +299,10 @@ typedef struct spudgpu_instance_desc {
  * @brief Creates a SpudGPU instance on the graphics API this build was
  * compiled for.
  *
- * Call this before any other SpudGPU function, then
- * spudgpu_enumerate_devices() to find the devices to work with.
+ * Call this before any other SpudGPU function. The instance lists the
+ * graphics API's adapters as it is created (spudgpu_enumerate_adapters()); the
+ * caller then creates a device on the one it chooses
+ * (spudgpu_create_device()).
  *
  * @param[in]  desc         What the caller decides.
  * @param[out] out_instance Receives the new instance on success; NULL on
@@ -310,6 +316,9 @@ typedef struct spudgpu_instance_desc {
  * @retval SPUDRESULT_NULL_OUTPUT_PARAMETER `out_instance` is NULL.
  * @retval SPUDRESULT_NULL_ALLOCATOR `desc->allocator` is NULL.
  * @retval SPUDRESULT_INVALID_ALLOCATOR `desc->allocator` lacks a function.
+ * @retval SPUDRESULT_GPU_DEVICE_ENUMERATION_FAILURE The graphics API could
+ *         not list its GPUs. No GPU is not a failure: it is an instance with
+ *         no adapters.
  * @return Another SPUDRESULT if the backend fails, such as
  *         SPUDRESULT_OUT_OF_MEMORY or SPUDRESULT_API_SPECIFIC_FAILURE.
  *
@@ -320,11 +329,11 @@ SPUDRESULT spudgpu_create_instance(
     spudgpu_instance *out_instance);
 
 /**
- * @brief Destroys a SpudGPU instance, with the devices enumerated from it and
- * their command queues.
+ * @brief Destroys a SpudGPU instance.
  *
- * @warning Every other object created through the instance (buffers, images,
- * pipelines, swap chains, ...) must be destroyed first.
+ * @warning Every device created on one of its adapters must be destroyed
+ * first (spudgpu_destroy_device()), and so must every surface created from
+ * it.
  *
  * @param[in] instance Instance to destroy.
  *
@@ -333,37 +342,8 @@ SPUDRESULT spudgpu_create_instance(
 SPUDRESULT spudgpu_destroy_instance(spudgpu_instance instance);
 
 /**
- * @brief Lists the GPU devices available to an instance.
- *
- * No device is chosen for the caller; inspect each one with
- * spudgpu_get_device_properties() and pick. The devices and the array of
- * them belong to the instance and are released by spudgpu_destroy_instance();
- * the caller frees neither. The devices are made by the first call, and a
- * later call hands out the same array.
- *
- * @param[in]  instance          Instance to enumerate devices through.
- * @param[out] out_devices       Receives a pointer to an array of device
- *                               handles.
- * @param[out] out_devices_count Receives the number of handles in
- *                               `*out_devices`.
- *
- * @retval SPUD_SUCCESS The devices were enumerated.
- * @retval SPUDRESULT_GPU_INVALID_INSTANCE `instance` is NULL.
- * @retval SPUDRESULT_NULL_OUTPUT_PARAMETER `out_devices` or
- *         `out_devices_count` is NULL.
- * @retval SPUDRESULT_GPU_DEVICE_ENUMERATION_FAILURE The graphics API reported
- *         no usable device.
- * @return Another SPUDRESULT if the backend fails, such as
- *         SPUDRESULT_OUT_OF_MEMORY or SPUDRESULT_API_SPECIFIC_FAILURE.
- */
-SPUDRESULT spudgpu_enumerate_devices(
-    spudgpu_instance instance,
-    spudgpu_device **out_devices,
-    uint32_t *out_devices_count);
-
-/**
  * @name GPU vendor IDs
- * PCI vendor IDs, for comparing against SPUDGPU_DEVICE_PROPERTIES::vendor_id.
+ * PCI vendor IDs, for comparing against SPUDGPU_ADAPTER_PROPERTIES::vendor_id.
  */
 /** @{ */
 #define SPUDGPU_VENDOR_INTEL 0x8086
@@ -377,175 +357,279 @@ SPUDRESULT spudgpu_enumerate_devices(
 /** @} */
 
 /**
- * @brief Identity and memory sizes of a GPU device, as the graphics API
- * reports them.
+ * @brief Returns the graphics API an instance runs on.
+ *
+ * @param[in] instance Instance to query.
+ *
+ * @return The SPUDGPU_NATIVE_API of the compiled-in backend, or
+ *         SPUDGPU_NATIVE_API_NONE if `instance` is NULL.
  */
-typedef struct SPUDGPU_DEVICE_PROPERTIES {
-	/** `type` is SPUD_STRUCT_TYPE_GPU_DEVICE_PROPERTIES; `next` is NULL (nothing is chained onto
-	 * this struct yet). The caller builds the chain and sets each type; SpudGPU fills in the rest. See SPUD_STRUCT_BASE. */
+SPUDGPU_NATIVE_API spudgpu_get_native_gpu_api(spudgpu_instance instance);
+
+// ============================================================================
+//  Adapters and devices
+// ============================================================================
+
+/**
+ * @brief What kind of GPU an adapter is, as the graphics API reports it.
+ */
+typedef uint32_t SPUDGPU_ADAPTER_TYPE;
+enum {
+	/** The API reports no kind, or one not listed here. */
+	SPUDGPU_ADAPTER_TYPE_OTHER = 0,
+	/** A GPU sharing the system's memory and package (Vulkan
+	 * `VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU`; D3D12
+	 * `D3D12_FEATURE_DATA_ARCHITECTURE1::UMA`; Metal `hasUnifiedMemory`). */
+	SPUDGPU_ADAPTER_TYPE_INTEGRATED = 1,
+	/** A GPU with memory of its own (Vulkan
+	 * `VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU`; D3D12 not UMA; Metal not
+	 * `hasUnifiedMemory`). */
+	SPUDGPU_ADAPTER_TYPE_DISCRETE = 2,
+	/** A GPU a hypervisor presents (Vulkan
+	 * `VK_PHYSICAL_DEVICE_TYPE_VIRTUAL_GPU`). */
+	SPUDGPU_ADAPTER_TYPE_VIRTUAL = 3,
+	/** A renderer that runs on the CPU (Vulkan
+	 * `VK_PHYSICAL_DEVICE_TYPE_CPU`, such as lavapipe or SwiftShader; D3D12
+	 * `DXGI_ADAPTER_FLAG3_SOFTWARE`, WARP). Listed like any other: whether to
+	 * use one is the caller's. */
+	SPUDGPU_ADAPTER_TYPE_SOFTWARE = 4
+};
+
+/**
+ * @brief Capabilities an adapter may or may not have, which a device has only
+ * when it was created with them.
+ *
+ * A bit set in SPUDGPU_ADAPTER_PROPERTIES::supported_features says the
+ * adapter has it. A device has exactly the features in its
+ * spudgpu_device_desc::required_features, on every backend: using one the
+ * device was not created with is refused with that feature's result, as if
+ * the adapter lacked it, even where the graphics API underneath would allow
+ * it. Vulkan switches most of these on when its device is created; D3D12 and
+ * Metal have nothing to switch on, and hold the device to the same rule. So a
+ * feature used without being asked for fails on the machine the code was
+ * written on, not only on a GPU that lacks it.
+ *
+ * A capability that some call refuses without it is a feature. A fact that
+ * makes no call refuse (SPUDGPU_ADAPTER_PROPERTIES::unified_memory) is a
+ * property, which the caller reads and nothing switches on.
+ *
+ * The bits are always defined, whatever the build. A feature whose
+ * SPUDGPU_EXT_* macro is 0 in this build is never in any adapter's
+ * supported features, so code that asks for it compiles on every backend and
+ * asks for nothing there. New features are new bits; a bit's meaning never
+ * changes. They are macros, not an enum: before C23 an enumerator can't go
+ * past an int, and the set may grow past 32.
+ */
+typedef uint64_t SPUDGPU_FEATURES;
+
+/** spudgpu_rendering_begin_desc::layer_count above 0, with the vertex shader
+ * choosing each primitive's layer. Vulkan:
+ * `VkPhysicalDeviceVulkan12Features::shaderOutputLayer`. D3D12:
+ * `D3D12_FEATURE_DATA_D3D12_OPTIONS::VPAndRTArrayIndexFromAnyShaderFeedingRasterizerSupportedWithoutGSEmulation`.
+ * Metal: `MTLGPUFamilyApple5` or `MTLGPUFamilyMac2`. */
+#define SPUDGPU_FEATURE_LAYERED_RENDERING (UINT64_C(1) << 0)
+/** spudgpu_shader_pipeline_desc::depth_bias_clamp other than 0; refused with
+ * SPUDRESULT_GPU_DEPTH_BIAS_CLAMP_NOT_SUPPORTED. Vulkan:
+ * `VkPhysicalDeviceFeatures::depthBiasClamp`. D3D12 and Metal: every
+ * adapter. */
+#define SPUDGPU_FEATURE_DEPTH_BIAS_CLAMP (UINT64_C(1) << 1)
+/** Color attachments of one pipeline that blend differently from each other;
+ * refused with SPUDRESULT_GPU_INDEPENDENT_BLEND_NOT_SUPPORTED. Vulkan:
+ * `VkPhysicalDeviceFeatures::independentBlend`. D3D12 and Metal: every
+ * adapter. */
+#define SPUDGPU_FEATURE_INDEPENDENT_BLEND (UINT64_C(1) << 2)
+/** An indirect draw of more than one entry per call, up to
+ * SPUDGPU_ADAPTER_PROPERTIES::max_draw_indirect_count. Without it a call takes
+ * 1 entry at most. Vulkan: `VkPhysicalDeviceFeatures::multiDrawIndirect`.
+ * D3D12 and Metal: every adapter. */
+#define SPUDGPU_FEATURE_MULTI_DRAW_INDIRECT (UINT64_C(1) << 3)
+/** SPUDGPU_IMAGE_VIEW_TYPE_CUBE_ARRAY views, and shaders that declare a cube
+ * array; such a view is refused with SPUDRESULT_GPU_INVALID_IMAGE_VIEW_TYPE.
+ * Vulkan: `VkPhysicalDeviceFeatures::imageCubeArray`. D3D12 and Metal: every
+ * adapter. */
+#define SPUDGPU_FEATURE_CUBE_ARRAY_VIEWS (UINT64_C(1) << 4)
+/** spudgpu_create_timestamp_set(); refused with
+ * SPUDRESULT_GPU_TIMESTAMPS_NOT_SUPPORTED. Vulkan: the direct queues'
+ * family has `timestampValidBits` above 0. D3D12: every adapter. Metal: the
+ * device has the timestamp counter set and
+ * `supportsCounterSampling:MTLCounterSamplingPointAtStageBoundary`. */
+#define SPUDGPU_FEATURE_PASS_TIMESTAMPS (UINT64_C(1) << 5)
+/** Buffers of SPUDGPU_MEMORY_KIND_DEVICE_MAPPABLE; refused with
+ * SPUDRESULT_GPU_MEMORY_KIND_NOT_SUPPORTED. Only ever on an adapter with
+ * SPUDGPU_ADAPTER_PROPERTIES::unified_memory, and not implied by it. Vulkan: a
+ * memory type that is both `DEVICE_LOCAL` and `HOST_VISIBLE`. D3D12 and Metal:
+ * every unified-memory adapter. */
+#define SPUDGPU_FEATURE_DEVICE_MAPPABLE_MEMORY (UINT64_C(1) << 6)
+/** Heaps (spudgpu_create_heap()) of SPUDGPU_MEMORY_KIND_UPLOAD, _READBACK or
+ * _DEVICE_MAPPABLE (the last also needs SPUDGPU_FEATURE_DEVICE_MAPPABLE_MEMORY);
+ * refused with SPUDRESULT_GPU_MEMORY_KIND_NOT_SUPPORTED, and buffers of those
+ * kinds are then created with spudgpu_create_buffer(). Vulkan and D3D12:
+ * every adapter. Metal: an adapter in an `MTLGPUFamilyApple` family. */
+#define SPUDGPU_FEATURE_MAPPABLE_HEAPS (UINT64_C(1) << 7)
+/** The device's bindless table and every bindless call (SPUDGPU_EXT_BINDLESS);
+ * refused with SPUDRESULT_GPU_EXT_BINDLESS_NOT_SUPPORTED. The table is made
+ * with the device, only when this is asked for, and its size comes out of the
+ * device's descriptor budget. Vulkan: the descriptor indexing features the
+ * table needs, which are switched on only with this. D3D12: resource binding
+ * tier 3. Metal: never (SPUDGPU_EXT_BINDLESS is 0). */
+#define SPUDGPU_FEATURE_BINDLESS (UINT64_C(1) << 8)
+/** Mesh-shader pipelines and spudgpu_cmd_dispatch_mesh()
+ * (SPUDGPU_EXT_MESH_SHADING); a pipeline is refused with
+ * SPUDRESULT_GPU_EXT_MESH_SHADING_NOT_SUPPORTED. Vulkan: `VK_EXT_mesh_shader`
+ * with `meshShader`. D3D12: `D3D12_FEATURE_DATA_D3D12_OPTIONS7::MeshShaderTier`.
+ * Metal: every adapter. */
+#define SPUDGPU_FEATURE_MESH_SHADING (UINT64_C(1) << 9)
+/** The depth bounds test (SPUDGPU_EXT_DEPTH_BOUNDS_TEST). Vulkan:
+ * `VkPhysicalDeviceFeatures::depthBounds`. D3D12:
+ * `D3D12_FEATURE_DATA_D3D12_OPTIONS2::DepthBoundsTestSupported`. Metal:
+ * `MTLGPUFamilyApple10`. */
+#define SPUDGPU_FEATURE_DEPTH_BOUNDS_TEST (UINT64_C(1) << 10)
+/** spudgpu_create_swap_chain(), refused with
+ * SPUDRESULT_GPU_FEATURE_NOT_SUPPORTED, and spudgpu_adapter_supports_surface()
+ * answering true. Vulkan: `VK_KHR_swapchain`. D3D12 and Metal: every adapter.
+ * A device that never presents (tests, an offline render) need not ask, and a
+ * GPU with no display is still listed for compute. */
+#define SPUDGPU_FEATURE_PRESENT (UINT64_C(1) << 11)
+
+/** @brief The kinds of queue, as bits, for SPUDGPU_QUEUE_POOL. */
+typedef uint32_t SPUDGPU_QUEUE_KINDS;
+/** Queues of SPUDGPU_COMMAND_LIST_TYPE_DIRECT. */
+#define SPUDGPU_QUEUE_KIND_DIRECT (1u << 0)
+/** Queues of SPUDGPU_COMMAND_LIST_TYPE_COMPUTE. */
+#define SPUDGPU_QUEUE_KIND_COMPUTE (1u << 1)
+/** Queues of SPUDGPU_COMMAND_LIST_TYPE_COPY. */
+#define SPUDGPU_QUEUE_KIND_COPY (1u << 2)
+
+/**
+ * @brief What the graphics API says about where a pool's queues run.
+ *
+ * No value promises that work on the pool runs at the same time as graphics
+ * work: no API promises that.
+ */
+typedef uint32_t SPUDGPU_QUEUE_POOL_ENGINE;
+enum {
+	/** The API doesn't say. D3D12 and Metal: every pool. */
+	SPUDGPU_QUEUE_POOL_ENGINE_UNKNOWN = 0,
+	/** The family graphics work runs on (Vulkan: a family with
+	 * `VK_QUEUE_GRAPHICS_BIT`). Always the pool with DIRECT in it. */
+	SPUDGPU_QUEUE_POOL_ENGINE_GRAPHICS = 1,
+	/** A family the driver presents as separate from graphics (Vulkan: a
+	 * family without `VK_QUEUE_GRAPHICS_BIT`). */
+	SPUDGPU_QUEUE_POOL_ENGINE_SEPARATE = 2
+};
+
+/**
+ * @brief One pool of queues, as SPUDGPU_ADAPTER_PROPERTIES lists them.
+ */
+/* Frozen: an array element, held by value in SPUDGPU_ADAPTER_PROPERTIES. It never changes; a new need gets a new type. */
+typedef struct SPUDGPU_QUEUE_POOL {
+	/** The kinds made from this pool. Every kind is in exactly one pool. */
+	SPUDGPU_QUEUE_KINDS kinds;
+	/** The most queues of those kinds, together, one device may have: the
+	 * desc's counts for them add up to at most this. Vulkan: the family's
+	 * `queueCount`. D3D12 and Metal: UINT32_MAX. */
+	uint32_t max_queues;
+	/** What the API says about where this pool's queues run. */
+	SPUDGPU_QUEUE_POOL_ENGINE engine;
+} SPUDGPU_QUEUE_POOL;
+
+/**
+ * @brief What an adapter is and what it can do, as the graphics API reports
+ * it.
+ *
+ * Facts only: nothing here is chosen. Limits that only matter with a feature
+ * are in structs chained onto `base.next` (SPUDGPU_MESH_SHADING_LIMITS,
+ * SPUDGPU_BINDLESS_LIMITS), each declared only where its SPUDGPU_EXT_* macro
+ * is 1, and all 0 when the adapter lacks the feature. A limit counts only on
+ * a device created with its feature.
+ */
+typedef struct SPUDGPU_ADAPTER_PROPERTIES {
+	/** `type` is SPUD_STRUCT_TYPE_GPU_ADAPTER_PROPERTIES; `next` may chain
+	 * SPUDGPU_MESH_SHADING_LIMITS and SPUDGPU_BINDLESS_LIMITS, each at most
+	 * once, in any order. The caller builds the chain and sets each type;
+	 * SpudGPU fills in the rest. See SPUD_STRUCT_BASE. */
 	SPUD_STRUCT_BASE_OUT base;
-	/** Device name. */
+	/** The adapter's name, null-terminated. */
 	char description[128];
-	/** PCI vendor ID, e.g. SPUDGPU_VENDOR_NVIDIA. */
+	/** PCI vendor ID, e.g. SPUDGPU_VENDOR_NVIDIA. Metal: SPUDGPU_VENDOR_APPLE
+	 * (an Apple GPU is the only kind it lists on the platforms SpudGPU
+	 * builds for). */
 	uint32_t vendor_id;
-	/** PCI device ID. */
+	/** PCI device ID. 0 on Metal, which does not report one. */
 	uint32_t device_id;
-	/**
-	 * PCI subsystem ID. D3D12 only; 0 on Vulkan and Metal, which do not
-	 * report one.
-	 */
-	uint32_t subSys_id;
-	/**
-	 * PCI revision. D3D12 only; 0 on Vulkan and Metal, which do not report
-	 * one.
-	 */
+	/** PCI subsystem ID. D3D12 only; 0 on Vulkan and Metal. */
+	uint32_t subsystem_id;
+	/** PCI revision. D3D12 only; 0 on Vulkan and Metal. */
 	uint32_t revision;
+	/** Names this adapter's GPU: two adapters with equal ids, from any
+	 * instances in any processes, are the same GPU. The reverse does not
+	 * hold: a GPU may get a new id when the system restarts, when its driver
+	 * is restarted (updated, reinstalled, or reset by the OS), or when it is
+	 * plugged in again. Never store one; a choice saved across runs is
+	 * matched by the hardware IDs and #description. Opaque: compare all 16
+	 * bytes. Vulkan: `VkPhysicalDeviceIDProperties::deviceUUID`. D3D12:
+	 * `DXGI_ADAPTER_DESC3::AdapterLuid`, then zeros. Metal: `registryID`,
+	 * then zeros. */
+	uint8_t adapter_id[16];
+	/** The adapter's Windows LUID, for interop that names an adapter by one
+	 * (DXGI, OpenXR's D3D12 binding). Valid only when #luid_valid is true.
+	 * D3D12: `AdapterLuid`. Vulkan: `deviceLUID`. Metal: never valid. */
+	uint8_t luid[8];
+	/** D3D12: always true. Vulkan: `deviceLUIDValid`. Metal: false. */
+	bool luid_valid;
+	/** What kind of GPU it is. */
+	SPUDGPU_ADAPTER_TYPE adapter_type;
+	/** Every SPUDGPU_FEATURE_* the adapter has. */
+	SPUDGPU_FEATURES supported_features;
+
 	/**
-	 * Bytes of memory that are the device's own.
+	 * Bytes of memory that are the GPU's own.
 	 *
-	 * D3D12: `DXGI_ADAPTER_DESC::DedicatedVideoMemory`. Vulkan: the sum of
+	 * D3D12: `DXGI_ADAPTER_DESC3::DedicatedVideoMemory`. Vulkan: the sum of
 	 * the heaps flagged `VK_MEMORY_HEAP_DEVICE_LOCAL_BIT`, which is nonzero
-	 * on an integrated device too. Metal: `recommendedMaxWorkingSetSize` on
-	 * a device without unified memory, 0 on one with it.
+	 * on an integrated GPU too. Metal: `recommendedMaxWorkingSetSize` on a
+	 * GPU without unified memory, 0 on one with it.
 	 */
 	uint64_t dedicated_video_memory;
 	/**
-	 * Bytes of system memory reserved for the device.
+	 * Bytes of system memory reserved for the GPU.
 	 *
-	 * D3D12: `DXGI_ADAPTER_DESC::DedicatedSystemMemory`. 0 on Vulkan and
+	 * D3D12: `DXGI_ADAPTER_DESC3::DedicatedSystemMemory`. 0 on Vulkan and
 	 * Metal, which do not report one.
 	 */
 	uint64_t dedicated_system_memory;
 	/**
-	 * Bytes of system memory the device may share with the CPU.
+	 * Bytes of system memory the GPU may share with the CPU.
 	 *
-	 * D3D12: `DXGI_ADAPTER_DESC::SharedSystemMemory`. Vulkan: the sum of the
+	 * D3D12: `DXGI_ADAPTER_DESC3::SharedSystemMemory`. Vulkan: the sum of the
 	 * heaps not flagged `VK_MEMORY_HEAP_DEVICE_LOCAL_BIT`. Metal:
-	 * `recommendedMaxWorkingSetSize` on a device with unified memory, 0 on
-	 * one without.
+	 * `recommendedMaxWorkingSetSize` on a GPU with unified memory, 0 on one
+	 * without.
 	 */
 	uint64_t shared_system_memory;
 	/**
-	 * Whether the device has no memory of its own and uses the system's,
-	 * as the graphics API reports it. It is a fact about this device, not
-	 * about the platform or the backend: one machine can have a device of
-	 * each kind.
+	 * Whether the GPU has no memory of its own and uses the system's, as the
+	 * graphics API reports it. A fact about this adapter, not about the
+	 * platform or the backend: one machine can have one of each. A property,
+	 * not a feature: nothing is switched on by it, and it only says which
+	 * path is faster.
 	 *
 	 * Metal: `MTLDevice.hasUnifiedMemory`. D3D12:
-	 * `D3D12_FEATURE_DATA_ARCHITECTURE1::UMA`, false if the query fails.
-	 * Vulkan has no such query: true when the device's type is
-	 * `VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU`.
-	 *
-	 * The memory sizes above are not a substitute: #dedicated_video_memory
-	 * is nonzero for a Vulkan device of either kind.
+	 * `D3D12_FEATURE_DATA_ARCHITECTURE1::UMA`. Vulkan has no such query:
+	 * true when the GPU's type is `VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU`.
 	 */
 	bool unified_memory;
-	/**
-	 * Whether a buffer can be created with
-	 * SPUDGPU_MEMORY_KIND_DEVICE_MAPPABLE on this device. False means
-	 * spudgpu_create_buffer() returns
-	 * SPUDRESULT_GPU_MEMORY_KIND_NOT_SUPPORTED for that kind.
-	 *
-	 * Never true unless #unified_memory is, and not implied by it.
-	 *
-	 * Metal: `MTLDevice.hasUnifiedMemory`. D3D12:
-	 * `D3D12_FEATURE_DATA_ARCHITECTURE1::UMA`, false if the query fails.
-	 * Vulkan: #unified_memory, and the device has a memory type that is
-	 * both `VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT` and
-	 * `VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT`.
-	 */
-	bool device_mappable_memory;
-	/**
-	 * Whether a rendering pass can render to several layers at once, with
-	 * the vertex shader choosing the layer each primitive is drawn to. False
-	 * means spudgpu_rendering_begin_desc::layer_count must be 0 on this
-	 * device.
-	 *
-	 * Vulkan: `VkPhysicalDeviceVulkan12Features::shaderOutputLayer`, which
-	 * is then enabled on the device. D3D12:
-	 * `D3D12_FEATURE_DATA_D3D12_OPTIONS::VPAndRTArrayIndexFromAnyShaderFeedingRasterizerSupportedWithoutGSEmulation`,
-	 * false if the query fails. Metal: the device is in
-	 * `MTLGPUFamilyApple5` or `MTLGPUFamilyMac2`.
-	 */
-	bool layered_rendering;
-	/**
-	 * Whether a heap can be created with SPUDGPU_MEMORY_KIND_UPLOAD,
-	 * SPUDGPU_MEMORY_KIND_READBACK or SPUDGPU_MEMORY_KIND_DEVICE_MAPPABLE.
-	 * False means spudgpu_create_heap() returns
-	 * SPUDRESULT_GPU_MEMORY_KIND_NOT_SUPPORTED for those kinds, and buffers
-	 * of them are created with spudgpu_create_buffer() instead.
-	 *
-	 * DEVICE_MAPPABLE heaps also need #device_mappable_memory.
-	 *
-	 * Vulkan and D3D12: always true. Metal: whether the device is in an
-	 * `MTLGPUFamilyApple` family, the GPUs that make heaps of
-	 * `MTLStorageModeShared`; any other makes heaps of
-	 * `MTLStorageModePrivate` only.
-	 */
-	bool mappable_heaps;
-	/**
-	 * Whether a pipeline may clamp its depth bias
-	 * (spudgpu_shader_pipeline_desc::depth_bias_clamp other than 0). False
-	 * means spudgpu_create_shader_pipeline() refuses such a pipeline with
-	 * SPUDRESULT_GPU_DEPTH_BIAS_CLAMP_NOT_SUPPORTED.
-	 *
-	 * Vulkan: `VkPhysicalDeviceFeatures::depthBiasClamp`, which is then
-	 * enabled on the device. D3D12 and Metal: always true.
-	 */
-	bool depth_bias_clamp;
-	/**
-	 * Whether a pipeline's color attachments may blend differently from
-	 * each other (spudgpu_shader_pipeline_desc::blend_attachments entries
-	 * that differ). False means spudgpu_create_shader_pipeline() refuses
-	 * such a pipeline with SPUDRESULT_GPU_INDEPENDENT_BLEND_NOT_SUPPORTED.
-	 *
-	 * Vulkan: `VkPhysicalDeviceFeatures::independentBlend`, which is then
-	 * enabled on the device. D3D12 and Metal: always true.
-	 */
-	bool independent_blend;
-	/**
-	 * The largest `draw_count` spudgpu_cmd_draw_indirect() and
-	 * spudgpu_cmd_draw_indexed_indirect() take in one call. A call with a
-	 * larger count records nothing; split it into calls at advancing
-	 * offsets. 1 means each call draws one entry at most.
-	 *
-	 * Vulkan: `VkPhysicalDeviceLimits::maxDrawIndirectCount` where
-	 * `VkPhysicalDeviceFeatures::multiDrawIndirect` is reported (and then
-	 * enabled on the device), else 1. D3D12 and Metal: UINT32_MAX.
-	 */
-	uint32_t max_draw_indirect_count;
-	/**
-	 * Whether a rendering pass can write timestamps as it starts and ends
-	 * (spudgpu_create_timestamp_set()). False means
-	 * spudgpu_create_timestamp_set() returns
-	 * SPUDRESULT_GPU_TIMESTAMPS_NOT_SUPPORTED.
-	 *
-	 * Vulkan: the graphics queue family has `timestampValidBits` above 0.
-	 * D3D12: always true. Metal: the device has the timestamp counter set
-	 * and `supportsCounterSampling:MTLCounterSamplingPointAtStageBoundary`.
-	 */
-	bool pass_timestamps;
-	/**
-	 * Whether an image view may be SPUDGPU_IMAGE_VIEW_TYPE_CUBE_ARRAY, and a
-	 * shader may declare a cube array image or texture. False means
-	 * spudgpu_create_image_view() refuses such a view with
-	 * SPUDRESULT_GPU_INVALID_IMAGE_VIEW_TYPE.
-	 *
-	 * Vulkan: `VkPhysicalDeviceFeatures::imageCubeArray`, which is then
-	 * enabled on the device. D3D12 and Metal: always true.
-	 */
-	bool cube_array_views;
+
 	/**
 	 * What the offset of a uniform buffer range in a descriptor write
 	 * (spudgpu_descriptor_buffer_info::offset, for
-	 * SPUDGPU_DESCRIPTOR_TYPE_UNIFORM_BUFFER) is a multiple of on this
-	 * device. Any other offset is outside the graphics API's rules. A power
-	 * of two.
+	 * SPUDGPU_DESCRIPTOR_TYPE_UNIFORM_BUFFER) is a multiple of. Any other
+	 * offset is outside the graphics API's rules. A power of two.
 	 *
 	 * Vulkan: `VkPhysicalDeviceLimits::minUniformBufferOffsetAlignment`.
-	 * D3D12: 256 (`D3D12_CONSTANT_BUFFER_DATA_PLACEMENT_ALIGNMENT`). Metal
-	 * has no query: 256, the largest any Metal GPU family asks of a
-	 * constant buffer's offset.
+	 * D3D12: 256 (`D3D12_CONSTANT_BUFFER_DATA_PLACEMENT_ALIGNMENT`). Metal has
+	 * no query: 256, the largest any Metal GPU family asks of a constant
+	 * buffer's offset.
 	 */
 	uint32_t uniform_buffer_offset_alignment;
 	/**
@@ -557,46 +641,288 @@ typedef struct SPUDGPU_DEVICE_PROPERTIES {
 	 * raw view). Metal has no query: 256, as for a uniform buffer.
 	 */
 	uint32_t storage_buffer_offset_alignment;
-} SPUDGPU_DEVICE_PROPERTIES;
+	/**
+	 * The largest `draw_count` spudgpu_cmd_draw_indirect() and
+	 * spudgpu_cmd_draw_indexed_indirect() take in one call, on a device
+	 * created with SPUDGPU_FEATURE_MULTI_DRAW_INDIRECT; 1 on one without,
+	 * whatever this says. A call with a larger count records nothing; split
+	 * it into calls at advancing offsets.
+	 *
+	 * Vulkan: `VkPhysicalDeviceLimits::maxDrawIndirectCount`. D3D12 and
+	 * Metal: UINT32_MAX.
+	 */
+	uint32_t max_draw_indirect_count;
+	/**
+	 * The most a device's spudgpu_device_desc::max_descriptors may be.
+	 *
+	 * D3D12: 1,000,000, the shader-visible CBV/SRV/UAV heap's limit below
+	 * resource binding tier 3, kept on tier 3 too. Vulkan and Metal:
+	 * UINT32_MAX (neither has a device-wide limit).
+	 */
+	uint32_t max_descriptors;
+	/**
+	 * The most a device's spudgpu_device_desc::max_samplers may be.
+	 *
+	 * D3D12: 2048 (`D3D12_MAX_SHADER_VISIBLE_SAMPLER_HEAP_SIZE`). Vulkan and
+	 * Metal: UINT32_MAX.
+	 */
+	uint32_t max_samplers;
+
+	/** The pools a device's queues come from, #queue_pool_count of them (1
+	 * to 3). Vulkan: one per family the rule in spudgpu_device_desc picks.
+	 * D3D12 and Metal: three, one kind each. */
+	SPUDGPU_QUEUE_POOL queue_pools[3];
+	/** The number of entries of #queue_pools in use. */
+	uint32_t queue_pool_count;
+} SPUDGPU_ADAPTER_PROPERTIES;
 
 /**
- * @brief Reads a device's identity and memory sizes.
+ * @brief Lists the adapters an instance can create devices on.
  *
- * @param[in]  device         Device to query.
- * @param[out] out_properties Receives the device's properties.
+ * The list is read when the instance is created and never changes, so this
+ * may be called from any thread. It is in the order the graphics API gives
+ * (Vulkan's loader, DXGI's `EnumAdapters1`, `MTLCopyAllDevices`): SpudGPU
+ * neither sorts nor filters it by preference. An adapter is listed only if a
+ * device can be created on it (Vulkan: the physical device's `apiVersion`
+ * is 1.3 or later; D3D12: a device of feature level 12_0 can be created on
+ * it; Metal: the GPU is in `MTLGPUFamilyMetal3`). Software adapters are
+ * listed, with SPUDGPU_ADAPTER_TYPE_SOFTWARE. No adapter is a count of 0, not
+ * a failure.
  *
- * @retval SPUD_SUCCESS `out_properties` was filled in.
- * @retval SPUDRESULT_GPU_INVALID_DEVICE `device` is NULL.
+ * A GPU added after the instance was created is not listed, and one removed
+ * stays listed with no device creatable on it; a new instance lists the
+ * system as it is then. Listing keeps nothing on an adapter. D3D12 answers an
+ * adapter's features only through a device, so on D3D12
+ * spudgpu_create_instance() creates a device on each adapter in turn and
+ * releases it before the next: a discrete GPU may wake briefly then.
+ *
+ * The adapters and the array belong to the instance and are released by
+ * spudgpu_destroy_instance(); the caller frees neither.
+ *
+ * @param[in]  instance           Instance to list adapters of.
+ * @param[out] out_adapters       Receives a pointer to the instance's array,
+ *                                or NULL when there are none.
+ * @param[out] out_adapters_count Receives the number of adapters in it.
+ *
+ * @retval SPUD_SUCCESS Both outputs were written.
+ * @retval SPUDRESULT_GPU_INVALID_INSTANCE `instance` is NULL.
+ * @retval SPUDRESULT_NULL_OUTPUT_PARAMETER `out_adapters` or
+ *         `out_adapters_count` is NULL.
+ */
+SPUDRESULT spudgpu_enumerate_adapters(
+    spudgpu_instance instance,
+    const spudgpu_adapter **out_adapters,
+    uint32_t *out_adapters_count);
+
+/**
+ * @brief Reads what an adapter is and can do.
+ *
+ * May be called from any thread. Creates nothing on the adapter.
+ *
+ * @param[in]  adapter        Adapter to query.
+ * @param[out] out_properties Receives its properties, and those of every
+ *                            struct chained onto it.
+ *
+ * @retval SPUD_SUCCESS `out_properties` and its chain were filled in.
+ * @retval SPUDRESULT_GPU_INVALID_ADAPTER `adapter` is NULL.
  * @retval SPUDRESULT_NULL_OUTPUT_PARAMETER `out_properties` is NULL.
  * @retval SPUDRESULT_STRUCT_WRONG_TYPE `out_properties->base.type` is not
- *         SPUD_STRUCT_TYPE_GPU_DEVICE_PROPERTIES.
- * @retval SPUDRESULT_STRUCT_UNKNOWN_IN_CHAIN `out_properties->base.next` is not NULL.
+ *         SPUD_STRUCT_TYPE_GPU_ADAPTER_PROPERTIES.
+ * @retval SPUDRESULT_STRUCT_UNKNOWN_IN_CHAIN A struct in the chain is not one
+ *         of the limits structs this build declares.
+ * @retval SPUDRESULT_STRUCT_DUPLICATE_IN_CHAIN One limits struct is in the
+ *         chain twice.
  */
-SPUDRESULT spudgpu_get_device_properties(
-    spudgpu_device device,
-    SPUDGPU_DEVICE_PROPERTIES *out_properties);
+SPUDRESULT spudgpu_get_adapter_properties(
+    spudgpu_adapter adapter,
+    SPUDGPU_ADAPTER_PROPERTIES *out_properties);
 
 /**
- * @brief Returns the graphics API an instance runs on.
+ * @brief Reports whether a device on an adapter can present to a surface.
  *
- * @param[in] instance Instance to query.
+ * Vulkan: `vkGetPhysicalDeviceSurfaceSupportKHR` for the family direct
+ * queues are made from. D3D12 and Metal: true. False on every backend for an
+ * adapter without SPUDGPU_FEATURE_PRESENT.
  *
- * @return The SPUDGPU_NATIVE_API of the compiled-in backend, or
- *         SPUDGPU_NATIVE_API_NONE if `instance` is NULL.
+ * @param[in]  adapter       Adapter to ask about.
+ * @param[in]  surface       Surface to present to.
+ * @param[out] out_supported Receives the answer. False is an answer, not a
+ *                           failure.
+ *
+ * @retval SPUD_SUCCESS `out_supported` was written.
+ * @retval SPUDRESULT_GPU_INVALID_ADAPTER `adapter` is NULL.
+ * @retval SPUDRESULT_GPU_INVALID_SURFACE `surface` is NULL.
+ * @retval SPUDRESULT_NULL_OUTPUT_PARAMETER `out_supported` is NULL.
+ * @return SPUDRESULT_API_SPECIFIC_FAILURE if the graphics API fails.
  */
-SPUDGPU_NATIVE_API spudgpu_get_native_gpu_api(spudgpu_instance instance);
+SPUDRESULT spudgpu_adapter_supports_surface(
+    spudgpu_adapter adapter,
+    spudgpu_surface surface,
+    bool *out_supported);
 
 /**
- * @brief Returns a device's first graphics (direct) command queue.
- *
- * The device owns the queue; it is not destroyed by the caller. Every call
- * for one device returns the same queue.
- *
- * @param[in] device Device to get the queue from.
- *
- * @return The command queue, or NULL if `device` is NULL.
+ * @brief What the caller decides when creating a device. No field has a
+ * default: a zeroed desc asks for no features and no queues, which is
+ * refused.
  */
-spudgpu_command_queue spudgpu_get_graphics_queue(spudgpu_device device);
+typedef struct spudgpu_device_desc {
+	/** `type` is SPUD_STRUCT_TYPE_GPU_DEVICE_DESC; `next` is NULL (nothing is
+	 * chained onto this struct yet). Set by the caller. See
+	 * SPUD_STRUCT_BASE. */
+	SPUD_STRUCT_BASE base;
+	/** The features the device has (SPUDGPU_FEATURE_*), each of which the
+	 * adapter must support. Anything not asked for here the device lacks. */
+	SPUDGPU_FEATURES required_features;
+	/**
+	 * How many queues of each kind the device has. For each of the adapter's
+	 * SPUDGPU_ADAPTER_PROPERTIES::queue_pools, the counts of the kinds it
+	 * serves add up to at most its `max_queues`. Their sum is at least 1.
+	 * Vulkan makes each kind from one queue family: direct queues from the
+	 * first family with graphics; compute queues from the first family with
+	 * compute and without graphics, else the direct family; copy queues from
+	 * the first family with transfer and neither graphics nor compute, else
+	 * the compute family. That rule is what the adapter's pools report.
+	 *
+	 * SpudGPU sets no queue priority: Vulkan gets the same value for every
+	 * queue, D3D12 `D3D12_COMMAND_QUEUE_PRIORITY_NORMAL`. The order work on
+	 * different queues runs in is the driver's. No kind promises hardware of
+	 * its own: see SPUDGPU_QUEUE_POOL_ENGINE.
+	 */
+	uint32_t direct_queue_count;
+	/** As #direct_queue_count, for SPUDGPU_COMMAND_LIST_TYPE_COMPUTE. */
+	uint32_t compute_queue_count;
+	/** As #direct_queue_count, for SPUDGPU_COMMAND_LIST_TYPE_COPY. */
+	uint32_t copy_queue_count;
+	/**
+	 * The most descriptors other than samplers (sampled and storage images,
+	 * uniform and storage buffers, texel buffer views) the device's
+	 * descriptor pools and bindless table hold at once, together. At most the
+	 * adapter's SPUDGPU_ADAPTER_PROPERTIES::max_descriptors. A pool's share
+	 * is the sum of its spudgpu_descriptor_pool_desc::pool_sizes counts, a
+	 * SAMPLER count going to #max_samplers instead and a
+	 * COMBINED_IMAGE_SAMPLER count to both. A pool that would go past it is
+	 * refused with SPUDRESULT_GPU_OUT_OF_DESCRIPTORS, on every backend; what a
+	 * pool's destroy gives back may be fragmented, so a pool can be refused
+	 * even when the count left would hold it. 0 is a device with no
+	 * descriptors: every pool is refused. With SPUDGPU_FEATURE_BINDLESS, the
+	 * table's size (the three counts of SPUDGPU_BINDLESS_LIMITS) comes out of
+	 * it when the device is created.
+	 *
+	 * D3D12: the size of the shader-visible CBV/SRV/UAV heap, made with the
+	 * device. Vulkan and Metal: a count the device keeps.
+	 */
+	uint32_t max_descriptors;
+	/** As #max_descriptors, for samplers, against
+	 * SPUDGPU_ADAPTER_PROPERTIES::max_samplers. D3D12: the size of the
+	 * shader-visible sampler heap. */
+	uint32_t max_samplers;
+	/** Name for debuggers and validation messages, or NULL. Copied, in every
+	 * build; see spud_debug_name_set(). */
+	const char *debug_name;
+} spudgpu_device_desc;
+
+/**
+ * @brief Creates a device on an adapter, with the features, queues and
+ * descriptor budget the caller asks for.
+ *
+ * One device per adapter at a time, on every backend: D3D12 hands back the
+ * same device to a second `D3D12CreateDevice` on one adapter, and Metal has
+ * one `MTLDevice` per GPU, so a second device would not be a separate one
+ * there. Two threads creating on one adapter at once get one device and
+ * SPUDRESULT_GPU_ADAPTER_IN_USE.
+ *
+ * The rule is one device per GPU in the process, across instances too, and
+ * that part is the caller's: two instances list two adapters for one GPU,
+ * which SpudGPU does not compare. On D3D12 a device made through each would
+ * be one native device under two handles. Compare
+ * SPUDGPU_ADAPTER_PROPERTIES::adapter_id.
+ *
+ * Everything the device needs is made here, not on first use: its queues,
+ * its bindless table when SPUDGPU_FEATURE_BINDLESS is asked for, and on D3D12
+ * its shader-visible descriptor heaps, sized by the budget.
+ *
+ * Vulkan: `vkCreateDevice` with the base set SpudGPU relies on
+ * (`dynamicRendering`, `synchronization2`, `timelineSemaphore`,
+ * `bufferDeviceAddress`, all required by Vulkan 1.3) and the extensions and
+ * feature bits `required_features` needs, and nothing else. D3D12:
+ * `D3D12CreateDevice` at feature level 12_0. Metal: the queues on the
+ * adapter's `MTLDevice`.
+ *
+ * @param[in]  adapter    Adapter to create the device on.
+ * @param[in]  desc       What the caller decides.
+ * @param[out] out_device Receives the new device on success; NULL on
+ *                        failure.
+ *
+ * @retval SPUD_SUCCESS The device was created.
+ * @retval SPUDRESULT_GPU_INVALID_ADAPTER `adapter` is NULL.
+ * @retval SPUDRESULT_NULL_DESC `desc` is NULL.
+ * @retval SPUDRESULT_STRUCT_WRONG_TYPE `desc->base.type` is not
+ *         SPUD_STRUCT_TYPE_GPU_DEVICE_DESC.
+ * @retval SPUDRESULT_STRUCT_UNKNOWN_IN_CHAIN `desc->base.next` is not NULL.
+ * @retval SPUDRESULT_NULL_OUTPUT_PARAMETER `out_device` is NULL.
+ * @retval SPUDRESULT_GPU_FEATURE_NOT_SUPPORTED A bit of
+ *         `desc->required_features` is not in the adapter's
+ *         `supported_features`.
+ * @retval SPUDRESULT_ZERO_SIZE The three queue counts are all 0.
+ * @retval SPUDRESULT_GPU_TOO_MANY_QUEUES The counts of the kinds one of the
+ *         adapter's pools serves add up to more than its `max_queues`.
+ * @retval SPUDRESULT_GPU_DESCRIPTOR_BUDGET_TOO_LARGE `desc->max_descriptors`
+ *         or `desc->max_samplers` is above the adapter's limit.
+ * @retval SPUDRESULT_GPU_OUT_OF_DESCRIPTORS SPUDGPU_FEATURE_BINDLESS is asked
+ *         for and the bindless table doesn't fit in the budget.
+ * @retval SPUDRESULT_GPU_ADAPTER_IN_USE The adapter already has a device.
+ * @return Another SPUDRESULT if the backend fails, such as
+ *         SPUDRESULT_OUT_OF_MEMORY or SPUDRESULT_API_SPECIFIC_FAILURE.
+ *
+ * @see spudgpu_destroy_device()
+ */
+SPUDRESULT spudgpu_create_device(
+    spudgpu_adapter adapter,
+    const spudgpu_device_desc *desc,
+    spudgpu_device *out_device);
+
+/**
+ * @brief Destroys a device and its queues, and frees its adapter for
+ * another.
+ *
+ * Also the way back from a lost device (a GPU hang or reset, a driver update,
+ * an unplugged GPU):
+ *
+ * 1. Destroy everything made from the lost device, then the device.
+ * 2. Create a device on the same adapter.
+ * 3. If that fails, whatever the result, destroy the instance and create a
+ *    new one; find the GPU there by SPUDGPU_ADAPTER_PROPERTIES::adapter_id,
+ *    else by its hardware IDs, else choose again. A driver update or an
+ *    unplugged GPU leaves the old adapter unusable; a hang or reset usually
+ *    does not.
+ *
+ * @warning Every object created from the device must be destroyed first, and
+ * every submission to its queues must have finished (or the device be lost).
+ * No other thread may be using it. A debug build checks the first: it prints
+ * the kinds of object still alive, with their counts, and asserts.
+ *
+ * @param[in] device Device to destroy. NULL does nothing.
+ */
+void spudgpu_destroy_device(spudgpu_device device);
+
+/**
+ * @brief Returns the adapter a device was created on.
+ *
+ * @param[in] device Device to query.
+ *
+ * @return The adapter, or NULL if `device` is NULL.
+ */
+spudgpu_adapter spudgpu_get_device_adapter(spudgpu_device device);
+
+/**
+ * @brief Returns the features a device was created with: its
+ * spudgpu_device_desc::required_features.
+ *
+ * @param[in] device Device to query.
+ *
+ * @return The features, or 0 if `device` is NULL.
+ */
+SPUDGPU_FEATURES spudgpu_get_device_features(spudgpu_device device);
 
 /**
  * @brief The kind of work a command list, allocator or queue carries.
@@ -617,39 +943,23 @@ enum {
 };
 
 /**
- * @brief Returns how many command queues of a type a device has.
+ * @brief Returns one of the queues a device was created with.
  *
- * @note Not yet implemented by the Vulkan backend.
- *
- * @param[in] device Device to query.
- * @param[in] type   Kind of queue to count.
- *
- * @return The number of queues, valid as `index` in
- *         spudgpu_get_command_queue(), or 0 if `device` is NULL or the device
- *         has no queues of `type`.
- */
-uint32_t spudgpu_get_max_queue_count(
-    spudgpu_device device,
-    SPUDGPU_COMMAND_LIST_TYPE type);
-
-/**
- * @brief Returns one of a device's command queues.
- *
- * The device owns the queue; it is not destroyed by the caller.
- *
- * @note Not yet implemented by the Vulkan backend.
+ * The device owns the queue; it is not destroyed by the caller. The same kind
+ * and index always give the same queue.
  *
  * @param[in]  device    Device to get the queue from.
- * @param[in]  type      Kind of queue.
- * @param[in]  index     Which queue of that kind, below
- *                       spudgpu_get_max_queue_count().
+ * @param[in]  type      Kind of queue: DIRECT, COMPUTE or COPY.
+ * @param[in]  index     Which queue of that kind, below the count the device
+ *                       was created with.
  * @param[out] out_queue Receives the queue on success.
  *
  * @retval SPUD_SUCCESS `out_queue` was written.
  * @retval SPUDRESULT_GPU_INVALID_DEVICE `device` is NULL.
- * @retval SPUDRESULT_GPU_INVALID_COMMAND_LIST_TYPE The device has no queues of
- *         `type`.
- * @retval SPUDRESULT_INDEX_OUT_OF_RANGE `index` is not below the queue count.
+ * @retval SPUDRESULT_GPU_INVALID_COMMAND_LIST_TYPE `type` is BUNDLE, or not a
+ *         kind of command list.
+ * @retval SPUDRESULT_INDEX_OUT_OF_RANGE `index` is not below the count the
+ *         device was created with for `type`.
  * @retval SPUDRESULT_NULL_OUTPUT_PARAMETER `out_queue` is NULL.
  */
 SPUDRESULT spudgpu_get_command_queue(
@@ -842,6 +1152,10 @@ typedef struct spudgpu_command_allocator_desc {
  *         SPUD_STRUCT_TYPE_GPU_COMMAND_ALLOCATOR_DESC.
  * @retval SPUDRESULT_STRUCT_UNKNOWN_IN_CHAIN `desc->base.next` is not NULL.
  * @retval SPUDRESULT_NULL_OUTPUT_PARAMETER `out_allocator` is NULL.
+ * @retval SPUDRESULT_GPU_INVALID_COMMAND_LIST_TYPE `desc->type` is not a kind
+ *         of command list, or the device was created with no queue of that
+ *         kind (spudgpu_device_desc): its lists would have nowhere to be
+ *         submitted. A BUNDLE allocator needs a DIRECT queue.
  * @return Another SPUDRESULT if the backend fails, such as
  *         SPUDRESULT_OUT_OF_MEMORY or SPUDRESULT_API_SPECIFIC_FAILURE.
  *
@@ -1215,9 +1529,9 @@ enum {
 	 * rules apply as to any mapped buffer. Nothing orders a CPU access
 	 * against GPU work that is still running: that is the caller's to do.
 	 *
-	 * Exists only on a device whose
-	 * SPUDGPU_DEVICE_PROPERTIES::device_mappable_memory is true, which is
-	 * never a device with memory of its own. On any other device
+	 * Exists only on a device created with
+	 * SPUDGPU_FEATURE_DEVICE_MAPPABLE_MEMORY, which only an adapter without
+	 * memory of its own supports. On any other device
 	 * spudgpu_create_buffer() returns
 	 * SPUDRESULT_GPU_MEMORY_KIND_NOT_SUPPORTED, and the same data goes in a
 	 * DEVICE buffer written through an UPLOAD one.
@@ -1375,8 +1689,8 @@ typedef struct spudgpu_buffer_desc {
  * @retval SPUDRESULT_GPU_INVALID_MEMORY_KIND `desc->memory_kind` is
  *         SPUDGPU_MEMORY_KIND_NONE or not a SPUDGPU_MEMORY_KIND.
  * @retval SPUDRESULT_GPU_MEMORY_KIND_NOT_SUPPORTED `desc->memory_kind` is
- *         SPUDGPU_MEMORY_KIND_DEVICE_MAPPABLE and the device's
- *         SPUDGPU_DEVICE_PROPERTIES::device_mappable_memory is false.
+ *         SPUDGPU_MEMORY_KIND_DEVICE_MAPPABLE and the device wasn't created
+ *         with SPUDGPU_FEATURE_DEVICE_MAPPABLE_MEMORY.
  * @return Another SPUDRESULT if the backend fails, such as
  *         SPUDRESULT_OUT_OF_MEMORY or SPUDRESULT_API_SPECIFIC_FAILURE.
  *
@@ -2079,8 +2393,8 @@ typedef struct spudgpu_image_view_desc {
  *         SPUDGPU_IMAGE_VIEW_TYPE_CUBE or SPUDGPU_IMAGE_VIEW_TYPE_CUBE_ARRAY
  *         and the image was not created with
  *         spudgpu_image_desc::cube_capable, or it is
- *         SPUDGPU_IMAGE_VIEW_TYPE_CUBE_ARRAY on a device without
- *         SPUDGPU_DEVICE_PROPERTIES::cube_array_views.
+ *         SPUDGPU_IMAGE_VIEW_TYPE_CUBE_ARRAY on a device created without
+ *         SPUDGPU_FEATURE_CUBE_ARRAY_VIEWS.
  * @retval SPUDRESULT_GPU_BUFFER_OR_IMAGE_VIEW_RANGE_OUT_OF_SCOPE `desc->type`
  *         is SPUDGPU_IMAGE_VIEW_TYPE_CUBE and the range is not layers 0 to
  *         5, or it is SPUDGPU_IMAGE_VIEW_TYPE_CUBE_ARRAY and
@@ -2232,10 +2546,10 @@ typedef struct spudgpu_heap_desc {
  *         class and the kind is not SPUDGPU_MEMORY_KIND_DEVICE.
  * @retval SPUDRESULT_GPU_MEMORY_KIND_NOT_SUPPORTED The kind is
  *         SPUDGPU_MEMORY_KIND_UPLOAD, SPUDGPU_MEMORY_KIND_READBACK or
- *         SPUDGPU_MEMORY_KIND_DEVICE_MAPPABLE and the device's
- *         SPUDGPU_DEVICE_PROPERTIES::mappable_heaps is false, or it is
- *         SPUDGPU_MEMORY_KIND_DEVICE_MAPPABLE and
- *         SPUDGPU_DEVICE_PROPERTIES::device_mappable_memory is false.
+ *         SPUDGPU_MEMORY_KIND_DEVICE_MAPPABLE and the device wasn't created
+ *         with SPUDGPU_FEATURE_MAPPABLE_HEAPS, or it is
+ *         SPUDGPU_MEMORY_KIND_DEVICE_MAPPABLE and the device wasn't created
+ *         with SPUDGPU_FEATURE_DEVICE_MAPPABLE_MEMORY.
  * @return Another SPUDRESULT if the backend fails, such as
  *         SPUDRESULT_OUT_OF_MEMORY or SPUDRESULT_API_SPECIFIC_FAILURE (the
  *         device having no room for a heap that size is the usual one).
@@ -2954,6 +3268,8 @@ typedef struct spudgpu_swap_chain_desc {
  * @retval SPUDRESULT_NULL_OUTPUT_PARAMETER `out_swap_chain` is NULL.
  * @retval SPUDRESULT_GPU_INVALID_SURFACE `desc->surface` is NULL.
  * @retval SPUDRESULT_GPU_INVALID_COMMAND_QUEUE `desc->queue` is NULL.
+ * @retval SPUDRESULT_GPU_FEATURE_NOT_SUPPORTED The device was created without
+ *         SPUDGPU_FEATURE_PRESENT.
  * @retval SPUDRESULT_DESC_INVALID_PARAMETERS The backend cannot create a swap
  *         chain with this configuration (Metal: `desc->buffer_count` other than
  *         1, or SPUDGPU_PRESENT_MODE_MAILBOX).
@@ -3689,8 +4005,10 @@ void spudgpu_cmd_bind_descriptor_sets_compute(
 // ============================================================================
 
 /**
- * @brief 1 when the compiled-in backend implements bindless descriptor
- * indexing and this section is declared, 0 when it is compiled out.
+ * @brief 1 when the backend compiled into this build implements bindless (Vulkan,
+ * D3D12), 0 otherwise (Metal). It says nothing about any GPU: whether one has
+ * bindless is SPUDGPU_FEATURE_BINDLESS in its adapter's supported_features,
+ * and whether a device may use it is that bit in the device's features.
  *
  * Where a descriptor set has one schema per shader and is bound per draw,
  * bindless is one table per resource class, per device, that every pipeline
@@ -3700,101 +4018,53 @@ void spudgpu_cmd_bind_descriptor_sets_compute(
  * and each has its own index space: Vulkan's descriptors are typed per
  * binding and cannot mix types in one array, so a single shared index space
  * could not be kept on every backend. Samplers are not part of it: a
- * spudgpu_sampler is bound the ordinary way, through a descriptor set.
+ * spudgpu_sampler is bound the ordinary way, through a descriptor set. Every
+ * class uses a plain 0-based index.
  *
  * Maps to update-after-bind descriptor arrays (Vulkan 1.2 descriptor
- * indexing) and to descriptor tables under Resource Binding Tier 2 and up
- * (D3D12; spudgpu_bindless_capabilities says why tables and not Shader Model
- * 6.6's `ResourceDescriptorHeap[]`). The Metal counterpart, Argument Buffers
+ * indexing) and to descriptor tables under resource binding tier 3 (D3D12).
+ * D3D12 uses large descriptor tables, one per class, and not Shader Model
+ * 6.6's `ResourceDescriptorHeap[]`: its backend cross-compiles the same SPIR-V
+ * the Vulkan backend runs, through SPIRV-Cross, which emits a table for a
+ * GLSL runtime-sized binding array. The Metal counterpart, Argument Buffers
  * Tier 2 with `MTLResourceID`, is not implemented: it needs an
  * `MTLHeap`-backed resource allocator SpudGPU does not have.
  *
- * A build compiles in one backend, so whether this section exists is a
- * compile-time fact. Where the macro is 0 nothing in the section is
- * declared, and calling one of its functions is a compile error and not a
- * silent no-op. That is separate from
- * spudgpu_bindless_capabilities::supported, which reports whether the device
- * supports it at runtime; the calls return
- * SPUDRESULT_GPU_EXT_BINDLESS_DESCRIPTOR_INDEXING_NOT_SUPPORTED when it does
- * not. Every `SPUDGPU_EXT_<NAME>` has a matching
- * `SPUDRESULT_GPU_EXT_<NAME>_NOT_SUPPORTED` for that case.
+ * Where the macro is 0 nothing in the section is declared, and calling one of
+ * its functions is a compile error and not a silent no-op. Where it is 1, the
+ * calls return SPUDRESULT_GPU_EXT_BINDLESS_NOT_SUPPORTED on a device created
+ * without SPUDGPU_FEATURE_BINDLESS. The table is made with the device, when
+ * the feature is asked for, and takes the three counts of
+ * SPUDGPU_BINDLESS_LIMITS out of the device's descriptor budget.
  */
 #if SPUDGPU_COMPILE_VULKAN_API || SPUDGPU_COMPILE_D3D12_API
-#define SPUDGPU_EXT_BINDLESS_DESCRIPTOR_INDEXING 1
+#define SPUDGPU_EXT_BINDLESS 1
 #else
-#define SPUDGPU_EXT_BINDLESS_DESCRIPTOR_INDEXING 0
+#define SPUDGPU_EXT_BINDLESS 0
 #endif
 
-#if SPUDGPU_EXT_BINDLESS_DESCRIPTOR_INDEXING
+#if SPUDGPU_EXT_BINDLESS
 
 /** An index that never names a registered bindless slot. */
 #define SPUDGPU_BINDLESS_INVALID_INDEX 0xFFFFFFFFu
 
 /**
- * @brief Reports whether this device supports bindless resource indexing,
- * and the addressable capacity of each resource class.
- *
- * Vulkan: reflects the shaderSampledImageArrayNonUniformIndexing /
- * descriptorBindingPartiallyBound / descriptorBindingUpdateAfterBind* /
- * runtimeDescriptorArray feature bits (core in 1.2) and the corresponding
- * maxDescriptorSetUpdateAfterBind* device limits.
- * D3D12: reflects Resource Binding Tier 2+ unbounded/update-after-bind-style
- * descriptor tables — SpudGPU's D3D12 backend cross-compiles the same SPIR-V
- * shaders used by Vulkan via SPIRV-Cross rather than hand-authoring HLSL, so
- * bindless goes through a large descriptor table per resource class (what
- * SPIRV-Cross emits for a GLSL runtime-sized binding array) rather than
- * Shader Model 6.6's ResourceDescriptorHeap[] dynamic resources, which would
- * require hand-written HLSL outside that pipeline.
- * Metal: always supported — Argument Buffers Tier 2 is required on every
- * Metal 3 device SpudGPU targets.
- *
- * Every class uses a plain 0-based index on all three backends — each
- * resource class gets its own dedicated table/array/argument-buffer slot
- * range, so unlike a single flat descriptor heap, no base offset is ever
- * needed before indexing it from the shader.
+ * @brief The size of the bindless table, chained onto
+ * SPUDGPU_ADAPTER_PROPERTIES. All 0 when the adapter lacks
+ * SPUDGPU_FEATURE_BINDLESS.
  */
-typedef struct spudgpu_bindless_capabilities {
-	/** `type` is SPUD_STRUCT_TYPE_GPU_BINDLESS_CAPABILITIES; `next` is NULL (nothing is chained onto
-	 * this struct yet). The caller builds the chain and sets each type; SpudGPU fills in the rest. See SPUD_STRUCT_BASE. */
+typedef struct SPUDGPU_BINDLESS_LIMITS {
+	/** `type` is SPUD_STRUCT_TYPE_GPU_BINDLESS_LIMITS; `next` is the rest of
+	 * the adapter properties' chain. The caller sets the type; SpudGPU fills
+	 * in the rest. See SPUD_STRUCT_BASE. */
 	SPUD_STRUCT_BASE_OUT base;
-	/**
-	 * Whether the device supports bindless descriptor indexing. When false
-	 * the limits below are 0 and the bindless calls return
-	 * SPUDRESULT_GPU_EXT_BINDLESS_DESCRIPTOR_INDEXING_NOT_SUPPORTED.
-	 */
-	bool supported;
-
 	/** Number of slots in the sampled image table. */
 	uint32_t max_sampled_images;
 	/** Number of slots in the storage image table. */
 	uint32_t max_storage_images;
 	/** Number of slots in the storage buffer table. */
 	uint32_t max_storage_buffers;
-} spudgpu_bindless_capabilities;
-
-/**
- * @brief Reports whether a device supports bindless resource indexing, and
- * the capacity of each resource class.
- *
- * Never returns SPUDRESULT_GPU_EXT_BINDLESS_DESCRIPTOR_INDEXING_NOT_SUPPORTED
- * itself. That code is for the register and layout functions, which are real
- * operations that can fail for that reason; a query reporting "false" is not a
- * failure.
- *
- * @param[in]  device   Device to query.
- * @param[out] out_caps Receives the capabilities. `out_caps->supported` may be
- *                      false; that is the answer, not an error.
- *
- * @retval SPUD_SUCCESS `out_caps` was filled in.
- * @retval SPUDRESULT_GPU_INVALID_DEVICE `device` is NULL.
- * @retval SPUDRESULT_NULL_OUTPUT_PARAMETER `out_caps` is NULL.
- * @retval SPUDRESULT_STRUCT_WRONG_TYPE `out_caps->base.type` is not
- *         SPUD_STRUCT_TYPE_GPU_BINDLESS_CAPABILITIES.
- * @retval SPUDRESULT_STRUCT_UNKNOWN_IN_CHAIN `out_caps->base.next` is not NULL.
- */
-SPUDRESULT spudgpu_get_bindless_capabilities(
-    spudgpu_device device,
-    spudgpu_bindless_capabilities *out_caps);
+} SPUDGPU_BINDLESS_LIMITS;
 
 /**
  * @brief Returns the device's single global bindless descriptor set layout.
@@ -3807,7 +4077,7 @@ SPUDRESULT spudgpu_get_bindless_capabilities(
  *
  * D3D12: the handle describes three large descriptor-table ranges (one per
  * resource class) rather than SM6.6 ResourceDescriptorHeap[] dynamic
- * resources; see spudgpu_bindless_capabilities for why.
+ * resources; see SPUDGPU_EXT_BINDLESS for why.
  *
  * @warning Do not pass the returned handle to
  * spudgpu_destroy_descriptor_set_layout(); the device owns it for its
@@ -3815,10 +4085,8 @@ SPUDRESULT spudgpu_get_bindless_capabilities(
  *
  * @param[in] device Device to get the layout from.
  *
- * @return The layout, or NULL if `device` is NULL or the device or driver does
- *         not support bindless. Check
- *         spudgpu_bindless_capabilities::supported first to tell the two
- *         apart.
+ * @return The layout, or NULL if `device` is NULL or was created without
+ *         SPUDGPU_FEATURE_BINDLESS.
  */
 spudgpu_descriptor_set_layout spudgpu_get_bindless_descriptor_set_layout(spudgpu_device device);
 
@@ -3840,9 +4108,8 @@ spudgpu_descriptor_set_layout spudgpu_get_bindless_descriptor_set_layout(spudgpu
  * @retval SPUDRESULT_GPU_INVALID_DEVICE `device` is NULL.
  * @retval SPUDRESULT_GPU_INVALID_IMAGE_VIEW `view` is NULL.
  * @retval SPUDRESULT_NULL_OUTPUT_PARAMETER `out_index` is NULL.
- * @retval SPUDRESULT_GPU_EXT_BINDLESS_DESCRIPTOR_INDEXING_NOT_SUPPORTED The
- *         device or driver does not support bindless; check
- *         spudgpu_bindless_capabilities::supported to avoid this.
+ * @retval SPUDRESULT_GPU_EXT_BINDLESS_NOT_SUPPORTED The device was created
+ *         without SPUDGPU_FEATURE_BINDLESS.
  * @retval SPUDRESULT_GPU_BINDLESS_OUT_OF_SLOTS Every slot of this resource
  *         class is registered.
  */
@@ -3876,9 +4143,8 @@ void spudgpu_bindless_unregister_sampled_image(
  * @retval SPUDRESULT_GPU_INVALID_DEVICE `device` is NULL.
  * @retval SPUDRESULT_GPU_INVALID_IMAGE_VIEW `view` is NULL.
  * @retval SPUDRESULT_NULL_OUTPUT_PARAMETER `out_index` is NULL.
- * @retval SPUDRESULT_GPU_EXT_BINDLESS_DESCRIPTOR_INDEXING_NOT_SUPPORTED The
- *         device or driver does not support bindless; check
- *         spudgpu_bindless_capabilities::supported to avoid this.
+ * @retval SPUDRESULT_GPU_EXT_BINDLESS_NOT_SUPPORTED The device was created
+ *         without SPUDGPU_FEATURE_BINDLESS.
  * @retval SPUDRESULT_GPU_BINDLESS_OUT_OF_SLOTS Every slot of this resource
  *         class is registered.
  */
@@ -3912,9 +4178,8 @@ void spudgpu_bindless_unregister_storage_image(
  * @retval SPUDRESULT_GPU_INVALID_DEVICE `device` is NULL.
  * @retval SPUDRESULT_GPU_INVALID_BUFFER_VIEW `view` is NULL.
  * @retval SPUDRESULT_NULL_OUTPUT_PARAMETER `out_index` is NULL.
- * @retval SPUDRESULT_GPU_EXT_BINDLESS_DESCRIPTOR_INDEXING_NOT_SUPPORTED The
- *         device or driver does not support bindless; check
- *         spudgpu_bindless_capabilities::supported to avoid this.
+ * @retval SPUDRESULT_GPU_EXT_BINDLESS_NOT_SUPPORTED The device was created
+ *         without SPUDGPU_FEATURE_BINDLESS.
  * @retval SPUDRESULT_GPU_BINDLESS_OUT_OF_SLOTS Every slot of this resource
  *         class is registered.
  */
@@ -3971,7 +4236,7 @@ void spudgpu_cmd_bind_bindless_resources_compute(
     spudgpu_compute_pipeline pipeline,
     uint32_t set_index);
 
-#endif // SPUDGPU_EXT_BINDLESS_DESCRIPTOR_INDEXING
+#endif // SPUDGPU_EXT_BINDLESS
 
 /**
  * @brief How vertices are assembled into primitives.
@@ -4363,8 +4628,8 @@ typedef struct spudgpu_shader_pipeline_desc {
 	float depth_bias_slope;
 	/**
 	 * The largest bias, if positive, or the smallest, if negative; 0 for no
-	 * clamp. Anything but 0 needs
-	 * SPUDGPU_DEVICE_PROPERTIES::depth_bias_clamp. See
+	 * clamp. Anything but 0 needs a device created with
+	 * SPUDGPU_FEATURE_DEPTH_BIAS_CLAMP. See
 	 * #depth_bias_constant.
 	 */
 	float depth_bias_clamp;
@@ -4394,10 +4659,9 @@ typedef struct spudgpu_shader_pipeline_desc {
 	 * Ignored on Metal, which has no pipeline-level depth-bounds toggle at
 	 * all — there, spudgpu_cmd_set_depth_bounds alone both enables and
 	 * configures it per draw (see its own doc comment). On Vulkan/D3D12, a
-	 * no-op if this device/driver doesn't support the depth bounds test
+	 * no-op on a device created without SPUDGPU_FEATURE_DEPTH_BOUNDS_TEST
 	 * (see SPUDGPU_EXT_DEPTH_BOUNDS_TEST) — the pipeline behaves as if this
-	 * is false. Check spudgpu_depth_bounds_capabilities::supported before
-	 * relying on it even on a backend that compiles the extension in.
+	 * is false.
 	 */
 	bool depth_bounds_test_enable;
 
@@ -4408,8 +4672,8 @@ typedef struct spudgpu_shader_pipeline_desc {
 	/**
 	 * Blend configuration for each color attachment: entry i for
 	 * #color_attachment_formats[i]. Only the first #color_attachment_count
-	 * are read. Entries that differ from entry 0 need
-	 * SPUDGPU_DEVICE_PROPERTIES::independent_blend.
+	 * are read. Entries that differ from entry 0 need a device created with
+	 * SPUDGPU_FEATURE_INDEPENDENT_BLEND.
 	 * @see spudgpu_blend_attachment_desc
 	 */
 	spudgpu_blend_attachment_desc blend_attachments[SPUDGPU_MAX_COLOR_ATTACHMENTS];
@@ -4495,16 +4759,18 @@ typedef struct spudgpu_shader_pipeline_desc {
  *         `desc->mesh_module` are.
  * @retval SPUDRESULT_GPU_INVALID_SHADER_STAGE `desc->vertex_module` and
  *         `desc->mesh_module` are both set.
+ * @retval SPUDRESULT_GPU_EXT_MESH_SHADING_NOT_SUPPORTED `desc->mesh_module`
+ *         is set and the device wasn't created with
+ *         SPUDGPU_FEATURE_MESH_SHADING.
  * @retval SPUDRESULT_GPU_TOO_MANY_COLOR_ATTACHMENTS
  *         `desc->color_attachment_count` is above
  *         SPUDGPU_MAX_COLOR_ATTACHMENTS.
  * @retval SPUDRESULT_GPU_DEPTH_BIAS_CLAMP_NOT_SUPPORTED
- *         `desc->depth_bias_clamp` is not 0 and the device can't clamp
- *         (SPUDGPU_DEVICE_PROPERTIES::depth_bias_clamp).
+ *         `desc->depth_bias_clamp` is not 0 and the device wasn't created
+ *         with SPUDGPU_FEATURE_DEPTH_BIAS_CLAMP.
  * @retval SPUDRESULT_GPU_INDEPENDENT_BLEND_NOT_SUPPORTED Two of the first
  *         `desc->color_attachment_count` blend attachments differ and the
- *         device can't blend them independently
- *         (SPUDGPU_DEVICE_PROPERTIES::independent_blend).
+ *         device wasn't created with SPUDGPU_FEATURE_INDEPENDENT_BLEND.
  * @return Another SPUDRESULT if the backend fails, such as
  *         SPUDRESULT_OUT_OF_MEMORY or SPUDRESULT_API_SPECIFIC_FAILURE.
  *
@@ -4797,8 +5063,10 @@ typedef struct spudgpu_draw_indexed_indirect_args {
  *                       spudgpu_draw_indirect_args entries.
  * @param[in] offset     Byte offset of the first entry.
  * @param[in] draw_count Number of draws to issue, at most
- *                       SPUDGPU_DEVICE_PROPERTIES::max_draw_indirect_count;
- *                       with more, nothing is recorded.
+ *                       SPUDGPU_ADAPTER_PROPERTIES::max_draw_indirect_count
+ *                       on a device created with
+ *                       SPUDGPU_FEATURE_MULTI_DRAW_INDIRECT, else 1; with
+ *                       more, nothing is recorded.
  * @param[in] stride     Byte stride between consecutive entries: a multiple
  *                       of 4, and at least
  *                       sizeof(spudgpu_draw_indirect_args); otherwise
@@ -4824,8 +5092,10 @@ void spudgpu_cmd_draw_indirect(
  *                       spudgpu_draw_indexed_indirect_args entries.
  * @param[in] offset     Byte offset of the first entry.
  * @param[in] draw_count Number of draws to issue, at most
- *                       SPUDGPU_DEVICE_PROPERTIES::max_draw_indirect_count;
- *                       with more, nothing is recorded.
+ *                       SPUDGPU_ADAPTER_PROPERTIES::max_draw_indirect_count
+ *                       on a device created with
+ *                       SPUDGPU_FEATURE_MULTI_DRAW_INDIRECT, else 1; with
+ *                       more, nothing is recorded.
  * @param[in] stride     Byte stride between consecutive entries: a multiple
  *                       of 4, and at least
  *                       sizeof(spudgpu_draw_indexed_indirect_args);
@@ -4858,8 +5128,12 @@ void spudgpu_cmd_draw_indexed_indirect(
  * with Shader Model 6.5 and up (D3D12), and `MTLMeshRenderPipelineDescriptor`
  * in Metal 3 (Metal).
  *
- * The macro is 1 on all three backends. Whether a device can draw with it is
- * a runtime fact: spudgpu_mesh_shading_capabilities::supported.
+ * 1 when the backend compiled into this build implements mesh shading, 0
+ * otherwise; it is 1 on all three backends today. It says nothing about any
+ * GPU: whether one has mesh shading is SPUDGPU_FEATURE_MESH_SHADING in its
+ * adapter's supported_features, and whether a device may use it is that bit
+ * in the device's features. A mesh-shader pipeline on a device created
+ * without it is refused with SPUDRESULT_GPU_EXT_MESH_SHADING_NOT_SUPPORTED.
  */
 #if SPUDGPU_COMPILE_VULKAN_API || SPUDGPU_COMPILE_D3D12_API || SPUDGPU_COMPILE_METAL_API
 #define SPUDGPU_EXT_MESH_SHADING 1
@@ -4870,49 +5144,25 @@ void spudgpu_cmd_draw_indexed_indirect(
 #if SPUDGPU_EXT_MESH_SHADING
 
 /**
- * @brief Reports whether this device supports mesh shading, and the
- * hardware limits a mesh shader must respect.
+ * @brief Mesh shading's limits, chained onto SPUDGPU_ADAPTER_PROPERTIES. All 0
+ * when the adapter lacks SPUDGPU_FEATURE_MESH_SHADING.
  *
- * Vulkan: reflects VK_EXT_mesh_shader support + VkPhysicalDeviceMeshShader
- * PropertiesEXT. D3D12: reflects D3D12_FEATURE_DATA_D3D12_OPTIONS7's
- * MeshShaderTier and D3D_SHADER_MODEL_6_5+ support. Metal: always supported
- * — Metal 3 mesh shading is required on every device this backend targets.
+ * Vulkan: VkPhysicalDeviceMeshShaderPropertiesEXT. D3D12: the limits Shader
+ * Model 6.5 guarantees on every mesh shader tier (it has no query). Metal:
+ * the limits of Metal 3's mesh shaders on every Apple GPU.
  */
-typedef struct spudgpu_mesh_shading_capabilities {
-	/** `type` is SPUD_STRUCT_TYPE_GPU_MESH_SHADING_CAPABILITIES; `next` is NULL (nothing is chained onto
-	 * this struct yet). The caller builds the chain and sets each type; SpudGPU fills in the rest. See SPUD_STRUCT_BASE. */
+typedef struct SPUDGPU_MESH_SHADING_LIMITS {
+	/** `type` is SPUD_STRUCT_TYPE_GPU_MESH_SHADING_LIMITS; `next` is the rest
+	 * of the adapter properties' chain. The caller sets the type; SpudGPU
+	 * fills in the rest. See SPUD_STRUCT_BASE. */
 	SPUD_STRUCT_BASE_OUT base;
-	/**
-	 * Whether the device can draw with a mesh-shader pipeline. When false
-	 * the limits below are 0.
-	 */
-	bool supported;
-
 	/** Most vertices one mesh shader workgroup may emit. */
 	uint32_t max_mesh_output_vertices;
 	/** Most primitives one mesh shader workgroup may emit. */
 	uint32_t max_mesh_output_primitives;
 	/** Most invocations in one mesh shader workgroup. */
 	uint32_t max_mesh_workgroup_invocations;
-} spudgpu_mesh_shading_capabilities;
-
-/**
- * @brief Reports whether a device supports mesh shading, and its limits.
- *
- * @param[in]  device   Device to query.
- * @param[out] out_caps Receives the capabilities. `out_caps->supported` may be
- *                      false; that is the answer, not an error.
- *
- * @retval SPUD_SUCCESS `out_caps` was filled in.
- * @retval SPUDRESULT_GPU_INVALID_DEVICE `device` is NULL.
- * @retval SPUDRESULT_NULL_OUTPUT_PARAMETER `out_caps` is NULL.
- * @retval SPUDRESULT_STRUCT_WRONG_TYPE `out_caps->base.type` is not
- *         SPUD_STRUCT_TYPE_GPU_MESH_SHADING_CAPABILITIES.
- * @retval SPUDRESULT_STRUCT_UNKNOWN_IN_CHAIN `out_caps->base.next` is not NULL.
- */
-SPUDRESULT spudgpu_get_mesh_shading_capabilities(
-    spudgpu_device device,
-    spudgpu_mesh_shading_capabilities *out_caps);
+} SPUDGPU_MESH_SHADING_LIMITS;
 
 /**
  * @brief Records a mesh-shader dispatch against the bound mesh-shader
@@ -4921,8 +5171,8 @@ SPUDRESULT spudgpu_get_mesh_shading_capabilities(
  * Callable only inside a rendering pass (between spudgpu_cmd_begin_rendering()
  * and spudgpu_cmd_end_rendering()), unlike spudgpu_cmd_dispatch(), which
  * targets a compute pipeline outside one. Does nothing if the bound pipeline
- * is not a mesh-shader pipeline, or if the device or driver does not support
- * mesh shading; check spudgpu_mesh_shading_capabilities::supported first.
+ * is not a mesh-shader pipeline, or if the device was created without
+ * SPUDGPU_FEATURE_MESH_SHADING (and a debug build asserts then).
  *
  * Maps to: vkCmdDrawMeshTasksEXT (Vulkan), ID3D12GraphicsCommandList6::
  * DispatchMesh (D3D12), drawMeshThreadgroups:threadsPerObjectThreadgroup:
@@ -4968,11 +5218,13 @@ void spudgpu_cmd_dispatch_mesh(
  * `D3D12_DEPTH_STENCIL_DESC1::DepthBoundsTestEnable` (D3D12), and
  * `-[MTLRenderCommandEncoder setDepthTestMinBound:maxBound:]` (Metal).
  *
- * The macro is 1 on all three backends, and support varies per device:
- * spudgpu_depth_bounds_capabilities::supported reports it, from
- * `VkPhysicalDeviceFeatures::depthBounds`,
+ * 1 when the backend compiled into this build implements the test, 0
+ * otherwise; it is 1 on all three backends today. It says nothing about any
+ * GPU: whether one has the test is SPUDGPU_FEATURE_DEPTH_BOUNDS_TEST in its
+ * adapter's supported_features (from `VkPhysicalDeviceFeatures::depthBounds`,
  * `D3D12_FEATURE_DATA_D3D12_OPTIONS2::DepthBoundsTestSupported`, or
- * `MTLGPUFamilyApple10`.
+ * `MTLGPUFamilyApple10`), and whether a device may use it is that bit in the
+ * device's features.
  *
  * spudgpu_shader_pipeline_desc::depth_bounds_test_enable is declared whether
  * or not this macro is 1. Vulkan and D3D12 need it when the pipeline is
@@ -4986,42 +5238,6 @@ void spudgpu_cmd_dispatch_mesh(
 #endif
 
 #if SPUDGPU_EXT_DEPTH_BOUNDS_TEST
-
-/**
- * @brief Reports whether this device supports the depth bounds test.
- *
- * Vulkan: reflects VkPhysicalDeviceFeatures::depthBounds. D3D12: reflects
- * D3D12_FEATURE_DATA_D3D12_OPTIONS2::DepthBoundsTestSupported. Metal:
- * reflects [MTLDevice supportsFamily:MTLGPUFamilyApple10] — this is a very
- * recently added Metal primitive (macOS/iOS 26+, MTLGPUFamilyApple10
- * hardware only), so expect this to be false on most Metal devices in the
- * field today.
- */
-typedef struct spudgpu_depth_bounds_capabilities {
-	/** `type` is SPUD_STRUCT_TYPE_GPU_DEPTH_BOUNDS_CAPABILITIES; `next` is NULL (nothing is chained onto
-	 * this struct yet). The caller builds the chain and sets each type; SpudGPU fills in the rest. See SPUD_STRUCT_BASE. */
-	SPUD_STRUCT_BASE_OUT base;
-	/** Whether the device supports the depth bounds test. */
-	bool supported;
-} spudgpu_depth_bounds_capabilities;
-
-/**
- * @brief Reports whether a device supports the depth bounds test.
- *
- * @param[in]  device   Device to query.
- * @param[out] out_caps Receives the capabilities. `out_caps->supported` may be
- *                      false; that is the answer, not an error.
- *
- * @retval SPUD_SUCCESS `out_caps` was filled in.
- * @retval SPUDRESULT_GPU_INVALID_DEVICE `device` is NULL.
- * @retval SPUDRESULT_NULL_OUTPUT_PARAMETER `out_caps` is NULL.
- * @retval SPUDRESULT_STRUCT_WRONG_TYPE `out_caps->base.type` is not
- *         SPUD_STRUCT_TYPE_GPU_DEPTH_BOUNDS_CAPABILITIES.
- * @retval SPUDRESULT_STRUCT_UNKNOWN_IN_CHAIN `out_caps->base.next` is not NULL.
- */
-SPUDRESULT spudgpu_get_depth_bounds_capabilities(
-    spudgpu_device device,
-    spudgpu_depth_bounds_capabilities *out_caps);
 
 /**
  * @brief Sets the [min, max] depth-attachment-value range the depth bounds
@@ -5038,8 +5254,8 @@ SPUDRESULT spudgpu_get_depth_bounds_capabilities(
  * rather than branching on whether the bound pipeline requested
  * depth_bounds_test_enable.
  *
- * Does nothing if the device or driver does not support the depth bounds
- * test; check spudgpu_depth_bounds_capabilities::supported first.
+ * Does nothing on a device created without SPUDGPU_FEATURE_DEPTH_BOUNDS_TEST
+ * (and a debug build asserts then).
  *
  * Maps to: vkCmdSetDepthBounds (Vulkan), ID3D12GraphicsCommandList1::
  * OMSetDepthBounds (D3D12), [MTLRenderCommandEncoder setDepthTestMinBound:
@@ -5598,8 +5814,9 @@ typedef struct spudgpu_rendering_begin_desc {
 	 * - 0: every attachment's view covers one array layer, and every
 	 *   primitive is drawn to it. What a shader's layer output does is
 	 *   undefined.
-	 * - Not 0: SPUDGPU_DEVICE_PROPERTIES::layered_rendering is true for the
-	 *   device, and every attachment's view, depth/stencil included, is
+	 * - Not 0: the device was created with
+	 *   SPUDGPU_FEATURE_LAYERED_RENDERING, and every attachment's view,
+	 *   depth/stencil included, is
 	 *   SPUDGPU_IMAGE_VIEW_TYPE_2D_ARRAY over one mip level and exactly
 	 *   this many array layers. 1 is a layered pass of one layer, not the
 	 *   same as 0.
@@ -5764,9 +5981,12 @@ void spudgpu_cmd_clear_depth_attachment(
  * Maps to `ID3D12GraphicsCommandList::ExecuteBundle` (D3D12) and to
  * `vkCmdExecuteCommands` over a secondary command buffer (Vulkan).
  *
- * The macro is 0 on Metal, which has nothing to record once and replay: a
- * command buffer and its encoders are used once. That is a gap in what the
- * API can do, so the section is compiled out there and not emulated.
+ * 1 when the backend compiled into this build implements bundles, 0
+ * otherwise. It says nothing about any GPU, and needs no feature bit: every
+ * Vulkan and D3D12 GPU records bundles. It is 0 on Metal, which has nothing to
+ * record once and replay: a command buffer and its encoders are used once.
+ * That is a gap in what the API can do, so the section is compiled out there
+ * and not emulated.
  */
 #if SPUDGPU_COMPILE_VULKAN_API || SPUDGPU_COMPILE_D3D12_API
 #define SPUDGPU_EXT_BUNDLES 1
@@ -5856,9 +6076,8 @@ void spudgpu_cmd_end_debug_label(spudgpu_command_list cmd);
  * @retval SPUDRESULT_GPU_INVALID_COMMAND_QUEUE `queue` is NULL.
  * @retval SPUDRESULT_ZERO_SIZE `count` is 0.
  * @retval SPUDRESULT_NULL_OUTPUT_PARAMETER `out_set` is NULL.
- * @retval SPUDRESULT_GPU_TIMESTAMPS_NOT_SUPPORTED The device can't write
- *         timestamps at a pass's boundaries
- *         (SPUDGPU_DEVICE_PROPERTIES::pass_timestamps).
+ * @retval SPUDRESULT_GPU_TIMESTAMPS_NOT_SUPPORTED The device wasn't created
+ *         with SPUDGPU_FEATURE_PASS_TIMESTAMPS.
  * @return Another SPUDRESULT if the backend fails, such as
  *         SPUDRESULT_OUT_OF_MEMORY or SPUDRESULT_API_SPECIFIC_FAILURE.
  */

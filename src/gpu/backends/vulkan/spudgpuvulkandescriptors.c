@@ -82,6 +82,8 @@ SPUDRESULT spudgpu_create_sampler(
         return SPUDRESULT_API_SPECIFIC_FAILURE;
     }
 
+    // From here spudgpu_destroy_sampler frees it, and takes the count back.
+    SPUDGPU___LIVE_ADD(&device->_shared->live, SPUDGPU___OBJECT_SAMPLER);
     if (spud_debug_name_set(pResult, desc->debug_name) != SPUD_SUCCESS) {
         spudgpu_destroy_sampler(pResult);
         return SPUDRESULT_OUT_OF_MEMORY;
@@ -94,6 +96,7 @@ SPUDRESULT spudgpu_create_sampler(
 void spudgpu_destroy_sampler(spudgpu_sampler sampler) {
     if (!sampler) return;
     vkDestroySampler(sampler->_device._logical_device_vk, sampler->_sampler_vk, NULL);
+    SPUDGPU___LIVE_REMOVE(&sampler->_device._shared->live, SPUDGPU___OBJECT_SAMPLER);
     const SPUD_ALLOCATOR allocator = sampler->head.allocator;
     spud_string_free(&allocator, sampler->head.debug_name);
     SPUD_DELETE(&allocator, spudgpu_sampler_vulkan, sampler);
@@ -171,6 +174,7 @@ SPUDRESULT spudgpu_create_descriptor_set_layout(
         return SPUDRESULT_OUT_OF_MEMORY;
     }
     memcpy(pResult, &result, sizeof(spudgpu_descriptor_set_layout_vulkan));
+    SPUDGPU___LIVE_ADD(&device->_shared->live, SPUDGPU___OBJECT_DESCRIPTOR_SET_LAYOUT);
     if (spud_debug_name_set(pResult, desc->debug_name) != SPUD_SUCCESS) {
         spudgpu_destroy_descriptor_set_layout(pResult);
         return SPUDRESULT_OUT_OF_MEMORY;
@@ -188,6 +192,7 @@ void spudgpu_destroy_descriptor_set_layout(
         layout->_device._logical_device_vk,
         layout->_layout_vk,
         NULL);
+    SPUDGPU___LIVE_REMOVE(&layout->_device._shared->live, SPUDGPU___OBJECT_DESCRIPTOR_SET_LAYOUT);
     const SPUD_ALLOCATOR allocator = layout->head.allocator;
     spud_string_free(&allocator, layout->head.debug_name);
     SPUD_DELETE(&allocator, spudgpu_descriptor_set_layout_vulkan, layout);
@@ -221,6 +226,13 @@ SPUDRESULT spudgpu_create_descriptor_pool(
         vk_pool_sizes[i].descriptorCount = desc->pool_sizes[i].count;
     }
 
+    // What the pool takes out of the device's budget, the same count on
+    // every backend; given back when the pool is destroyed.
+    spudgpu___internal_pool_descriptor_counts(desc, &result._budget_descriptors, &result._budget_samplers);
+    const SPUDRESULT budget_sr =
+        spudgpu___internal_budget_take(&device->_shared->budget, result._budget_descriptors, result._budget_samplers);
+    if (budget_sr != SPUD_SUCCESS) return budget_sr;
+
     VkDescriptorPoolCreateInfo poolInfo = {0};
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     // FREE_DESCRIPTOR_SET_BIT is not set: individual free is not supported,
@@ -232,6 +244,7 @@ SPUDRESULT spudgpu_create_descriptor_pool(
     if (vkCreateDescriptorPool(
         vk_device, &poolInfo, NULL,
         &result._pool_vk) != VK_SUCCESS) {
+        spudgpu___internal_budget_give_back(&device->_shared->budget, result._budget_descriptors, result._budget_samplers);
         return SPUDRESULT_API_SPECIFIC_FAILURE;
     }
 
@@ -249,17 +262,24 @@ SPUDRESULT spudgpu_create_descriptor_pool(
 		if (fn)
 			if (fn(vk_device, &nameInfo))
 				sr = SPUDRESULT_API_SPECIFIC_FAILURE;
-		if (sr != SPUD_SUCCESS)
+		if (sr != SPUD_SUCCESS) {
+			vkDestroyDescriptorPool(vk_device, result._pool_vk, NULL);
+			spudgpu___internal_budget_give_back(&device->_shared->budget, result._budget_descriptors, result._budget_samplers);
 			return sr;
+		}
 	}
 #endif
 
     spudgpu_descriptor_pool_vulkan *pResult = SPUD_NEW(&result.head.allocator, spudgpu_descriptor_pool_vulkan);
     if (!pResult) {
         vkDestroyDescriptorPool(vk_device, result._pool_vk, NULL);
+        spudgpu___internal_budget_give_back(&device->_shared->budget, result._budget_descriptors, result._budget_samplers);
         return SPUDRESULT_OUT_OF_MEMORY;
     }
     memcpy(pResult, &result, sizeof(spudgpu_descriptor_pool_vulkan));
+    // From here spudgpu_destroy_descriptor_pool frees it, gives its budget
+    // back and takes the count back.
+    SPUDGPU___LIVE_ADD(&device->_shared->live, SPUDGPU___OBJECT_DESCRIPTOR_POOL);
     if (spud_debug_name_set(pResult, desc->debug_name) != SPUD_SUCCESS) {
         spudgpu_destroy_descriptor_pool(pResult);
         return SPUDRESULT_OUT_OF_MEMORY;
@@ -301,6 +321,8 @@ void spudgpu_destroy_descriptor_pool(
         pool->_pool_vk,
         NULL);
     spudgpuvulkan___release_descriptor_sets(pool);
+    spudgpu___internal_budget_give_back(&pool->_device._shared->budget, pool->_budget_descriptors, pool->_budget_samplers);
+    SPUDGPU___LIVE_REMOVE(&pool->_device._shared->live, SPUDGPU___OBJECT_DESCRIPTOR_POOL);
     const SPUD_ALLOCATOR allocator = pool->head.allocator;
     spud_string_free(&allocator, pool->head.debug_name);
     SPUD_DELETE(&allocator, spudgpu_descriptor_pool_vulkan, pool);
@@ -510,18 +532,17 @@ void spudgpu_cmd_bind_descriptor_sets_compute(
 #define SPUDGPU_BINDLESS_STORAGE_IMAGE_BINDING 1
 #define SPUDGPU_BINDLESS_STORAGE_BUFFER_BINDING 2
 
-// Called once, by spudgpu_enumerate_devices, right after the logical device
-// is made — every other struct in this backend embeds spudgpu_device_vulkan
-// BY VALUE (a snapshot copy taken at creation time), so _bindless must be
-// settled before anything can copy the device. The bindless calls never
-// make it later: one made after a copy was taken would be missing from that
-// copy, and two threads making it at once would each make one.
+// Called once, by spudgpu_create_device when SPUDGPU_FEATURE_BINDLESS is
+// asked for, right after the logical device is made — every other struct in
+// this backend embeds spudgpu_device_vulkan BY VALUE (a snapshot copy taken
+// at creation time), so _bindless must be settled before anything can copy
+// the device. The bindless calls never make it later.
 SPUDRESULT spudgpuvulkan___create_bindless_state(spudgpu_device device) {
     if (device->_bindless) return SPUD_SUCCESS;
 
     const SPUD_ALLOCATOR *allocator = &device->head.allocator;
     spudgpu_bindless_state_vulkan *state = SPUD_NEW_ZEROED(allocator, spudgpu_bindless_state_vulkan);
-    if (!state) return SPUDRESULT_API_SPECIFIC_FAILURE;
+    if (!state) return SPUDRESULT_OUT_OF_MEMORY;
 
     VkDescriptorSetLayoutBinding bindings[3] = {0};
     bindings[SPUDGPU_BINDLESS_SAMPLED_IMAGE_BINDING].binding = SPUDGPU_BINDLESS_SAMPLED_IMAGE_BINDING;
@@ -657,27 +678,6 @@ static SPUDRESULT spudgpuvulkan___bindless_alloc_index(
     return SPUD_SUCCESS;
 }
 
-SPUDRESULT spudgpu_get_bindless_capabilities(
-        spudgpu_device device,
-        spudgpu_bindless_capabilities *out_caps) {
-    if (!device) return SPUDRESULT_GPU_INVALID_DEVICE;
-    if (!out_caps) return SPUDRESULT_NULL_OUTPUT_PARAMETER;
-    const SPUDRESULT base_sr = spud_struct_out_check(&out_caps->base, SPUD_STRUCT_TYPE_GPU_BINDLESS_CAPABILITIES);
-    if (base_sr != SPUD_SUCCESS) return base_sr;
-
-    memset(out_caps, 0, sizeof(*out_caps));
-    // Whatever was copied over it, the base stays the caller's.
-    out_caps->base = spud_struct_base_out(SPUD_STRUCT_TYPE_GPU_BINDLESS_CAPABILITIES);
-    // Whether the global layout/pool/set got made, once, with the device
-    // (see spudgpuvulkancontext.c); never a fresh attempt.
-    out_caps->supported = device->_bindless != NULL;
-    if (!out_caps->supported) return SPUD_SUCCESS;
-    out_caps->max_sampled_images = SPUDGPU_BINDLESS_MAX_SLOTS_PER_CLASS;
-    out_caps->max_storage_images = SPUDGPU_BINDLESS_MAX_SLOTS_PER_CLASS;
-    out_caps->max_storage_buffers = SPUDGPU_BINDLESS_MAX_SLOTS_PER_CLASS;
-    return SPUD_SUCCESS;
-}
-
 spudgpu_descriptor_set_layout spudgpu_get_bindless_descriptor_set_layout(spudgpu_device device) {
     if (!device) return NULL;
     if (!device->_bindless) return NULL;
@@ -693,7 +693,7 @@ SPUDRESULT spudgpu_bindless_register_sampled_image(
     if (!out_index) return SPUDRESULT_NULL_OUTPUT_PARAMETER;
 
     spudgpu_bindless_state_vulkan *state = device->_bindless;
-    if (!state) return SPUDRESULT_GPU_EXT_BINDLESS_DESCRIPTOR_INDEXING_NOT_SUPPORTED;
+    if (!state) return SPUDRESULT_GPU_EXT_BINDLESS_NOT_SUPPORTED;
 
     // Held across the write too: set_vk is externally synchronized.
     spud_mutex_lock(&state->lock);
@@ -745,7 +745,7 @@ SPUDRESULT spudgpu_bindless_register_storage_image(
     if (!out_index) return SPUDRESULT_NULL_OUTPUT_PARAMETER;
 
     spudgpu_bindless_state_vulkan *state = device->_bindless;
-    if (!state) return SPUDRESULT_GPU_EXT_BINDLESS_DESCRIPTOR_INDEXING_NOT_SUPPORTED;
+    if (!state) return SPUDRESULT_GPU_EXT_BINDLESS_NOT_SUPPORTED;
 
     // Held across the write too: set_vk is externally synchronized.
     spud_mutex_lock(&state->lock);
@@ -797,7 +797,7 @@ SPUDRESULT spudgpu_bindless_register_storage_buffer(
     if (!out_index) return SPUDRESULT_NULL_OUTPUT_PARAMETER;
 
     spudgpu_bindless_state_vulkan *state = device->_bindless;
-    if (!state) return SPUDRESULT_GPU_EXT_BINDLESS_DESCRIPTOR_INDEXING_NOT_SUPPORTED;
+    if (!state) return SPUDRESULT_GPU_EXT_BINDLESS_NOT_SUPPORTED;
 
     // Held across the write too: set_vk is externally synchronized.
     spud_mutex_lock(&state->lock);

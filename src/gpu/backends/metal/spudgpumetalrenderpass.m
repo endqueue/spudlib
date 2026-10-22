@@ -13,6 +13,7 @@
 #include "spudgpumetal.h"
 #include "../../spudgpushared.h"
 #include <Metal/Metal.h>
+#include <assert.h>
 #include <stdio.h>
 #include "../../../spudstructbase.h"
 
@@ -362,7 +363,12 @@ void spudgpu_cmd_begin_rendering(
 
 	pass_desc.renderTargetWidth  = desc->width;
 	pass_desc.renderTargetHeight = desc->height;
-	// 0 is Metal's own value for a pass that is not layered.
+	// 0 is Metal's own value for a pass that is not layered. A layered pass
+	// needs a device created with SPUDGPU_FEATURE_LAYERED_RENDERING, on every
+	// backend (spudgpu.h, spudgpu_rendering_begin_desc::layer_count).
+	assert((desc->layer_count == 0 ||
+	        (cmd_metal->_parent_allocator->_parent_device->_features & SPUDGPU_FEATURE_LAYERED_RENDERING)) &&
+	       "spudgpu_cmd_begin_rendering: a layered pass on a device created without SPUDGPU_FEATURE_LAYERED_RENDERING");
 	pass_desc.renderTargetArrayLength = desc->layer_count;
 
 	// The pass's start and end are the boundaries of its stages: the

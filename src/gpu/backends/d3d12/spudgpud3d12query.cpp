@@ -23,7 +23,7 @@ SPUDRESULT spudgpu_create_timestamp_set(
 		return SPUDRESULT_ZERO_SIZE;
 	if (!out_set)
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
-	if (!device->_properties.pass_timestamps)
+	if (!(device->_features & SPUDGPU_FEATURE_PASS_TIMESTAMPS))
 		return SPUDRESULT_GPU_TIMESTAMPS_NOT_SUPPORTED;
 
 	UINT64 frequency = 0;
@@ -37,6 +37,7 @@ SPUDRESULT spudgpu_create_timestamp_set(
 	set->head.allocator = device->head.allocator;
 	set->_count         = count;
 	set->_frequency     = frequency;
+	set->_device        = device;
 
 	D3D12_QUERY_HEAP_DESC heapDesc = {};
 	heapDesc.Type                  = D3D12_QUERY_HEAP_TYPE_TIMESTAMP;
@@ -66,6 +67,7 @@ SPUDRESULT spudgpu_create_timestamp_set(
 		return SPUDRESULT_API_SPECIFIC_FAILURE;
 	}
 
+	SPUDGPU___LIVE_ADD(&device->_live, SPUDGPU___OBJECT_TIMESTAMP_SET);
 	*out_set = set;
 	return SPUD_SUCCESS;
 }
@@ -73,6 +75,7 @@ SPUDRESULT spudgpu_create_timestamp_set(
 void spudgpu_destroy_timestamp_set(spudgpu_timestamp_set set) {
 	if (!set)
 		return;
+	SPUDGPU___LIVE_REMOVE(&set->_device->_live, SPUDGPU___OBJECT_TIMESTAMP_SET);
 	const SPUD_ALLOCATOR allocator = set->head.allocator;
 	spud_string_free(&allocator, set->head.debug_name);
 	set->~spudgpu_timestamp_set_d3d12();

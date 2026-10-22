@@ -46,6 +46,8 @@ SPUDRESULT spudgpu_create_swap_chain(
 		return SPUDRESULT_GPU_INVALID_SURFACE;
 	if (!desc->queue)
 		return SPUDRESULT_GPU_INVALID_COMMAND_QUEUE;
+	if (!(device->_features & SPUDGPU_FEATURE_PRESENT))
+		return SPUDRESULT_GPU_FEATURE_NOT_SUPPORTED;
 
 	spudgpu_swap_chain_d3d12 *pResult =
 	    SPUD_NEW(&device->head.allocator, spudgpu_swap_chain_d3d12);
@@ -90,7 +92,7 @@ SPUDRESULT spudgpu_create_swap_chain(
 	fsDesc.Windowed         = FALSE;
 
 	Microsoft::WRL::ComPtr<IDXGISwapChain1> dxgiSwapChain1;
-	HRESULT hr = device->_instance->_dxgi_factory->CreateSwapChainForHwnd(
+	HRESULT hr = device->_adapter->_instance->_dxgi_factory->CreateSwapChainForHwnd(
 	    cmdQueue, hwnd, &scDesc, isExclusiveFullscreen ? &fsDesc : nullptr,
 	    nullptr, &dxgiSwapChain1);
 	if (FAILED(hr)) {
@@ -183,6 +185,7 @@ SPUDRESULT spudgpu_create_swap_chain(
 	}
 	pResult->_frame_fence_next_value = 0;
 
+	SPUDGPU___LIVE_ADD(&device->_live, SPUDGPU___OBJECT_SWAP_CHAIN);
 	*out_swap_chain = pResult;
 	return SPUD_SUCCESS;
 }
@@ -190,6 +193,7 @@ SPUDRESULT spudgpu_create_swap_chain(
 void spudgpu_destroy_swap_chain(spudgpu_swap_chain swap_chain) {
 	if (!swap_chain)
 		return;
+	SPUDGPU___LIVE_REMOVE(&swap_chain->_device->_live, SPUDGPU___OBJECT_SWAP_CHAIN);
 	spudgpu_d3d12___release_swap_chain(swap_chain);
 }
 

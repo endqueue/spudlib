@@ -561,6 +561,7 @@ SPUDRESULT spudgpu_create_swap_chain(
 	if (!out_swap_chain) return SPUDRESULT_NULL_OUTPUT_PARAMETER;
 	if (!desc->surface) return SPUDRESULT_GPU_INVALID_SURFACE;
 	if (!desc->queue) return SPUDRESULT_GPU_INVALID_COMMAND_QUEUE;
+	if (!(device->_features & SPUDGPU_FEATURE_PRESENT)) return SPUDRESULT_GPU_FEATURE_NOT_SUPPORTED;
 
 	spudgpu_swap_chain_vulkan result = {0};
 	result.head.allocator = device->head.allocator;
@@ -592,12 +593,14 @@ SPUDRESULT spudgpu_create_swap_chain(
 		return SPUDRESULT_OUT_OF_MEMORY;
 	}
 	memcpy(pResult, &result, sizeof(spudgpu_swap_chain_vulkan));
+	SPUDGPU___LIVE_ADD(&pResult->_device._shared->live, SPUDGPU___OBJECT_SWAP_CHAIN);
 	*out_swap_chain = pResult;
 	return SPUD_SUCCESS;
 }
 
 void spudgpu_destroy_swap_chain(spudgpu_swap_chain swap_chain) {
 	if (!swap_chain) return;
+	SPUDGPU___LIVE_REMOVE(&swap_chain->_device._shared->live, SPUDGPU___OBJECT_SWAP_CHAIN);
 	spudgpuvulkan___release_swap_chain_internal(swap_chain);
 	const SPUD_ALLOCATOR allocator = swap_chain->head.allocator;
 	spud_string_free(&allocator, swap_chain->head.debug_name);

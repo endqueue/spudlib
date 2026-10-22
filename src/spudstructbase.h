@@ -5,9 +5,10 @@
 // spudcore.h) before it reads any other field, written once so that every
 // module and backend returns the same result for the same struct.
 //
-// No struct can be chained onto any SpudLib struct yet, so anything in a
-// chain is a struct this build doesn't take there. When the first chained
-// struct is added, the call that takes it walks its own chain instead.
+// These two are for a struct nothing can be chained onto, so anything in
+// its chain is a struct this build doesn't take there. A call that takes
+// chained structs walks its own chain instead, as
+// spudgpu_get_adapter_properties() does (src/gpu/spudgpushared.c).
 
 #include "spudcore.h"
 

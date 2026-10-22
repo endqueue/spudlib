@@ -178,250 +178,6 @@ VkFormat convert_spud_to_vulkan_format(SPUDGPU_FORMAT format) {
 }
 
 
-// Whether a vertex shader may write the Layer built-in on this device
-// (SPUDGPU_DEVICE_PROPERTIES::layered_rendering). Asked twice: once to
-// enable the feature when the logical device is created, once to report it.
-static bool spudgpuvulkan___internal_shader_output_layer(VkPhysicalDevice physicalDevice) {
-    VkPhysicalDeviceVulkan12Features available = {0};
-    available.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
-    VkPhysicalDeviceFeatures2 features2 = {0};
-    features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
-    features2.pNext = &available;
-    vkGetPhysicalDeviceFeatures2(physicalDevice, &features2);
-    return available.shaderOutputLayer == VK_TRUE;
-}
-
-static VkDevice spudgpuvulkan___initialize_vk_logical_device_internal(
-    spudgpu_device_vulkan *device) {
-    VkDevice result = VK_NULL_HANDLE;
-
-    VkPhysicalDevice physicalDevice = device->_physical_device_vk;
-
-    const SPUD_ALLOCATOR *allocator = &device->head.allocator;
-    uint32_t queueFamilyCount = 0;
-    vkGetPhysicalDeviceQueueFamilyProperties(physicalDevice, &queueFamilyCount, NULL);
-
-    //std::vector<VkQueueFamilyProperties> queueFamilies(queueFamilyCount);
-    // queueFamilyCount is kept as the count it is freed with.
-    VkQueueFamilyProperties *queueFamilies = SPUD_NEW_ARRAY_ZEROED(allocator, VkQueueFamilyProperties, queueFamilyCount);
-    if (!queueFamilies)
-        return VK_NULL_HANDLE;
-    const uint32_t queueFamilyCapacity = queueFamilyCount;
-    vkGetPhysicalDeviceQueueFamilyProperties(physicalDevice, &queueFamilyCount, queueFamilies);
-
-    // Set params to create (1) command queue with type graphics.
-    // TODO: Later we will implement more types of command queues.
-    uint32_t queueCount = 1;
-    VkDeviceQueueCreateInfo queueCreateInfo = {0};
-    int graphicsQueueFamilyIndex = -1;
-    {
-        for (uint32_t i = 0; i < queueFamilyCount; i++) {
-            if (queueFamilies[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) {
-                graphicsQueueFamilyIndex = i;
-                break;
-            }
-        }
-
-        device->_graphics_queue_family_index = (uint32_t) graphicsQueueFamilyIndex;
-
-        float graphicsQueuePriority = 1.0f;
-
-        queueCreateInfo.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
-        queueCreateInfo.pNext = NULL;
-        queueCreateInfo.queueFamilyIndex = graphicsQueueFamilyIndex;
-        queueCreateInfo.queueCount = queueCount;
-        queueCreateInfo.pQueuePriorities = &graphicsQueuePriority;
-    }
-
-    VkPhysicalDeviceFeatures deviceFeatures = {0};
-
-    // depthBounds is a core-1.0, optional VkPhysicalDeviceFeatures bit (no
-    // extension, unlike VK_EXT_mesh_shader below) - query it directly rather
-    // than assuming, and only request it if the hardware actually reports
-    // it. device->_features_vk (populated by the caller after this function
-    // returns) can't be used here since it doesn't exist yet at this point.
-    VkPhysicalDeviceFeatures availableFeatures = {0};
-    vkGetPhysicalDeviceFeatures(physicalDevice, &availableFeatures);
-    deviceFeatures.depthBounds = availableFeatures.depthBounds;
-    device->_depth_bounds_test_supported = availableFeatures.depthBounds == VK_TRUE;
-    // The same for a clamped depth bias and colour attachments that blend
-    // differently, and several draws in one indirect call
-    // (SPUDGPU_DEVICE_PROPERTIES::depth_bias_clamp, independent_blend,
-    // max_draw_indirect_count): enabled where the device has them, and
-    // reported.
-    deviceFeatures.depthBiasClamp    = availableFeatures.depthBiasClamp;
-    deviceFeatures.independentBlend  = availableFeatures.independentBlend;
-    deviceFeatures.multiDrawIndirect = availableFeatures.multiDrawIndirect;
-    // SPUDGPU_DEVICE_PROPERTIES::cube_array_views: without it Vulkan allows
-    // no VK_IMAGE_VIEW_TYPE_CUBE_ARRAY view and no shader that declares one.
-    deviceFeatures.imageCubeArray    = availableFeatures.imageCubeArray;
-
-    // spudgpu_create_buffer and spudgpu_create_placed_buffer always call
-    // vkGetBufferDeviceAddress, for spudgpu_get_buffer_gpu_address (see
-    // spudgpu.h: every buffer has an address after creation, matching
-    // D3D12's always-available GetGPUVirtualAddress), so this
-    // feature must be enabled here and VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT
-    // must be set on every buffer (see spudgpuvulkanbuffer.c).
-    VkPhysicalDeviceVulkan12Features vk12Features = {0};
-    vk12Features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
-    vk12Features.bufferDeviceAddress = VK_TRUE;
-    // spudgpu_fence is a timeline semaphore (spudgpuvulkansync.c).
-    vk12Features.timelineSemaphore = VK_TRUE;
-    // Layered rendering with the layer chosen in the vertex shader. Not
-    // every device has it, so it is enabled only where it is reported.
-    vk12Features.shaderOutputLayer =
-        spudgpuvulkan___internal_shader_output_layer(physicalDevice) ? VK_TRUE : VK_FALSE;
-
-    // Bindless / descriptor indexing (see spudgpuvulkandescriptors.c's
-    // bindless section) — core in 1.2, no extension needed.
-    vk12Features.descriptorIndexing = VK_TRUE;
-    vk12Features.shaderSampledImageArrayNonUniformIndexing = VK_TRUE;
-    vk12Features.shaderStorageImageArrayNonUniformIndexing = VK_TRUE;
-    vk12Features.shaderStorageBufferArrayNonUniformIndexing = VK_TRUE;
-    vk12Features.descriptorBindingSampledImageUpdateAfterBind = VK_TRUE;
-    vk12Features.descriptorBindingStorageImageUpdateAfterBind = VK_TRUE;
-    vk12Features.descriptorBindingStorageBufferUpdateAfterBind = VK_TRUE;
-    vk12Features.descriptorBindingPartiallyBound = VK_TRUE;
-    vk12Features.descriptorBindingVariableDescriptorCount = VK_TRUE;
-    vk12Features.runtimeDescriptorArray = VK_TRUE;
-
-    VkPhysicalDeviceVulkan13Features vk13Features = {0};
-    vk13Features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
-    vk13Features.pNext = &vk12Features;
-    vk13Features.dynamicRendering = VK_TRUE;
-    vk13Features.synchronization2 = VK_TRUE;
-
-    // VK_EXT_mesh_shader is the first genuinely optional device extension
-    // this backend enables - unlike VK_KHR_swapchain (always required), a
-    // driver/hardware combination may not expose it at all, so its presence
-    // must be probed for rather than assumed (see SPUDGPU_EXT_MESH_SHADING
-    // in spudgpu.h). Enumerable-but-unsupported and never-enumerated are
-    // both treated the same way here: mesh shading stays off.
-    bool meshShaderExtensionAvailable = false;
-    {
-        uint32_t extensionCount = 0;
-        vkEnumerateDeviceExtensionProperties(physicalDevice, NULL, &extensionCount, NULL);
-        if (extensionCount > 0) {
-            const uint32_t extensionCapacity = extensionCount;
-            VkExtensionProperties *extensions = SPUD_NEW_ARRAY_ZEROED(allocator, VkExtensionProperties, extensionCapacity);
-            if (!extensions) {
-                SPUD_DELETE_ARRAY(allocator, VkQueueFamilyProperties, queueFamilies, queueFamilyCapacity);
-                return VK_NULL_HANDLE;
-            }
-            vkEnumerateDeviceExtensionProperties(physicalDevice, NULL, &extensionCount, extensions);
-            for (uint32_t i = 0; i < extensionCount; i++) {
-                if (strcmp(extensions[i].extensionName, VK_EXT_MESH_SHADER_EXTENSION_NAME) == 0) {
-                    meshShaderExtensionAvailable = true;
-                    break;
-                }
-            }
-            SPUD_DELETE_ARRAY(allocator, VkExtensionProperties, extensions, extensionCapacity);
-        }
-    }
-
-    VkPhysicalDeviceMeshShaderFeaturesEXT meshShaderFeatures = {0};
-    meshShaderFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_FEATURES_EXT;
-    bool meshShaderFeatureSupported = false;
-    if (meshShaderExtensionAvailable) {
-        // The extension being enumerable doesn't by itself guarantee the
-        // driver actually supports meshShader - query the real feature bit
-        // via the same VkPhysicalDeviceFeatures2 chaining mechanism used
-        // for Vulkan 1.2/1.3 features above.
-        VkPhysicalDeviceFeatures2 features2 = {0};
-        features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
-        features2.pNext = &meshShaderFeatures;
-        vkGetPhysicalDeviceFeatures2(physicalDevice, &features2);
-        meshShaderFeatureSupported = meshShaderFeatures.meshShader == VK_TRUE;
-    }
-
-    const char *deviceExtensions[2] = {VK_KHR_SWAPCHAIN_EXTENSION_NAME};
-    uint32_t deviceExtensionCount = 1;
-    if (meshShaderFeatureSupported) {
-        deviceExtensions[deviceExtensionCount++] = VK_EXT_MESH_SHADER_EXTENSION_NAME;
-        // meshShaderFeatures was just used as a vkGetPhysicalDeviceFeatures2
-        // query target, so every bit in it (not just meshShader) now reflects
-        // whatever the hardware happens to support - e.g. multiviewMeshShader
-        // or primitiveFragmentShadingRateMeshShader can come back VK_TRUE even
-        // though this backend never enables their prerequisite features
-        // (multiview / primitiveFragmentShadingRate). Reset to a clean struct
-        // before reusing it as the *enable* chain so only the bits actually
-        // requested below get turned on. meshShader is the only bit this
-        // sample family needs; taskShader stays off since nothing here uses
-        // amplification shaders yet.
-        meshShaderFeatures = (VkPhysicalDeviceMeshShaderFeaturesEXT){0};
-        meshShaderFeatures.sType      = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_FEATURES_EXT;
-        meshShaderFeatures.taskShader = VK_FALSE;
-        meshShaderFeatures.meshShader = VK_TRUE;
-        meshShaderFeatures.pNext      = vk13Features.pNext;
-        vk13Features.pNext            = &meshShaderFeatures;
-    }
-
-    VkDeviceCreateInfo createInfo = {0};
-    createInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
-    createInfo.pNext = &vk13Features;
-    createInfo.pQueueCreateInfos = &queueCreateInfo;
-    createInfo.queueCreateInfoCount = queueCount;
-    createInfo.pEnabledFeatures = &deviceFeatures;
-    createInfo.enabledExtensionCount = deviceExtensionCount;
-    createInfo.ppEnabledExtensionNames = deviceExtensions;
-
-    VkResult r = vkCreateDevice(physicalDevice, &createInfo, NULL, &result);
-    if (r != VK_SUCCESS) {
-        //throw std::runtime_error("failed to create logical device!");
-        printf("failed to create logical device\n");
-        SPUD_DELETE_ARRAY(allocator, VkQueueFamilyProperties, queueFamilies, queueFamilyCapacity);
-        return NULL;
-    }
-
-    // NULL where the instance has no VK_EXT_debug_utils: the label calls
-    // then record nothing.
-    device->_vkCmdBeginDebugUtilsLabelEXT = (PFN_vkCmdBeginDebugUtilsLabelEXT)
-        vkGetDeviceProcAddr(result, "vkCmdBeginDebugUtilsLabelEXT");
-    device->_vkCmdEndDebugUtilsLabelEXT = (PFN_vkCmdEndDebugUtilsLabelEXT)
-        vkGetDeviceProcAddr(result, "vkCmdEndDebugUtilsLabelEXT");
-
-    device->_mesh_shading_supported = meshShaderFeatureSupported;
-    if (meshShaderFeatureSupported) {
-        device->_vkCmdDrawMeshTasksEXT = (PFN_vkCmdDrawMeshTasksEXT)
-            vkGetDeviceProcAddr(result, "vkCmdDrawMeshTasksEXT");
-
-        VkPhysicalDeviceMeshShaderPropertiesEXT meshShaderProperties = {0};
-        meshShaderProperties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_PROPERTIES_EXT;
-        VkPhysicalDeviceProperties2 properties2 = {0};
-        properties2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
-        properties2.pNext = &meshShaderProperties;
-        vkGetPhysicalDeviceProperties2(physicalDevice, &properties2);
-
-        device->_mesh_shading_max_output_vertices      = meshShaderProperties.maxMeshOutputVertices;
-        device->_mesh_shading_max_output_primitives    = meshShaderProperties.maxMeshOutputPrimitives;
-        device->_mesh_shading_max_workgroup_invocations = meshShaderProperties.maxMeshWorkGroupInvocations;
-    } else {
-        device->_vkCmdDrawMeshTasksEXT = NULL;
-    }
-
-    /*
-    // Take that graphics queue and make a SpudGPU command queue from it.
-    // TODO: Later we will implement more types of command queues.
-    m_command_queues.resize(1);
-    {
-        VkQueue graphicsQueue = VK_NULL_HANDLE;
-        vkGetDeviceQueue(m_device, graphicsQueueFamilyIndex, 0, &graphicsQueue);
-        auto spudCommandQueue = std::make_shared<command_queue_vulkan>(graphicsQueue);
-        m_command_queues[0] = spudCommandQueue;
-    }*/
-
-    /*
-    // Create the SpudGPU resource pool object
-    {
-        std::shared_ptr<gpu_resource_pool_vulkan> spudGpuVulkanPool = std::make_shared<
-            gpu_resource_pool_vulkan>();
-        m_resource_pool = std::static_pointer_cast<gpu_resource_pool_vulkan>(spudGpuVulkanPool);
-    }*/
-
-    SPUD_DELETE_ARRAY(allocator, VkQueueFamilyProperties, queueFamilies, queueFamilyCapacity);
-    return result;
-};
-
 // Whether the Vulkan loader offers instance extension [name].
 static bool spudgpuvulkan__instance_extension_available(const SPUD_ALLOCATOR *allocator, const char *name) {
     uint32_t count = 0;
@@ -462,13 +218,337 @@ static void spudgpuvulkan__determine_vulkan_extensions(const SPUD_ALLOCATOR *all
     pOutput->ppEnabledExtensionNames = count ? names : NULL;
 }
 
+// ---------------------------------------------------------------------------
+// Adapters
+// ---------------------------------------------------------------------------
+
+// Whether [physicalDevice] offers device extension [name].
+static bool spudgpuvulkan___device_extension_available(const SPUD_ALLOCATOR *allocator, VkPhysicalDevice physicalDevice, const char *name) {
+    uint32_t count = 0;
+    if (vkEnumerateDeviceExtensionProperties(physicalDevice, NULL, &count, NULL) != VK_SUCCESS || count == 0)
+        return false;
+    const uint32_t capacity = count;
+    VkExtensionProperties *extensions = SPUD_NEW_ARRAY_ZEROED(allocator, VkExtensionProperties, capacity);
+    if (!extensions)
+        return false;
+    bool found = false;
+    if (vkEnumerateDeviceExtensionProperties(physicalDevice, NULL, &count, extensions) == VK_SUCCESS)
+        for (uint32_t i = 0; i < count && !found; i++)
+            found = strcmp(extensions[i].extensionName, name) == 0;
+    SPUD_DELETE_ARRAY(allocator, VkExtensionProperties, extensions, capacity);
+    return found;
+}
+
+// Picks each kind's family by the rule in spudgpu.h and fills in the queue
+// pools and the timestamp feature from them. False when the GPU has no
+// family with graphics, which this backend does not list.
+static bool spudgpuvulkan___read_queue_families(const SPUD_ALLOCATOR *allocator, spudgpu_adapter_vulkan *adapter, SPUDGPU_FEATURES *features) {
+    uint32_t count = 0;
+    vkGetPhysicalDeviceQueueFamilyProperties(adapter->_physical_device_vk, &count, NULL);
+    if (count == 0)
+        return false;
+    const uint32_t capacity = count;
+    VkQueueFamilyProperties *families = SPUD_NEW_ARRAY_ZEROED(allocator, VkQueueFamilyProperties, capacity);
+    if (!families)
+        return false;
+    vkGetPhysicalDeviceQueueFamilyProperties(adapter->_physical_device_vk, &count, families);
+
+    uint32_t direct = UINT32_MAX, compute = UINT32_MAX, copy = UINT32_MAX;
+    for (uint32_t i = 0; i < count && direct == UINT32_MAX; i++)
+        if (families[i].queueFlags & VK_QUEUE_GRAPHICS_BIT)
+            direct = i;
+    for (uint32_t i = 0; i < count && compute == UINT32_MAX; i++)
+        if ((families[i].queueFlags & VK_QUEUE_COMPUTE_BIT) && !(families[i].queueFlags & VK_QUEUE_GRAPHICS_BIT))
+            compute = i;
+    for (uint32_t i = 0; i < count && copy == UINT32_MAX; i++)
+        if ((families[i].queueFlags & VK_QUEUE_TRANSFER_BIT) &&
+            !(families[i].queueFlags & (VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT)))
+            copy = i;
+    if (direct == UINT32_MAX) {
+        SPUD_DELETE_ARRAY(allocator, VkQueueFamilyProperties, families, capacity);
+        return false;
+    }
+    if (compute == UINT32_MAX)
+        compute = direct;
+    if (copy == UINT32_MAX)
+        copy = compute;
+    adapter->_family_direct  = direct;
+    adapter->_family_compute = compute;
+    adapter->_family_copy    = copy;
+
+    // One pool per family the rule picked, its kinds the ones made from it.
+    SPUDGPU_ADAPTER_PROPERTIES *properties = &adapter->_facts.properties;
+    const uint32_t kind_family[3]          = {direct, compute, copy};
+    const SPUDGPU_QUEUE_KINDS kind_bit[3]  = {SPUDGPU_QUEUE_KIND_DIRECT, SPUDGPU_QUEUE_KIND_COMPUTE, SPUDGPU_QUEUE_KIND_COPY};
+    uint32_t pool_family[3]                = {0};
+    properties->queue_pool_count           = 0;
+    for (uint32_t k = 0; k < 3; k++) {
+        uint32_t pool = 0;
+        while (pool < properties->queue_pool_count && pool_family[pool] != kind_family[k])
+            pool++;
+        if (pool == properties->queue_pool_count) {
+            pool_family[pool] = kind_family[k];
+            const VkQueueFamilyProperties *family    = &families[kind_family[k]];
+            properties->queue_pools[pool].kinds      = 0;
+            properties->queue_pools[pool].max_queues = family->queueCount;
+            properties->queue_pools[pool].engine     = (family->queueFlags & VK_QUEUE_GRAPHICS_BIT)
+                                                           ? SPUDGPU_QUEUE_POOL_ENGINE_GRAPHICS
+                                                           : SPUDGPU_QUEUE_POOL_ENGINE_SEPARATE;
+            properties->queue_pool_count++;
+        }
+        properties->queue_pools[pool].kinds |= kind_bit[k];
+    }
+
+    // Timestamps are written by command lists on the direct queues, whose
+    // family says whether it counts time at all.
+    if (families[direct].timestampValidBits > 0)
+        *features |= SPUDGPU_FEATURE_PASS_TIMESTAMPS;
+    SPUD_DELETE_ARRAY(allocator, VkQueueFamilyProperties, families, capacity);
+    return true;
+}
+
+// Fills in what [adapter] is and can do. False when the GPU can't have a
+// device of this backend (below Vulkan 1.3, or no graphics family), which
+// is then not listed. Creates nothing.
+static bool spudgpuvulkan___read_adapter_facts(const SPUD_ALLOCATOR *allocator, spudgpu_adapter_vulkan *adapter) {
+    VkPhysicalDevice physicalDevice        = adapter->_physical_device_vk;
+    spudgpu___adapter_facts *facts         = &adapter->_facts;
+    SPUDGPU_ADAPTER_PROPERTIES *properties = &facts->properties;
+    properties->base                       = spud_struct_base_out(SPUD_STRUCT_TYPE_GPU_ADAPTER_PROPERTIES);
+
+    vkGetPhysicalDeviceProperties(physicalDevice, &adapter->_properties_vk);
+    const VkPhysicalDeviceProperties *props = &adapter->_properties_vk;
+    // What SpudGPU itself relies on (dynamicRendering, synchronization2,
+    // timelineSemaphore, bufferDeviceAddress) is required by Vulkan 1.3.
+    if (props->apiVersion < VK_API_VERSION_1_3)
+        return false;
+
+    SPUDGPU_FEATURES features = 0;
+    if (!spudgpuvulkan___read_queue_families(allocator, adapter, &features))
+        return false;
+
+    size_t nameLen = strnlen(props->deviceName, sizeof(properties->description) - 1);
+    memcpy(properties->description, props->deviceName, nameLen);
+    properties->description[nameLen] = '\0';
+    properties->vendor_id            = props->vendorID;
+    properties->device_id            = props->deviceID;
+    // Vulkan has no subsystem ID or revision.
+    properties->subsystem_id = 0;
+    properties->revision     = 0;
+
+    switch (props->deviceType) {
+    case VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU: properties->adapter_type = SPUDGPU_ADAPTER_TYPE_INTEGRATED; break;
+    case VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU: properties->adapter_type = SPUDGPU_ADAPTER_TYPE_DISCRETE; break;
+    case VK_PHYSICAL_DEVICE_TYPE_VIRTUAL_GPU: properties->adapter_type = SPUDGPU_ADAPTER_TYPE_VIRTUAL; break;
+    case VK_PHYSICAL_DEVICE_TYPE_CPU: properties->adapter_type = SPUDGPU_ADAPTER_TYPE_SOFTWARE; break;
+    default: properties->adapter_type = SPUDGPU_ADAPTER_TYPE_OTHER; break;
+    }
+
+    // deviceUUID names the GPU; deviceLUID is the Windows LUID, where there
+    // is one.
+    VkPhysicalDeviceIDProperties idProperties = {0};
+    idProperties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES;
+    VkPhysicalDeviceVulkan12Properties vk12Properties = {0};
+    vk12Properties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_PROPERTIES;
+    vk12Properties.pNext = &idProperties;
+    VkPhysicalDeviceProperties2 properties2 = {0};
+    properties2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+    properties2.pNext = &vk12Properties;
+    vkGetPhysicalDeviceProperties2(physicalDevice, &properties2);
+    memcpy(properties->adapter_id, idProperties.deviceUUID, sizeof(properties->adapter_id));
+    memcpy(properties->luid, idProperties.deviceLUID, sizeof(properties->luid));
+    properties->luid_valid = idProperties.deviceLUIDValid == VK_TRUE;
+
+    VkPhysicalDeviceMemoryProperties memProps = {0};
+    vkGetPhysicalDeviceMemoryProperties(physicalDevice, &memProps);
+    uint64_t deviceLocalMemory = 0;
+    uint64_t hostVisibleMemory = 0;
+    for (uint32_t i = 0; i < memProps.memoryHeapCount; i++) {
+        if (memProps.memoryHeaps[i].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT)
+            deviceLocalMemory += memProps.memoryHeaps[i].size;
+        else
+            hostVisibleMemory += memProps.memoryHeaps[i].size;
+    }
+    properties->dedicated_video_memory = deviceLocalMemory;
+    // Vulkan does not tell a GPU-private system memory pool from shared
+    // system memory the way DXGI does.
+    properties->dedicated_system_memory = 0;
+    properties->shared_system_memory    = hostVisibleMemory;
+    // Vulkan doesn't say whether a GPU's memory is the system's. The device
+    // type is what it does say, and an integrated GPU is the type that has
+    // none of its own.
+    properties->unified_memory = props->deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU;
+
+    // Powers of two by Vulkan's rules, and never above 256.
+    properties->uniform_buffer_offset_alignment = (uint32_t) props->limits.minUniformBufferOffsetAlignment;
+    properties->storage_buffer_offset_alignment = (uint32_t) props->limits.minStorageBufferOffsetAlignment;
+    properties->max_draw_indirect_count         = props->limits.maxDrawIndirectCount;
+    // Descriptor pools have no device-wide count to keep under.
+    properties->max_descriptors = UINT32_MAX;
+    properties->max_samplers    = UINT32_MAX;
+
+    VkPhysicalDeviceFeatures available = {0};
+    vkGetPhysicalDeviceFeatures(physicalDevice, &available);
+    if (available.depthBiasClamp) features |= SPUDGPU_FEATURE_DEPTH_BIAS_CLAMP;
+    if (available.independentBlend) features |= SPUDGPU_FEATURE_INDEPENDENT_BLEND;
+    if (available.multiDrawIndirect) features |= SPUDGPU_FEATURE_MULTI_DRAW_INDIRECT;
+    if (available.imageCubeArray) features |= SPUDGPU_FEATURE_CUBE_ARRAY_VIEWS;
+    if (available.depthBounds) features |= SPUDGPU_FEATURE_DEPTH_BOUNDS_TEST;
+
+    VkPhysicalDeviceVulkan12Features vk12 = {0};
+    vk12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
+    VkPhysicalDeviceFeatures2 features2 = {0};
+    features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+    features2.pNext = &vk12;
+    vkGetPhysicalDeviceFeatures2(physicalDevice, &features2);
+    if (vk12.shaderOutputLayer) features |= SPUDGPU_FEATURE_LAYERED_RENDERING;
+    // Every descriptor indexing feature the bindless table switches on, and
+    // room for the table's three classes in one stage.
+    const uint32_t slots = SPUDGPU_BINDLESS_MAX_SLOTS_PER_CLASS;
+    if (vk12.descriptorIndexing && vk12.shaderSampledImageArrayNonUniformIndexing &&
+        vk12.shaderStorageImageArrayNonUniformIndexing && vk12.shaderStorageBufferArrayNonUniformIndexing &&
+        vk12.descriptorBindingSampledImageUpdateAfterBind && vk12.descriptorBindingStorageImageUpdateAfterBind &&
+        vk12.descriptorBindingStorageBufferUpdateAfterBind && vk12.descriptorBindingPartiallyBound &&
+        vk12.descriptorBindingVariableDescriptorCount && vk12.runtimeDescriptorArray &&
+        vk12Properties.maxPerStageDescriptorUpdateAfterBindSampledImages >= slots &&
+        vk12Properties.maxPerStageDescriptorUpdateAfterBindStorageImages >= slots &&
+        vk12Properties.maxPerStageDescriptorUpdateAfterBindStorageBuffers >= slots &&
+        vk12Properties.maxDescriptorSetUpdateAfterBindSampledImages >= slots &&
+        vk12Properties.maxDescriptorSetUpdateAfterBindStorageImages >= slots &&
+        vk12Properties.maxDescriptorSetUpdateAfterBindStorageBuffers >= slots) {
+        features |= SPUDGPU_FEATURE_BINDLESS;
+        facts->bindless_max_sampled_images  = slots;
+        facts->bindless_max_storage_images  = slots;
+        facts->bindless_max_storage_buffers = slots;
+    }
+
+    // SPUDGPU_MEMORY_KIND_DEVICE_MAPPABLE needs a memory type that is the
+    // GPU's and can be mapped, and is only offered where the GPU's memory is
+    // the system's.
+    bool deviceLocalHostVisibleType = false;
+    for (uint32_t i = 0; i < memProps.memoryTypeCount; i++) {
+        const VkMemoryPropertyFlags both = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT | VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT;
+        if ((memProps.memoryTypes[i].propertyFlags & both) == both)
+            deviceLocalHostVisibleType = true;
+    }
+    if (properties->unified_memory && deviceLocalHostVisibleType)
+        features |= SPUDGPU_FEATURE_DEVICE_MAPPABLE_MEMORY;
+    // A heap of any kind is a vkAllocateMemory of that kind's memory type,
+    // which every kind has wherever spudgpu_create_buffer can make it.
+    features |= SPUDGPU_FEATURE_MAPPABLE_HEAPS;
+
+    if (spudgpuvulkan___device_extension_available(allocator, physicalDevice, VK_KHR_SWAPCHAIN_EXTENSION_NAME))
+        features |= SPUDGPU_FEATURE_PRESENT;
+
+    // VK_EXT_mesh_shader: the extension being listed doesn't by itself mean
+    // the driver has meshShader, so the feature bit is read too.
+    if (spudgpuvulkan___device_extension_available(allocator, physicalDevice, VK_EXT_MESH_SHADER_EXTENSION_NAME)) {
+        VkPhysicalDeviceMeshShaderFeaturesEXT meshFeatures = {0};
+        meshFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_FEATURES_EXT;
+        VkPhysicalDeviceFeatures2 meshFeatures2 = {0};
+        meshFeatures2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+        meshFeatures2.pNext = &meshFeatures;
+        vkGetPhysicalDeviceFeatures2(physicalDevice, &meshFeatures2);
+        if (meshFeatures.meshShader) {
+            features |= SPUDGPU_FEATURE_MESH_SHADING;
+            VkPhysicalDeviceMeshShaderPropertiesEXT meshProperties = {0};
+            meshProperties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_PROPERTIES_EXT;
+            VkPhysicalDeviceProperties2 meshProperties2 = {0};
+            meshProperties2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+            meshProperties2.pNext = &meshProperties;
+            vkGetPhysicalDeviceProperties2(physicalDevice, &meshProperties2);
+            facts->mesh_max_output_vertices       = meshProperties.maxMeshOutputVertices;
+            facts->mesh_max_output_primitives     = meshProperties.maxMeshOutputPrimitives;
+            facts->mesh_max_workgroup_invocations = meshProperties.maxMeshWorkGroupInvocations;
+        }
+    }
+
+    properties->supported_features = features;
+    return true;
+}
+
+static void spudgpuvulkan___destroy_adapters(spudgpu_instance_vulkan *instance) {
+    const SPUD_ALLOCATOR allocator = instance->head.allocator;
+    for (uint32_t i = 0; i < instance->_adapter_count; i++) {
+        spudgpu_adapter_vulkan *adapter = (spudgpu_adapter_vulkan *) instance->_adapters[i];
+        if (!adapter) continue;
+        spud_string_free(&allocator, adapter->head.debug_name);
+        SPUD_DELETE(&allocator, spudgpu_adapter_vulkan, adapter);
+    }
+    SPUD_DELETE_ARRAY(&allocator, spudgpu_adapter, instance->_adapters, instance->_adapter_count);
+    instance->_adapters      = NULL;
+    instance->_adapter_count = 0;
+}
+
+// Lists the physical devices the loader gives, in its order, that a device
+// of this backend can be made on. Creates nothing on any of them.
+static SPUDRESULT spudgpuvulkan___list_adapters(spudgpu_instance_vulkan *instance) {
+    const SPUD_ALLOCATOR *allocator = &instance->head.allocator;
+    uint32_t count = 0;
+    if (vkEnumeratePhysicalDevices(instance->_instance_vk, &count, NULL) != VK_SUCCESS)
+        return SPUDRESULT_GPU_DEVICE_ENUMERATION_FAILURE;
+    if (count == 0)
+        return SPUD_SUCCESS;
+    // A count vkEnumeratePhysicalDevices may lower; the arrays are freed
+    // with the one they were made with.
+    const uint32_t capacity = count;
+    VkPhysicalDevice *physicalDevices = SPUD_NEW_ARRAY(allocator, VkPhysicalDevice, capacity);
+    spudgpu_adapter *adapters = SPUD_NEW_ARRAY_ZEROED(allocator, spudgpu_adapter, capacity);
+    if (!physicalDevices || !adapters) {
+        SPUD_DELETE_ARRAY(allocator, VkPhysicalDevice, physicalDevices, capacity);
+        SPUD_DELETE_ARRAY(allocator, spudgpu_adapter, adapters, capacity);
+        return SPUDRESULT_OUT_OF_MEMORY;
+    }
+    VkResult r = vkEnumeratePhysicalDevices(instance->_instance_vk, &count, physicalDevices);
+    if (r != VK_SUCCESS && r != VK_INCOMPLETE) {
+        SPUD_DELETE_ARRAY(allocator, VkPhysicalDevice, physicalDevices, capacity);
+        SPUD_DELETE_ARRAY(allocator, spudgpu_adapter, adapters, capacity);
+        return SPUDRESULT_GPU_DEVICE_ENUMERATION_FAILURE;
+    }
+
+    // The instance's from here, so a failure below frees what was made.
+    instance->_adapters      = adapters;
+    instance->_adapter_count = capacity;
+    uint32_t listed = 0;
+    for (uint32_t i = 0; i < count; i++) {
+        spudgpu_adapter_vulkan *adapter = SPUD_NEW_ZEROED(allocator, spudgpu_adapter_vulkan);
+        if (!adapter) {
+            spudgpuvulkan___destroy_adapters(instance);
+            SPUD_DELETE_ARRAY(allocator, VkPhysicalDevice, physicalDevices, capacity);
+            return SPUDRESULT_OUT_OF_MEMORY;
+        }
+        adapter->head.allocator      = instance->head.allocator;
+        adapter->_physical_device_vk = physicalDevices[i];
+        atomic_init(&adapter->_in_use, false);
+        if (!spudgpuvulkan___read_adapter_facts(allocator, adapter)) {
+            SPUD_DELETE(allocator, spudgpu_adapter_vulkan, adapter);
+            continue;
+        }
+        adapters[listed++] = (spudgpu_adapter) adapter;
+    }
+    SPUD_DELETE_ARRAY(allocator, VkPhysicalDevice, physicalDevices, capacity);
+    // The array keeps the capacity it was made with, and the count of the
+    // listed: the slots past it are NULL, which destroy skips.
+    instance->_adapter_count = listed;
+    if (listed < capacity) {
+        // Freed with the count it is kept with: shrink it to that.
+        spudgpu_adapter *exact = listed ? SPUD_NEW_ARRAY(allocator, spudgpu_adapter, listed) : NULL;
+        if (listed && !exact) {
+            instance->_adapter_count = capacity;
+            spudgpuvulkan___destroy_adapters(instance);
+            return SPUDRESULT_OUT_OF_MEMORY;
+        }
+        for (uint32_t i = 0; i < listed; i++)
+            exact[i] = adapters[i];
+        SPUD_DELETE_ARRAY(allocator, spudgpu_adapter, adapters, capacity);
+        instance->_adapters = exact;
+    }
+    return SPUD_SUCCESS;
+}
+
 #if __cplusplus
 extern "C" {
-
-
-
 #endif
-
 
 SPUDRESULT spudgpu_create_instance(
     const spudgpu_instance_desc *desc,
@@ -477,7 +557,6 @@ SPUDRESULT spudgpu_create_instance(
     if (desc_result != SPUD_SUCCESS) return desc_result;
     // Only for the scratch arrays below, until the instance holds its copy.
     const SPUD_ALLOCATOR *allocator = desc->allocator;
-    spudgpu_instance_vulkan result = {0};
 
     VkApplicationInfo appInfo = {0};
     appInfo.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
@@ -521,381 +600,379 @@ SPUDRESULT spudgpu_create_instance(
     SPUD_DELETE_ARRAY(allocator, VkLayerProperties, availableLayers, availableLayerCapacity);
 #endif
 
-    if (vkCreateInstance(&createInfo, NULL, &result._instance_vk) != VK_SUCCESS) {
-        //throw std::runtime_error("failed to create vulkan instance!");
+    spudgpu_instance_vulkan *instance = SPUD_NEW_ZEROED(allocator, spudgpu_instance_vulkan);
+    if (!instance)
+        return SPUDRESULT_OUT_OF_MEMORY;
+    instance->head.allocator = *desc->allocator;
+    if (vkCreateInstance(&createInfo, NULL, &instance->_instance_vk) != VK_SUCCESS) {
+        SPUD_DELETE(allocator, spudgpu_instance_vulkan, instance);
         return SPUDRESULT_API_SPECIFIC_FAILURE;
     }
-
-    // If successful, return a memcpy'ed heap pointer of the result
-    spudgpu_instance_vulkan *pResult = SPUD_NEW(allocator, spudgpu_instance_vulkan);
-    result._devices_lock = SPUD_NEW(allocator, spud_mutex);
-    if (!pResult || !result._devices_lock) {
-        SPUD_DELETE(allocator, spudgpu_instance_vulkan, pResult);
-        SPUD_DELETE(allocator, spud_mutex, result._devices_lock);
-        vkDestroyInstance(result._instance_vk, NULL);
-        return SPUDRESULT_OUT_OF_MEMORY;
+    const SPUDRESULT list_sr = spudgpuvulkan___list_adapters(instance);
+    if (list_sr != SPUD_SUCCESS) {
+        vkDestroyInstance(instance->_instance_vk, NULL);
+        SPUD_DELETE(allocator, spudgpu_instance_vulkan, instance);
+        return list_sr;
     }
-    if (!spud_mutex_init(result._devices_lock)) {
-        SPUD_DELETE(allocator, spudgpu_instance_vulkan, pResult);
-        SPUD_DELETE(allocator, spud_mutex, result._devices_lock);
-        vkDestroyInstance(result._instance_vk, NULL);
-        return SPUDRESULT_GENERAL_FAILURE;
-    }
-    result.head.allocator = *desc->allocator;
-    memcpy(pResult, &result, sizeof(spudgpu_instance_vulkan));
-    *out_instance = pResult;
+    *out_instance = instance;
     return SPUD_SUCCESS;
-}
-
-// Makes the device's graphics queue (_graphics_queue): the one queue its
-// logical device was made with, of _graphics_queue_family_index. Called by
-// spudgpu_enumerate_devices before the device is first copied.
-static SPUDRESULT spudgpuvulkan___create_graphics_queue(spudgpu_device_vulkan *dev) {
-    const SPUD_ALLOCATOR *allocator = &dev->head.allocator;
-    spudgpu_command_queue_vulkan *queue = SPUD_NEW_ZEROED(allocator, spudgpu_command_queue_vulkan);
-    if (!queue) return SPUDRESULT_OUT_OF_MEMORY;
-    queue->head.allocator = dev->head.allocator;
-    queue->_queue_family_index = dev->_graphics_queue_family_index;
-    vkGetDeviceQueue(dev->_logical_device_vk, dev->_graphics_queue_family_index, 0, &queue->_queue_vk);
-    dev->_graphics_queue = queue;
-    return SPUD_SUCCESS;
-}
-
-// Frees a device spudgpu_enumerate_devices made, its name, its graphics
-// queue and its bindless state included. NULL is nothing to free.
-static void spudgpuvulkan___destroy_device(spudgpu_device_vulkan *dev) {
-    if (!dev) return;
-    const SPUD_ALLOCATOR allocator = dev->head.allocator;
-    if (dev->_graphics_queue) {
-        spudgpu_command_queue_vulkan *queue = dev->_graphics_queue;
-        spud_string_free(&allocator, queue->head.debug_name);
-        SPUD_DELETE(&allocator, spudgpu_command_queue_vulkan, queue);
-        dev->_graphics_queue = NULL;
-    }
-    spudgpuvulkan___destroy_bindless_state((spudgpu_device) dev);
-    if (dev->_logical_device_vk)
-        vkDestroyDevice(dev->_logical_device_vk, NULL);
-    spud_string_free(&allocator, dev->head.debug_name);
-    SPUD_DELETE(&allocator, spudgpu_device_vulkan, dev);
 }
 
 SPUDRESULT spudgpu_destroy_instance(spudgpu_instance instance) {
     if (!instance) return SPUD_SUCCESS;
-
     const SPUD_ALLOCATOR allocator = instance->head.allocator;
-    // instance owns every spudgpu_device handed out by spudgpu_enumerate_devices
-    // (there is no public spudgpu_destroy_device), and the array of them.
-    for (uint32_t i = 0; i < instance->_devices_count; i++)
-        spudgpuvulkan___destroy_device((spudgpu_device_vulkan *) instance->_devices[i]);
-    SPUD_DELETE_ARRAY(&allocator, spudgpu_device, instance->_devices, instance->_devices_count);
-
+    spudgpuvulkan___destroy_adapters(instance);
     vkDestroyInstance(instance->_instance_vk, NULL);
-    spud_mutex_destroy(instance->_devices_lock);
-    SPUD_DELETE(&allocator, spud_mutex, instance->_devices_lock);
     spud_string_free(&allocator, instance->head.debug_name);
     SPUD_DELETE(&allocator, spudgpu_instance_vulkan, instance);
     return SPUD_SUCCESS;
 }
 
-static void spudgpuvulkan___internal_make_device_properties(
-    spudgpu_device_vulkan *device) {
-    if (!device) return;
-
-    const VkPhysicalDeviceProperties *props = &device->_properties_vk;
-
-    size_t nameLen = strnlen(
-        props->deviceName, sizeof(device->_properties.description) - 1);
-    memcpy(device->_properties.description, props->deviceName, nameLen);
-    device->_properties.description[nameLen] = '\0';
-
-    device->_properties.vendor_id = props->vendorID;
-    device->_properties.device_id = props->deviceID;
-    // Vulkan has no standard equivalent to DXGI's subsystem ID or hardware
-    // revision, so these are left unset.
-    device->_properties.subSys_id = 0;
-    device->_properties.revision  = 0;
-
-    VkPhysicalDeviceMemoryProperties memProps = {0};
-    vkGetPhysicalDeviceMemoryProperties(device->_physical_device_vk, &memProps);
-
-    uint64_t deviceLocalMemory = 0;
-    uint64_t hostVisibleMemory = 0;
-    for (uint32_t i = 0; i < memProps.memoryHeapCount; i++) {
-        if (memProps.memoryHeaps[i].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT)
-            deviceLocalMemory += memProps.memoryHeaps[i].size;
-        else
-            hostVisibleMemory += memProps.memoryHeaps[i].size;
-    }
-
-    device->_properties.dedicated_video_memory = deviceLocalMemory;
-    // Vulkan does not distinguish a GPU-private system memory pool from
-    // shared system memory the way DXGI does.
-    device->_properties.dedicated_system_memory = 0;
-    device->_properties.shared_system_memory    = hostVisibleMemory;
-    // Vulkan doesn't say whether a device's memory is the system's. The
-    // device type is what it does say, and an integrated GPU is the type
-    // that has none of its own.
-    device->_properties.unified_memory =
-        props->deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU;
-
-    // SPUDGPU_MEMORY_KIND_DEVICE_MAPPABLE needs a memory type that is the
-    // device's and can be mapped, and is only offered where the device's
-    // memory is the system's (see SPUDGPU_DEVICE_PROPERTIES in spudgpu.h).
-    bool deviceLocalHostVisibleType = false;
-    for (uint32_t i = 0; i < memProps.memoryTypeCount; i++) {
-        const VkMemoryPropertyFlags both =
-            VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT | VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT;
-        if ((memProps.memoryTypes[i].propertyFlags & both) == both)
-            deviceLocalHostVisibleType = true;
-    }
-    device->_properties.device_mappable_memory =
-        device->_properties.unified_memory && deviceLocalHostVisibleType;
-
-    device->_properties.layered_rendering =
-        spudgpuvulkan___internal_shader_output_layer(device->_physical_device_vk);
-
-    // A heap of any kind is a vkAllocateMemory of that kind's memory type,
-    // which every kind has wherever spudgpu_create_buffer can make it.
-    device->_properties.mappable_heaps = true;
-
-    // Enabled on the device wherever they are reported (device creation).
-    VkPhysicalDeviceFeatures features = {0};
-    vkGetPhysicalDeviceFeatures(device->_physical_device_vk, &features);
-    device->_properties.depth_bias_clamp  = features.depthBiasClamp == VK_TRUE;
-    device->_properties.independent_blend = features.independentBlend == VK_TRUE;
-    device->_properties.cube_array_views  = features.imageCubeArray == VK_TRUE;
-    // Without multiDrawIndirect, vkCmdDrawIndirect takes a drawCount of 0 or
-    // 1, whatever maxDrawIndirectCount says.
-    device->_properties.max_draw_indirect_count =
-        features.multiDrawIndirect == VK_TRUE ? props->limits.maxDrawIndirectCount : 1;
-    // Powers of two by Vulkan's rules, and never above 256.
-    device->_properties.uniform_buffer_offset_alignment = (uint32_t) props->limits.minUniformBufferOffsetAlignment;
-    device->_properties.storage_buffer_offset_alignment = (uint32_t) props->limits.minStorageBufferOffsetAlignment;
-
-    // Timestamps are written by command lists on the graphics queue, whose
-    // family says whether it counts time at all.
-    uint32_t familyCount = 0;
-    vkGetPhysicalDeviceQueueFamilyProperties(device->_physical_device_vk, &familyCount, NULL);
-    device->_properties.pass_timestamps = false;
-    if (device->_graphics_queue_family_index < familyCount) {
-        const uint32_t familyCapacity = familyCount;
-        VkQueueFamilyProperties *families = SPUD_NEW_ARRAY(&device->head.allocator, VkQueueFamilyProperties, familyCapacity);
-        if (families) {
-            vkGetPhysicalDeviceQueueFamilyProperties(device->_physical_device_vk, &familyCount, families);
-            device->_properties.pass_timestamps =
-                families[device->_graphics_queue_family_index].timestampValidBits > 0;
-            SPUD_DELETE_ARRAY(&device->head.allocator, VkQueueFamilyProperties, families, familyCapacity);
-        }
-    }
-}
-
-// spudgpu_enumerate_devices, with the instance's _devices_lock held.
-static SPUDRESULT spudgpuvulkan___enumerate_devices_locked(
+SPUDRESULT spudgpu_enumerate_adapters(
     spudgpu_instance instance,
-    spudgpu_device **ppOutputDevices,
-    uint32_t *pOutputDevicesCount) {
-    // The devices are made once; a later call hands out the same array.
-    if (instance->_devices) {
-        *ppOutputDevices = instance->_devices;
-        *pOutputDevicesCount = instance->_devices_count;
-        return SPUD_SUCCESS;
-    }
-
-    uint32_t deviceCount = 0;
-    vkEnumeratePhysicalDevices(instance->_instance_vk, &deviceCount, NULL);
-    if (deviceCount == 0) {
-        //throw std::runtime_error("failed to find GPUs with Vulkan support!");
-        return SPUDRESULT_GPU_DEVICE_ENUMERATION_FAILURE;
-    }
-    const SPUD_ALLOCATOR *allocator = &instance->head.allocator;
-    // A count vkEnumeratePhysicalDevices may lower; the arrays are freed with
-    // the one they were made with.
-    const uint32_t physicalDeviceCapacity = deviceCount;
-    VkPhysicalDevice *physicalDevices = SPUD_NEW_ARRAY(allocator, VkPhysicalDevice, physicalDeviceCapacity);
-    if (!physicalDevices)
-        return SPUDRESULT_OUT_OF_MEMORY;
-    vkEnumeratePhysicalDevices(instance->_instance_vk, &deviceCount, physicalDevices);
-
-    // Finally initialize the Vulkan logical devices and gather them. The
-    // array is the instance's, and the caller is handed it: the devices and
-    // the array are freed by spudgpu_destroy_instance.
-    spudgpu_device *devices = SPUD_NEW_ARRAY_ZEROED(allocator, spudgpu_device, deviceCount);
-    if (!devices) {
-        SPUD_DELETE_ARRAY(allocator, VkPhysicalDevice, physicalDevices, physicalDeviceCapacity);
-        return SPUDRESULT_OUT_OF_MEMORY;
-    }
-
-    for (size_t i = 0; i < deviceCount; i++) {
-        // Zeroed: the name and the members a failed device creation leaves
-        // unset are null, which is what spudgpuvulkan___destroy_device frees.
-        spudgpu_device_vulkan *pDeviceVulkan = SPUD_NEW_ZEROED(allocator, spudgpu_device_vulkan);
-        if (!pDeviceVulkan) {
-            // All or none: the devices made so far go with the array.
-            for (size_t j = 0; j < i; j++)
-                spudgpuvulkan___destroy_device((spudgpu_device_vulkan *) devices[j]);
-            SPUD_DELETE_ARRAY(allocator, spudgpu_device, devices, deviceCount);
-            SPUD_DELETE_ARRAY(allocator, VkPhysicalDevice, physicalDevices, physicalDeviceCapacity);
-            return SPUDRESULT_OUT_OF_MEMORY;
-        }
-        pDeviceVulkan->head.debug_name = NULL;
-        pDeviceVulkan->head.allocator = instance->head.allocator;
-        pDeviceVulkan->_bindless = NULL;
-        pDeviceVulkan->_instance = *instance;
-        pDeviceVulkan->_physical_device_vk = physicalDevices[i];
-        pDeviceVulkan->_logical_device_vk = spudgpuvulkan___initialize_vk_logical_device_internal(pDeviceVulkan);
-
-        // Grab the properties and feature descriptors.
-        vkGetPhysicalDeviceProperties(pDeviceVulkan->_physical_device_vk, &pDeviceVulkan->_properties_vk);
-        vkGetPhysicalDeviceFeatures(pDeviceVulkan->_physical_device_vk, &pDeviceVulkan->_features_vk);
-        spudgpuvulkan___internal_make_device_properties(pDeviceVulkan);
-
-        // Both must happen before this device is ever copied by value (every
-        // other Vulkan-backend struct embeds spudgpu_device_vulkan as a
-        // snapshot) — see spudgpuvulkandescriptors.c's bindless section.
-        // A device without bindless is still a device; one whose logical
-        // device was made has a queue, or the enumeration fails, all or none.
-        spudgpuvulkan___create_bindless_state(pDeviceVulkan);
-        if (pDeviceVulkan->_logical_device_vk) {
-            const SPUDRESULT queue_sr = spudgpuvulkan___create_graphics_queue(pDeviceVulkan);
-            if (queue_sr != SPUD_SUCCESS) {
-                spudgpuvulkan___destroy_device(pDeviceVulkan);
-                for (size_t j = 0; j < i; j++)
-                    spudgpuvulkan___destroy_device((spudgpu_device_vulkan *) devices[j]);
-                SPUD_DELETE_ARRAY(allocator, spudgpu_device, devices, deviceCount);
-                SPUD_DELETE_ARRAY(allocator, VkPhysicalDevice, physicalDevices, physicalDeviceCapacity);
-                return queue_sr;
-            }
-        }
-
-        devices[i] = (spudgpu_device) pDeviceVulkan;
-    }
-
-    instance->_devices = devices;
-    instance->_devices_count = deviceCount;
-    *ppOutputDevices = instance->_devices;
-    *pOutputDevicesCount = deviceCount;
-
-    SPUD_DELETE_ARRAY(allocator, VkPhysicalDevice, physicalDevices, physicalDeviceCapacity);
+    const spudgpu_adapter **out_adapters,
+    uint32_t *out_adapters_count) {
+    if (!instance) return SPUDRESULT_GPU_INVALID_INSTANCE;
+    if (!out_adapters) return SPUDRESULT_NULL_OUTPUT_PARAMETER;
+    if (!out_adapters_count) return SPUDRESULT_NULL_OUTPUT_PARAMETER;
+    *out_adapters       = instance->_adapters;
+    *out_adapters_count = instance->_adapter_count;
     return SPUD_SUCCESS;
 }
 
-// The first call makes the devices, under the instance's lock, so that a
-// first call on each of two threads makes one set of devices: the second
-// waits for the first and is handed the same array.
-SPUDRESULT spudgpu_enumerate_devices(
-    spudgpu_instance instance,
-    spudgpu_device **ppOutputDevices,
-    uint32_t *pOutputDevicesCount) {
-    if (!instance) return SPUDRESULT_GPU_INVALID_INSTANCE;
-    if (!ppOutputDevices) return SPUDRESULT_NULL_OUTPUT_PARAMETER;
-    if (!pOutputDevicesCount) return SPUDRESULT_NULL_OUTPUT_PARAMETER;
-    spud_mutex_lock(instance->_devices_lock);
-    const SPUDRESULT sr = spudgpuvulkan___enumerate_devices_locked(instance, ppOutputDevices, pOutputDevicesCount);
-    spud_mutex_unlock(instance->_devices_lock);
-    return sr;
+SPUDRESULT spudgpu_get_adapter_properties(
+    spudgpu_adapter adapter,
+    SPUDGPU_ADAPTER_PROPERTIES *out_properties) {
+    if (!adapter) return SPUDRESULT_GPU_INVALID_ADAPTER;
+    return spudgpu___internal_get_adapter_properties(&adapter->_facts, out_properties);
 }
 
-SPUDRESULT spudgpu_get_device_properties(
-    spudgpu_device device, SPUDGPU_DEVICE_PROPERTIES *out_properties) {
-	if (!device)
-		return SPUDRESULT_GPU_INVALID_DEVICE;
-	if (!out_properties)
-		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
-	const SPUDRESULT base_sr = spud_struct_out_check(&out_properties->base, SPUD_STRUCT_TYPE_GPU_DEVICE_PROPERTIES);
-	if (base_sr != SPUD_SUCCESS)
-		return base_sr;
-	memcpy(
-	    out_properties, &device->_properties,
-	    sizeof(SPUDGPU_DEVICE_PROPERTIES));
-	// Whatever was copied over it, the base stays the caller's.
-	out_properties->base = spud_struct_base_out(SPUD_STRUCT_TYPE_GPU_DEVICE_PROPERTIES);
-	return SPUD_SUCCESS;
+SPUDRESULT spudgpu_adapter_supports_surface(
+    spudgpu_adapter adapter,
+    spudgpu_surface surface,
+    bool *out_supported) {
+    if (!adapter) return SPUDRESULT_GPU_INVALID_ADAPTER;
+    if (!surface) return SPUDRESULT_GPU_INVALID_SURFACE;
+    if (!out_supported) return SPUDRESULT_NULL_OUTPUT_PARAMETER;
+    *out_supported = false;
+    // Without VK_KHR_swapchain no device on the adapter presents at all.
+    if (!(adapter->_facts.properties.supported_features & SPUDGPU_FEATURE_PRESENT))
+        return SPUD_SUCCESS;
+    VkBool32 supported = VK_FALSE;
+    if (vkGetPhysicalDeviceSurfaceSupportKHR(adapter->_physical_device_vk, adapter->_family_direct, surface->_surface_vk, &supported) !=
+        VK_SUCCESS)
+        return SPUDRESULT_API_SPECIFIC_FAILURE;
+    *out_supported = supported == VK_TRUE;
+    return SPUD_SUCCESS;
+}
+
+#if __cplusplus
+}
+#endif
+
+// ---------------------------------------------------------------------------
+// Devices
+// ---------------------------------------------------------------------------
+
+// The queue family [type] is made from on [adapter]; a bundle's lists run
+// inside a direct list, so its allocator is of the direct family.
+uint32_t spudgpuvulkan___family_of(const spudgpu_adapter_vulkan *adapter, SPUDGPU_COMMAND_LIST_TYPE type) {
+    switch (type) {
+    case SPUDGPU_COMMAND_LIST_TYPE_COMPUTE: return adapter->_family_compute;
+    case SPUDGPU_COMMAND_LIST_TYPE_COPY: return adapter->_family_copy;
+    default: return adapter->_family_direct;
+    }
+}
+
+static void spudgpuvulkan___destroy_queues(const SPUD_ALLOCATOR *allocator, struct spudgpu_command_queue_t **queues, uint32_t count) {
+    if (!queues) return;
+    for (uint32_t i = 0; i < count; i++) {
+        spudgpu_command_queue_vulkan *queue = queues[i];
+        if (!queue) continue;
+        spud_string_free(allocator, queue->head.debug_name);
+        SPUD_DELETE(allocator, spudgpu_command_queue_vulkan, queue);
+    }
+    SPUD_DELETE_ARRAY(allocator, struct spudgpu_command_queue_t *, queues, count);
+}
+
+// Hands out [count] queues of [family], from [first] on, as a new array at
+// [*out_queues]: all or none.
+static SPUDRESULT spudgpuvulkan___take_queues(
+    spudgpu_device_vulkan *device,
+    uint32_t family,
+    uint32_t first,
+    uint32_t count,
+    struct spudgpu_command_queue_t ***out_queues) {
+    const SPUD_ALLOCATOR *allocator = &device->head.allocator;
+    *out_queues = NULL;
+    if (count == 0) return SPUD_SUCCESS;
+    struct spudgpu_command_queue_t **queues = SPUD_NEW_ARRAY_ZEROED(allocator, struct spudgpu_command_queue_t *, count);
+    if (!queues) return SPUDRESULT_OUT_OF_MEMORY;
+    for (uint32_t i = 0; i < count; i++) {
+        spudgpu_command_queue_vulkan *queue = SPUD_NEW_ZEROED(allocator, spudgpu_command_queue_vulkan);
+        if (!queue) {
+            spudgpuvulkan___destroy_queues(allocator, queues, count);
+            return SPUDRESULT_OUT_OF_MEMORY;
+        }
+        queue->head.allocator      = device->head.allocator;
+        queue->_queue_family_index = family;
+        vkGetDeviceQueue(device->_logical_device_vk, family, first + i, &queue->_queue_vk);
+        queues[i] = queue;
+    }
+    *out_queues = queues;
+    return SPUD_SUCCESS;
+}
+
+// The VkDevice of [device], with its queues' families and the base set
+// SpudGPU relies on, plus exactly what [desc] asks for.
+static VkResult spudgpuvulkan___create_logical_device(
+    spudgpu_device_vulkan *device,
+    const spudgpu_device_desc *desc) {
+    const spudgpu_adapter_vulkan *adapter = device->_adapter;
+    const SPUD_ALLOCATOR *allocator       = &device->head.allocator;
+    const SPUDGPU_FEATURES features       = desc->required_features;
+
+    // One VkDeviceQueueCreateInfo per distinct family, its count the sum of
+    // the kinds made from it. SpudGPU sets no priority: every queue the same
+    // value, which in Vulkan's relative scheme is no preference.
+    const uint32_t families[3] = {adapter->_family_direct, adapter->_family_compute, adapter->_family_copy};
+    const uint32_t counts[3]   = {desc->direct_queue_count, desc->compute_queue_count, desc->copy_queue_count};
+    VkDeviceQueueCreateInfo queueInfos[3];
+    uint32_t queueInfoCount = 0;
+    uint32_t largest        = 0;
+    for (uint32_t k = 0; k < 3; k++) {
+        if (counts[k] == 0) continue;
+        uint32_t q = 0;
+        while (q < queueInfoCount && queueInfos[q].queueFamilyIndex != families[k]) q++;
+        if (q == queueInfoCount) {
+            memset(&queueInfos[q], 0, sizeof(queueInfos[q]));
+            queueInfos[q].sType            = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
+            queueInfos[q].queueFamilyIndex = families[k];
+            queueInfoCount++;
+        }
+        queueInfos[q].queueCount += counts[k];
+        if (queueInfos[q].queueCount > largest) largest = queueInfos[q].queueCount;
+    }
+    float *priorities = SPUD_NEW_ARRAY(allocator, float, largest);
+    if (!priorities) return VK_ERROR_OUT_OF_HOST_MEMORY;
+    for (uint32_t i = 0; i < largest; i++) priorities[i] = 1.0f;
+    for (uint32_t q = 0; q < queueInfoCount; q++) queueInfos[q].pQueuePriorities = priorities;
+
+    VkPhysicalDeviceFeatures deviceFeatures = {0};
+    deviceFeatures.depthBiasClamp    = (features & SPUDGPU_FEATURE_DEPTH_BIAS_CLAMP) ? VK_TRUE : VK_FALSE;
+    deviceFeatures.independentBlend  = (features & SPUDGPU_FEATURE_INDEPENDENT_BLEND) ? VK_TRUE : VK_FALSE;
+    deviceFeatures.multiDrawIndirect = (features & SPUDGPU_FEATURE_MULTI_DRAW_INDIRECT) ? VK_TRUE : VK_FALSE;
+    deviceFeatures.imageCubeArray    = (features & SPUDGPU_FEATURE_CUBE_ARRAY_VIEWS) ? VK_TRUE : VK_FALSE;
+    deviceFeatures.depthBounds       = (features & SPUDGPU_FEATURE_DEPTH_BOUNDS_TEST) ? VK_TRUE : VK_FALSE;
+
+    // The base set: every buffer has an address (spudgpu_get_buffer_gpu_address),
+    // spudgpu_fence is a timeline semaphore (spudgpuvulkansync.c).
+    VkPhysicalDeviceVulkan12Features vk12Features = {0};
+    vk12Features.sType               = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
+    vk12Features.bufferDeviceAddress = VK_TRUE;
+    vk12Features.timelineSemaphore   = VK_TRUE;
+    vk12Features.shaderOutputLayer   = (features & SPUDGPU_FEATURE_LAYERED_RENDERING) ? VK_TRUE : VK_FALSE;
+    // The bindless table (spudgpuvulkandescriptors.c), and only with it.
+    if (features & SPUDGPU_FEATURE_BINDLESS) {
+        vk12Features.descriptorIndexing                            = VK_TRUE;
+        vk12Features.shaderSampledImageArrayNonUniformIndexing     = VK_TRUE;
+        vk12Features.shaderStorageImageArrayNonUniformIndexing     = VK_TRUE;
+        vk12Features.shaderStorageBufferArrayNonUniformIndexing    = VK_TRUE;
+        vk12Features.descriptorBindingSampledImageUpdateAfterBind  = VK_TRUE;
+        vk12Features.descriptorBindingStorageImageUpdateAfterBind  = VK_TRUE;
+        vk12Features.descriptorBindingStorageBufferUpdateAfterBind = VK_TRUE;
+        vk12Features.descriptorBindingPartiallyBound               = VK_TRUE;
+        vk12Features.descriptorBindingVariableDescriptorCount      = VK_TRUE;
+        vk12Features.runtimeDescriptorArray                        = VK_TRUE;
+    }
+
+    VkPhysicalDeviceVulkan13Features vk13Features = {0};
+    vk13Features.sType            = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
+    vk13Features.pNext            = &vk12Features;
+    vk13Features.dynamicRendering = VK_TRUE;
+    vk13Features.synchronization2 = VK_TRUE;
+
+    const char *deviceExtensions[2];
+    uint32_t deviceExtensionCount = 0;
+    if (features & SPUDGPU_FEATURE_PRESENT)
+        deviceExtensions[deviceExtensionCount++] = VK_KHR_SWAPCHAIN_EXTENSION_NAME;
+    VkPhysicalDeviceMeshShaderFeaturesEXT meshShaderFeatures = {0};
+    if (features & SPUDGPU_FEATURE_MESH_SHADING) {
+        deviceExtensions[deviceExtensionCount++] = VK_EXT_MESH_SHADER_EXTENSION_NAME;
+        // meshShader alone: taskShader stays off, since nothing here uses
+        // amplification shaders yet, and the bits that need other features
+        // (multiview, fragment shading rate) are never asked for.
+        meshShaderFeatures.sType      = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_FEATURES_EXT;
+        meshShaderFeatures.meshShader = VK_TRUE;
+        meshShaderFeatures.pNext      = vk13Features.pNext;
+        vk13Features.pNext            = &meshShaderFeatures;
+    }
+
+    VkDeviceCreateInfo createInfo = {0};
+    createInfo.sType                   = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
+    createInfo.pNext                   = &vk13Features;
+    createInfo.pQueueCreateInfos       = queueInfos;
+    createInfo.queueCreateInfoCount    = queueInfoCount;
+    createInfo.pEnabledFeatures        = &deviceFeatures;
+    createInfo.enabledExtensionCount   = deviceExtensionCount;
+    createInfo.ppEnabledExtensionNames = deviceExtensionCount ? deviceExtensions : NULL;
+
+    const VkResult r = vkCreateDevice(device->_physical_device_vk, &createInfo, NULL, &device->_logical_device_vk);
+    SPUD_DELETE_ARRAY(allocator, float, priorities, largest);
+    if (r != VK_SUCCESS)
+        device->_logical_device_vk = VK_NULL_HANDLE;
+    return r;
+}
+
+// Frees [device] and everything it owns, and gives its adapter back. Every
+// member is made or NULL, so a device that failed part way is freed too.
+static void spudgpuvulkan___free_device(spudgpu_device_vulkan *device) {
+    const SPUD_ALLOCATOR allocator = device->head.allocator;
+    spudgpuvulkan___destroy_queues(&allocator, device->_cmd_queues_direct, device->_cmd_queue_count_direct);
+    spudgpuvulkan___destroy_queues(&allocator, device->_cmd_queues_compute, device->_cmd_queue_count_compute);
+    spudgpuvulkan___destroy_queues(&allocator, device->_cmd_queues_copy, device->_cmd_queue_count_copy);
+    spudgpuvulkan___destroy_bindless_state((spudgpu_device) device);
+    if (device->_logical_device_vk)
+        vkDestroyDevice(device->_logical_device_vk, NULL);
+    SPUD_DELETE(&allocator, spudgpu_device_shared_vulkan, device->_shared);
+    spudgpu_adapter_vulkan *adapter = device->_adapter;
+    spud_string_free(&allocator, device->head.debug_name);
+    SPUD_DELETE(&allocator, spudgpu_device_vulkan, device);
+    atomic_store(&adapter->_in_use, false);
+}
+
+#if __cplusplus
+extern "C" {
+#endif
+
+SPUDRESULT spudgpu_create_device(
+    spudgpu_adapter adapter,
+    const spudgpu_device_desc *desc,
+    spudgpu_device *out_device) {
+    if (!adapter) return SPUDRESULT_GPU_INVALID_ADAPTER;
+    const SPUDRESULT check_sr = spudgpu___internal_check_device_desc(&adapter->_facts, desc, out_device);
+    if (check_sr != SPUD_SUCCESS) return check_sr;
+    // Last: one device per adapter at a time.
+    if (atomic_exchange(&adapter->_in_use, true)) return SPUDRESULT_GPU_ADAPTER_IN_USE;
+
+    const SPUD_ALLOCATOR *allocator = &adapter->head.allocator;
+    // Zeroed: every member a failure below leaves unset is NULL, which
+    // spudgpuvulkan___free_device frees.
+    spudgpu_device_vulkan *device = SPUD_NEW_ZEROED(allocator, spudgpu_device_vulkan);
+    if (!device) {
+        atomic_store(&adapter->_in_use, false);
+        return SPUDRESULT_OUT_OF_MEMORY;
+    }
+    device->head.allocator              = adapter->head.allocator;
+    device->_adapter                    = adapter;
+    device->_physical_device_vk         = adapter->_physical_device_vk;
+    device->_features                   = desc->required_features;
+    device->_properties_vk              = adapter->_properties_vk;
+    device->_graphics_queue_family_index = adapter->_family_direct;
+
+    device->_shared = SPUD_NEW_ZEROED(allocator, spudgpu_device_shared_vulkan);
+    if (!device->_shared) {
+        spudgpuvulkan___free_device(device);
+        return SPUDRESULT_OUT_OF_MEMORY;
+    }
+    if (!spudgpu___internal_budget_init(&device->_shared->budget, desc->max_descriptors, desc->max_samplers)) {
+        spudgpuvulkan___free_device(device);
+        return SPUDRESULT_GENERAL_FAILURE;
+    }
+#if _DEBUG
+    if (!spudgpu___internal_live_init(&device->_shared->live)) {
+        spudgpu___internal_budget_destroy(&device->_shared->budget);
+        spudgpuvulkan___free_device(device);
+        return SPUDRESULT_GENERAL_FAILURE;
+    }
+#endif
+
+    SPUDRESULT sr = SPUD_SUCCESS;
+    const VkResult r = spudgpuvulkan___create_logical_device(device, desc);
+    if (r == VK_ERROR_OUT_OF_HOST_MEMORY) sr = SPUDRESULT_OUT_OF_MEMORY;
+    else if (r != VK_SUCCESS) sr = SPUDRESULT_API_SPECIFIC_FAILURE;
+
+    if (sr == SPUD_SUCCESS) {
+        // NULL where the instance has no VK_EXT_debug_utils: the label calls
+        // then record nothing.
+        device->_vkCmdBeginDebugUtilsLabelEXT = (PFN_vkCmdBeginDebugUtilsLabelEXT)
+            vkGetDeviceProcAddr(device->_logical_device_vk, "vkCmdBeginDebugUtilsLabelEXT");
+        device->_vkCmdEndDebugUtilsLabelEXT = (PFN_vkCmdEndDebugUtilsLabelEXT)
+            vkGetDeviceProcAddr(device->_logical_device_vk, "vkCmdEndDebugUtilsLabelEXT");
+        if (desc->required_features & SPUDGPU_FEATURE_MESH_SHADING)
+            device->_vkCmdDrawMeshTasksEXT = (PFN_vkCmdDrawMeshTasksEXT)
+                vkGetDeviceProcAddr(device->_logical_device_vk, "vkCmdDrawMeshTasksEXT");
+
+        // Kinds made from one family take consecutive queues of it, in the
+        // order direct, compute, copy.
+        const uint32_t families[3] = {adapter->_family_direct, adapter->_family_compute, adapter->_family_copy};
+        const uint32_t counts[3]   = {desc->direct_queue_count, desc->compute_queue_count, desc->copy_queue_count};
+        uint32_t first[3];
+        for (uint32_t k = 0; k < 3; k++) {
+            first[k] = 0;
+            for (uint32_t j = 0; j < k; j++)
+                if (families[j] == families[k]) first[k] += counts[j];
+        }
+        sr = spudgpuvulkan___take_queues(device, families[0], first[0], counts[0], &device->_cmd_queues_direct);
+        if (sr == SPUD_SUCCESS) {
+            device->_cmd_queue_count_direct = counts[0];
+            sr = spudgpuvulkan___take_queues(device, families[1], first[1], counts[1], &device->_cmd_queues_compute);
+        }
+        if (sr == SPUD_SUCCESS) {
+            device->_cmd_queue_count_compute = counts[1];
+            sr = spudgpuvulkan___take_queues(device, families[2], first[2], counts[2], &device->_cmd_queues_copy);
+        }
+        if (sr == SPUD_SUCCESS)
+            device->_cmd_queue_count_copy = counts[2];
+    }
+    // The bindless table comes out of the budget, which the desc check found
+    // holds it.
+    if (sr == SPUD_SUCCESS && (desc->required_features & SPUDGPU_FEATURE_BINDLESS)) {
+        const uint64_t table = (uint64_t) adapter->_facts.bindless_max_sampled_images +
+                               adapter->_facts.bindless_max_storage_images + adapter->_facts.bindless_max_storage_buffers;
+        sr = spudgpu___internal_budget_take(&device->_shared->budget, table, 0);
+        if (sr == SPUD_SUCCESS)
+            sr = spudgpuvulkan___create_bindless_state((spudgpu_device) device);
+    }
+    if (sr == SPUD_SUCCESS && spud_debug_name_set(device, desc->debug_name) != SPUD_SUCCESS)
+        sr = SPUDRESULT_OUT_OF_MEMORY;
+    if (sr != SPUD_SUCCESS) {
+#if _DEBUG
+        spudgpu___internal_live_destroy(&device->_shared->live);
+#endif
+        spudgpu___internal_budget_destroy(&device->_shared->budget);
+        spudgpuvulkan___free_device(device);
+        return sr;
+    }
+
+    *out_device = device;
+    return SPUD_SUCCESS;
+}
+
+void spudgpu_destroy_device(spudgpu_device device) {
+    if (!device) return;
+#if _DEBUG
+    spudgpu___internal_live_check_none(&device->_shared->live, device->head.debug_name);
+    spudgpu___internal_live_destroy(&device->_shared->live);
+#endif
+    spudgpu___internal_budget_destroy(&device->_shared->budget);
+    spudgpuvulkan___free_device(device);
+}
+
+spudgpu_adapter spudgpu_get_device_adapter(spudgpu_device device) {
+    return device ? (spudgpu_adapter) device->_adapter : NULL;
+}
+
+SPUDGPU_FEATURES spudgpu_get_device_features(spudgpu_device device) {
+    return device ? device->_features : 0;
 }
 
 SPUDGPU_NATIVE_API spudgpu_get_native_gpu_api(spudgpu_instance instance) {
     return instance ? SPUDGPU_NATIVE_API_VULKAN : SPUDGPU_NATIVE_API_NONE;
 }
 
-#if SPUDGPU_EXT_MESH_SHADING
-SPUDRESULT spudgpu_get_mesh_shading_capabilities(
-    spudgpu_device device, spudgpu_mesh_shading_capabilities *out_caps) {
-    if (!device)
-        return SPUDRESULT_GPU_INVALID_DEVICE;
-    if (!out_caps)
-        return SPUDRESULT_NULL_OUTPUT_PARAMETER;
-    const SPUDRESULT base_sr = spud_struct_out_check(&out_caps->base, SPUD_STRUCT_TYPE_GPU_MESH_SHADING_CAPABILITIES);
-    if (base_sr != SPUD_SUCCESS)
-        return base_sr;
-
-    memset(out_caps, 0, sizeof(*out_caps));
-    // Whatever was copied over it, the base stays the caller's.
-    out_caps->base = spud_struct_base_out(SPUD_STRUCT_TYPE_GPU_MESH_SHADING_CAPABILITIES);
-    out_caps->supported = device->_mesh_shading_supported;
-    if (device->_mesh_shading_supported) {
-        out_caps->max_mesh_output_vertices       = device->_mesh_shading_max_output_vertices;
-        out_caps->max_mesh_output_primitives     = device->_mesh_shading_max_output_primitives;
-        out_caps->max_mesh_workgroup_invocations = device->_mesh_shading_max_workgroup_invocations;
-    }
-    return SPUD_SUCCESS;
-}
-#endif
-
-#if SPUDGPU_EXT_DEPTH_BOUNDS_TEST
-SPUDRESULT spudgpu_get_depth_bounds_capabilities(
-    spudgpu_device device, spudgpu_depth_bounds_capabilities *out_caps) {
-    if (!device)
-        return SPUDRESULT_GPU_INVALID_DEVICE;
-    if (!out_caps)
-        return SPUDRESULT_NULL_OUTPUT_PARAMETER;
-    const SPUDRESULT base_sr = spud_struct_out_check(&out_caps->base, SPUD_STRUCT_TYPE_GPU_DEPTH_BOUNDS_CAPABILITIES);
-    if (base_sr != SPUD_SUCCESS)
-        return base_sr;
-
-    memset(out_caps, 0, sizeof(*out_caps));
-    // Whatever was copied over it, the base stays the caller's.
-    out_caps->base = spud_struct_base_out(SPUD_STRUCT_TYPE_GPU_DEPTH_BOUNDS_CAPABILITIES);
-    out_caps->supported = device->_depth_bounds_test_supported;
-    return SPUD_SUCCESS;
-}
-#endif
-
 #if __cplusplus
 }
 #endif
 
-/*
-std::vector<std::shared_ptr<gpu_device> > initialize_devices_vulkan() {
-    std::vector<std::shared_ptr<gpu_device_vulkan> > spudVulkanDevices = std::vector<std::shared_ptr<
-        gpu_device_vulkan> >();
-
-    uint32_t deviceCount = 0;
-    {
-        vkEnumeratePhysicalDevices(g_pVulkanInstance, &deviceCount, NULL);
-        if (deviceCount == 0) {
-            throw std::runtime_error("failed to find GPUs with Vulkan support!");
-        }
-        std::vector<VkPhysicalDevice> physicalDevices(deviceCount);
-        vkEnumeratePhysicalDevices(g_pVulkanInstance, &deviceCount, physicalDevices.data());
-        spudVulkanDevices.resize(deviceCount);
-
-        for (size_t i = 0; i < deviceCount; i++) {
-            auto spudVulkanDevice = std::make_shared<gpu_device_vulkan>();
-            spudVulkanDevice->initialize_from_physical_device_impl(physicalDevices[i]);
-            spudVulkanDevices[i] = spudVulkanDevice;
-        }
-    }
-
-    // Convert all to base classes for return.
-    std::vector<std::shared_ptr<gpu_device> > spudGpuDevices(spudVulkanDevices.size());
-    for (size_t i = 0; i < spudVulkanDevices.size(); i++)
-        spudGpuDevices[i] = spudVulkanDevices[i];
-
-    return spudGpuDevices;
-}
-
-void terminate_devices_vulkan() {
-}
-}*/
-
 #endif //SPUDGPU_COMPILE_VULKAN_API
-

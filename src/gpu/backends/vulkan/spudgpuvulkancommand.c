@@ -14,12 +14,38 @@ extern "C" {
 
 #endif
 
-// The device's own queue, made with it (spudgpu_enumerate_devices): every
-// call hands out the same one, as D3D12 and Metal do, so the caller can tell
-// two uses of one VkQueue apart from uses of two.
-spudgpu_command_queue spudgpu_get_graphics_queue(spudgpu_device device) {
-    if (!device) return NULL;
-    return device->_graphics_queue;
+// The device's own queues, made with it (spudgpu_create_device): the same
+// kind and index always hand out the same one, as on D3D12 and Metal, so the
+// caller can tell two uses of one VkQueue apart from uses of two.
+SPUDRESULT spudgpu_get_command_queue(
+    spudgpu_device device,
+    SPUDGPU_COMMAND_LIST_TYPE type,
+    uint32_t index,
+    spudgpu_command_queue *out_queue) {
+    if (!device) return SPUDRESULT_GPU_INVALID_DEVICE;
+    struct spudgpu_command_queue_t **queues = NULL;
+    uint32_t count = 0;
+    switch (type) {
+    case SPUDGPU_COMMAND_LIST_TYPE_DIRECT:
+        queues = device->_cmd_queues_direct;
+        count  = device->_cmd_queue_count_direct;
+        break;
+    case SPUDGPU_COMMAND_LIST_TYPE_COMPUTE:
+        queues = device->_cmd_queues_compute;
+        count  = device->_cmd_queue_count_compute;
+        break;
+    case SPUDGPU_COMMAND_LIST_TYPE_COPY:
+        queues = device->_cmd_queues_copy;
+        count  = device->_cmd_queue_count_copy;
+        break;
+    default:
+        // Bundles aren't submitted to a queue, on any backend.
+        return SPUDRESULT_GPU_INVALID_COMMAND_LIST_TYPE;
+    }
+    if (index >= count) return SPUDRESULT_INDEX_OUT_OF_RANGE;
+    if (!out_queue) return SPUDRESULT_NULL_OUTPUT_PARAMETER;
+    *out_queue = queues[index];
+    return SPUD_SUCCESS;
 }
 
 SPUDRESULT spudgpu_submit_command_lists(
@@ -84,23 +110,21 @@ SPUDRESULT spudgpu_create_command_allocator(
     if (base_sr != SPUD_SUCCESS) return base_sr;
     if (!out_allocator) return SPUDRESULT_NULL_OUTPUT_PARAMETER;
 
-    // Re-query graphics family (you'll want to cache this on the device later)
-    const SPUD_ALLOCATOR *allocator = &device->head.allocator;
-    uint32_t family_count = 0;
-    vkGetPhysicalDeviceQueueFamilyProperties(device->_physical_device_vk, &family_count, NULL);
-    const uint32_t family_capacity = family_count;
-    VkQueueFamilyProperties *families = SPUD_NEW_ARRAY_ZEROED(allocator, VkQueueFamilyProperties, family_capacity);
-    if (!families) return SPUDRESULT_OUT_OF_MEMORY;
-    vkGetPhysicalDeviceQueueFamilyProperties(device->_physical_device_vk, &family_count, families);
-
-    uint32_t graphics_family = SPUD_UINT32_MAX;
-    for (uint32_t i = 0; i < family_count; i++) {
-        if (families[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) {
-            graphics_family = i;
-            break;
-        }
+    // The lists of an allocator are submitted to a queue of its kind, a
+    // bundle's run inside a direct list: the device must have one, and the
+    // pool is of that kind's family (Vulkan allows a pool only of a family
+    // the device has queues of).
+    uint32_t queues = 0;
+    switch (desc->type) {
+    case SPUDGPU_COMMAND_LIST_TYPE_DIRECT:
+    case SPUDGPU_COMMAND_LIST_TYPE_BUNDLE: queues = device->_cmd_queue_count_direct; break;
+    case SPUDGPU_COMMAND_LIST_TYPE_COMPUTE: queues = device->_cmd_queue_count_compute; break;
+    case SPUDGPU_COMMAND_LIST_TYPE_COPY: queues = device->_cmd_queue_count_copy; break;
+    default: break;
     }
-    SPUD_DELETE_ARRAY(allocator, VkQueueFamilyProperties, families, family_capacity);
+    if (queues == 0) return SPUDRESULT_GPU_INVALID_COMMAND_LIST_TYPE;
+    const SPUD_ALLOCATOR *allocator = &device->head.allocator;
+    const uint32_t graphics_family  = spudgpuvulkan___family_of(device->_adapter, desc->type);
 
     VkCommandPoolCreateInfo pool_info = {0};
     pool_info.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
@@ -124,6 +148,7 @@ SPUDRESULT spudgpu_create_command_allocator(
         return SPUDRESULT_API_SPECIFIC_FAILURE;
     }
 
+    SPUDGPU___LIVE_ADD(&device->_shared->live, SPUDGPU___OBJECT_COMMAND_ALLOCATOR);
     *out_allocator = alloc;
     return SPUD_SUCCESS;
 }
@@ -142,6 +167,7 @@ SPUDRESULT spudgpu_reset_command_allocator(spudgpu_command_allocator allocator) 
 void spudgpu_destroy_command_allocator(spudgpu_command_allocator allocator) {
     if (!allocator) return;
     vkDestroyCommandPool(allocator->_device._logical_device_vk, allocator->_command_pool_vk, NULL);
+    SPUDGPU___LIVE_REMOVE(&allocator->_device._shared->live, SPUDGPU___OBJECT_COMMAND_ALLOCATOR);
     const SPUD_ALLOCATOR memory_allocator = allocator->head.allocator;
     spud_string_free(&memory_allocator, allocator->head.debug_name);
     SPUD_DELETE(&memory_allocator, spudgpu_command_allocator_vulkan, allocator);
@@ -176,6 +202,7 @@ SPUDRESULT spudgpu_create_command_list(
         return SPUDRESULT_API_SPECIFIC_FAILURE;
     }
 
+    SPUDGPU___LIVE_ADD(&allocator->_device._shared->live, SPUDGPU___OBJECT_COMMAND_LIST);
 	*out_cmd_list = cl;
     return SPUD_SUCCESS;
 }
@@ -190,6 +217,7 @@ void spudgpu_destroy_command_list(spudgpu_command_list cmd) {
     // A list destroyed open is not open any more.
     spudgpuvulkan___debug_list_closed(cmd);
 #endif
+    SPUDGPU___LIVE_REMOVE(&cmd->_allocator._device._shared->live, SPUDGPU___OBJECT_COMMAND_LIST);
     const SPUD_ALLOCATOR allocator = cmd->head.allocator;
     spud_string_free(&allocator, cmd->head.debug_name);
     SPUD_DELETE(&allocator, spudgpu_command_list_vulkan, cmd);
@@ -644,7 +672,7 @@ void spudgpu_cmd_draw_indirect(
     uint32_t draw_count,
     uint32_t stride) {
     if (!cmd || !buffer || draw_count == 0) return;
-    if (draw_count > cmd->_allocator._device._properties.max_draw_indirect_count) return;
+    if (draw_count > spudgpuvulkan___max_draw_indirect_count(&cmd->_allocator._device)) return;
     if (stride % 4 != 0 || stride < sizeof(spudgpu_draw_indirect_args)) return;
     vkCmdDrawIndirect(
         cmd->_command_buffer_vk,
@@ -661,7 +689,7 @@ void spudgpu_cmd_draw_indexed_indirect(
     uint32_t draw_count,
     uint32_t stride) {
     if (!cmd || !buffer || draw_count == 0) return;
-    if (draw_count > cmd->_allocator._device._properties.max_draw_indirect_count) return;
+    if (draw_count > spudgpuvulkan___max_draw_indirect_count(&cmd->_allocator._device)) return;
     if (stride % 4 != 0 || stride < sizeof(spudgpu_draw_indexed_indirect_args)) return;
     vkCmdDrawIndexedIndirect(
         cmd->_command_buffer_vk,
@@ -682,7 +710,7 @@ void spudgpu_cmd_dispatch_mesh(
     // spudgpuvulkancontext.c - since VK_EXT_mesh_shader's entry points
     // don't come statically linked. NULL here means the device this
     // command list's allocator was created against never enabled mesh
-    // shading (spudgpu_get_mesh_shading_capabilities::supported was false).
+    // shading (it was created without SPUDGPU_FEATURE_MESH_SHADING).
     PFN_vkCmdDrawMeshTasksEXT draw_mesh_tasks = cmd->_allocator._device._vkCmdDrawMeshTasksEXT;
     if (!draw_mesh_tasks) return;
     draw_mesh_tasks(cmd->_command_buffer_vk, group_count_x, group_count_y, group_count_z);
@@ -695,12 +723,11 @@ void spudgpu_cmd_set_depth_bounds(
     float min_depth_bounds,
     float max_depth_bounds) {
     if (!cmd) return;
-    // _depth_bounds_test_supported is set once at device creation (see
-    // spudgpuvulkancontext.c) - false here means the depthBounds feature
-    // was never enabled on this device, so vkCmdSetDepthBounds would be
-    // invalid to call at all (mirrors spudgpu_cmd_dispatch_mesh's null
-    // function-pointer no-op guard above).
-    if (!cmd->_allocator._device._depth_bounds_test_supported) return;
+    // Without the feature depthBounds was never switched on for this device,
+    // so vkCmdSetDepthBounds would be invalid to call at all.
+    const bool enabled = (cmd->_allocator._device._features & SPUDGPU_FEATURE_DEPTH_BOUNDS_TEST) != 0;
+    assert(enabled && "spudgpu_cmd_set_depth_bounds: the device was created without SPUDGPU_FEATURE_DEPTH_BOUNDS_TEST");
+    if (!enabled) return;
     vkCmdSetDepthBounds(cmd->_command_buffer_vk, min_depth_bounds, max_depth_bounds);
 }
 #endif

@@ -14,7 +14,8 @@ extern "C" {
 
 IDXGIFactory7 *spudgpu_get_dxgi_factory(spudgpu_instance instance);
 
-IDXGIAdapter4 *spudgpu_get_dxgi_adapter(spudgpu_device device);
+/* An adapter is an IDXGIAdapter4. */
+IDXGIAdapter4 *spudgpu_get_dxgi_adapter(spudgpu_adapter adapter);
 ID3D12Device14 *spudgpu_get_d3d12_device(spudgpu_device device);
 
 ID3D12CommandQueue *

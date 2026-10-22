@@ -46,6 +46,8 @@ SPUDRESULT spudgpu_create_fence(
         return SPUDRESULT_API_SPECIFIC_FAILURE;
     }
     fence->_device_vk = device->_logical_device_vk;
+    fence->_shared    = device->_shared;
+    SPUDGPU___LIVE_ADD(&fence->_shared->live, SPUDGPU___OBJECT_FENCE);
     *out_fence = fence;
     return SPUD_SUCCESS;
 }
@@ -53,6 +55,7 @@ SPUDRESULT spudgpu_create_fence(
 void spudgpu_destroy_fence(spudgpu_fence fence) {
     if (!fence) return;
     vkDestroySemaphore(fence->_device_vk, fence->_semaphore_vk, NULL);
+    SPUDGPU___LIVE_REMOVE(&fence->_shared->live, SPUDGPU___OBJECT_FENCE);
     const SPUD_ALLOCATOR allocator = fence->head.allocator;
     spud_string_free(&allocator, fence->head.debug_name);
     SPUD_DELETE(&allocator, spudgpu_fence_vulkan, fence);
@@ -136,6 +139,8 @@ SPUDRESULT spudgpu_create_semaphore(
         return SPUDRESULT_API_SPECIFIC_FAILURE;
     }
     sem->_device_vk = device->_logical_device_vk;
+    sem->_shared    = device->_shared;
+    SPUDGPU___LIVE_ADD(&sem->_shared->live, SPUDGPU___OBJECT_SEMAPHORE);
     *out_semaphore = sem;
     return SPUD_SUCCESS;
 }
@@ -143,6 +148,7 @@ SPUDRESULT spudgpu_create_semaphore(
 void spudgpu_destroy_semaphore(spudgpu_semaphore semaphore) {
     if (!semaphore) return;
     vkDestroySemaphore(semaphore->_device_vk, semaphore->_semaphore_vk, NULL);
+    SPUDGPU___LIVE_REMOVE(&semaphore->_shared->live, SPUDGPU___OBJECT_SEMAPHORE);
     const SPUD_ALLOCATOR allocator = semaphore->head.allocator;
     spud_string_free(&allocator, semaphore->head.debug_name);
     SPUD_DELETE(&allocator, spudgpu_semaphore_vulkan, semaphore);

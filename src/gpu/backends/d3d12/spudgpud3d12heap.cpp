@@ -42,7 +42,7 @@ static D3D12_HEAP_FLAGS spudgpu_d3d12_heap_class_flags(SPUDGPU_HEAP_RESOURCE_CLA
 static SPUDRESULT spudgpu_d3d12_check_buffer_placement(
     spudgpu_heap heap,
     const spudgpu_buffer_desc *desc) {
-	const SPUDRESULT sr = spudgpu_d3d12_check_buffer_desc(&heap->_device->_properties, desc);
+	const SPUDRESULT sr = spudgpu_d3d12_check_buffer_desc(heap->_device->_features, desc);
 	if (sr != SPUD_SUCCESS)
 		return sr;
 	if (heap->_desc.resource_class != SPUDGPU_HEAP_RESOURCE_CLASS_BUFFERS ||
@@ -123,9 +123,9 @@ SPUDRESULT spudgpu_create_heap(
 		return SPUDRESULT_GPU_INVALID_MEMORY_KIND;
 	if (desc->resource_class != SPUDGPU_HEAP_RESOURCE_CLASS_BUFFERS && desc->memory_kind != SPUDGPU_MEMORY_KIND_DEVICE)
 		return SPUDRESULT_GPU_INVALID_MEMORY_KIND;
-	if (desc->memory_kind != SPUDGPU_MEMORY_KIND_DEVICE && !device->_properties.mappable_heaps)
+	if (desc->memory_kind != SPUDGPU_MEMORY_KIND_DEVICE && !(device->_features & SPUDGPU_FEATURE_MAPPABLE_HEAPS))
 		return SPUDRESULT_GPU_MEMORY_KIND_NOT_SUPPORTED;
-	if (desc->memory_kind == SPUDGPU_MEMORY_KIND_DEVICE_MAPPABLE && !device->_properties.device_mappable_memory)
+	if (desc->memory_kind == SPUDGPU_MEMORY_KIND_DEVICE_MAPPABLE && !(device->_features & SPUDGPU_FEATURE_DEVICE_MAPPABLE_MEMORY))
 		return SPUDRESULT_GPU_MEMORY_KIND_NOT_SUPPORTED;
 
 	spudgpu_heap_d3d12 *heap = SPUD_NEW(&device->head.allocator, spudgpu_heap_d3d12);
@@ -147,6 +147,7 @@ SPUDRESULT spudgpu_create_heap(
 		return SPUDRESULT_API_SPECIFIC_FAILURE;
 	}
 
+	SPUDGPU___LIVE_ADD(&device->_live, SPUDGPU___OBJECT_HEAP);
 	if (spud_debug_name_set(heap, desc->debug_name) != SPUD_SUCCESS) {
 		spudgpu_destroy_heap(heap);
 		return SPUDRESULT_OUT_OF_MEMORY;
@@ -165,6 +166,7 @@ void spudgpu_destroy_heap(spudgpu_heap heap) {
 	// spudgpu.h).
 	assert(heap->_placed_count == 0);
 #endif
+	SPUDGPU___LIVE_REMOVE(&heap->_device->_live, SPUDGPU___OBJECT_HEAP);
 	const SPUD_ALLOCATOR allocator = heap->head.allocator;
 	spud_string_free(&allocator, heap->head.debug_name);
 	heap->~spudgpu_heap_d3d12();
@@ -277,6 +279,7 @@ SPUDRESULT spudgpu_create_placed_buffer(
 	}
 	buffer->_d3d_gpu_address = buffer->_d3d_resource->GetGPUVirtualAddress();
 	buffer->_heap                      = heap;
+	SPUDGPU___LIVE_ADD(&heap->_device->_live, SPUDGPU___OBJECT_BUFFER);
 
 #if _DEBUG
 	// Counted before the name is copied: a failed copy destroys the buffer,
@@ -347,6 +350,7 @@ SPUDRESULT spudgpu_create_placed_image(
 	}
 	image->_current_state = initialState;
 	image->_heap          = heap;
+	SPUDGPU___LIVE_ADD(&heap->_device->_live, SPUDGPU___OBJECT_IMAGE);
 
 #if _DEBUG
 	heap->_placed_count++;

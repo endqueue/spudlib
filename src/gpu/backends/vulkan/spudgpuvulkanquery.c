@@ -22,7 +22,7 @@ SPUDRESULT spudgpu_create_timestamp_set(
     if (!queue) return SPUDRESULT_GPU_INVALID_COMMAND_QUEUE;
     if (count == 0) return SPUDRESULT_ZERO_SIZE;
     if (!out_set) return SPUDRESULT_NULL_OUTPUT_PARAMETER;
-    if (!device->_properties.pass_timestamps) return SPUDRESULT_GPU_TIMESTAMPS_NOT_SUPPORTED;
+    if (!(device->_features & SPUDGPU_FEATURE_PASS_TIMESTAMPS)) return SPUDRESULT_GPU_TIMESTAMPS_NOT_SUPPORTED;
 
     spudgpu_timestamp_set_vulkan *set = SPUD_NEW_ZEROED(&device->head.allocator, spudgpu_timestamp_set_vulkan);
     if (!set) return SPUDRESULT_OUT_OF_MEMORY;
@@ -41,6 +41,8 @@ SPUDRESULT spudgpu_create_timestamp_set(
     set->_logical_device_vk = device->_logical_device_vk;
     set->_count             = count;
     set->_period_ns         = device->_properties_vk.limits.timestampPeriod;
+    set->_shared            = device->_shared;
+    SPUDGPU___LIVE_ADD(&set->_shared->live, SPUDGPU___OBJECT_TIMESTAMP_SET);
     *out_set = set;
     return SPUD_SUCCESS;
 }
@@ -48,6 +50,7 @@ SPUDRESULT spudgpu_create_timestamp_set(
 void spudgpu_destroy_timestamp_set(spudgpu_timestamp_set set) {
     if (!set) return;
     vkDestroyQueryPool(set->_logical_device_vk, set->_query_pool_vk, NULL);
+    SPUDGPU___LIVE_REMOVE(&set->_shared->live, SPUDGPU___OBJECT_TIMESTAMP_SET);
     const SPUD_ALLOCATOR allocator = set->head.allocator;
     spud_string_free(&allocator, set->head.debug_name);
     SPUD_DELETE(&allocator, spudgpu_timestamp_set_vulkan, set);

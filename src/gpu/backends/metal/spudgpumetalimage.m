@@ -279,6 +279,8 @@ SPUDRESULT spudgpu_create_image(
 		sr = SPUDRESULT_API_SPECIFIC_FAILURE;
 		goto failedattempt;
 	}
+	// From here spudgpu_destroy_image frees it, and takes the count back.
+	SPUDGPU___LIVE_ADD(&device_metal->_live, SPUDGPU___OBJECT_IMAGE);
 
 	if (spud_debug_name_set(image_metal, desc->debug_name) != SPUD_SUCCESS) {
 		spudgpu_destroy_image((spudgpu_image)image_metal);
@@ -305,6 +307,7 @@ void spudgpu_destroy_image(spudgpu_image image) {
 		if (image_metal->_heap)
 			image_metal->_heap->_placed_count--;
 #endif
+		SPUDGPU___LIVE_REMOVE(&image_metal->_parent_device->_live, SPUDGPU___OBJECT_IMAGE);
 		const SPUD_ALLOCATOR allocator = image_metal->head.allocator;
 		spud_string_free(&allocator, image_metal->head.debug_name);
 		SPUD_DELETE(&allocator, spudgpu_image_metal, image_metal);
@@ -385,6 +388,9 @@ SPUDRESULT spudgpu_create_image_view(
 	if (desc->type == SPUDGPU_IMAGE_VIEW_TYPE_CUBE || desc->type == SPUDGPU_IMAGE_VIEW_TYPE_CUBE_ARRAY) {
 		if (!parent_image_metal->_desc.cube_capable)
 			return SPUDRESULT_GPU_INVALID_IMAGE_VIEW_TYPE;
+		if (desc->type == SPUDGPU_IMAGE_VIEW_TYPE_CUBE_ARRAY &&
+		    !(parent_image_metal->_parent_device->_features & SPUDGPU_FEATURE_CUBE_ARRAY_VIEWS))
+			return SPUDRESULT_GPU_INVALID_IMAGE_VIEW_TYPE;
 		if (desc->type == SPUDGPU_IMAGE_VIEW_TYPE_CUBE &&
 		    (desc->subresource_range.base_array_layer != 0 || desc->subresource_range.array_layer_count != 6))
 			return SPUDRESULT_GPU_BUFFER_OR_IMAGE_VIEW_RANGE_OUT_OF_SCOPE;
@@ -409,6 +415,7 @@ SPUDRESULT spudgpu_create_image_view(
 	}
 	view_metal->head.allocator     = parent_image_metal->head.allocator;
 	view_metal->_parent_image      = parent_image_metal;
+	view_metal->_parent_device     = parent_image_metal->_parent_device;
 	view_metal->_desc              = *desc;
 	view_metal->_desc.parent_image = image; // Authoritative - same reasoning as spudgpu_buffer_view_metal.
 
@@ -437,6 +444,7 @@ SPUDRESULT spudgpu_create_image_view(
 		goto failedattempt;
 	}
 
+	SPUDGPU___LIVE_ADD(&view_metal->_parent_device->_live, SPUDGPU___OBJECT_IMAGE_VIEW);
 	*out_image_view = (spudgpu_image_view)view_metal;
 
 	return sr;
@@ -452,6 +460,7 @@ void spudgpu_destroy_image_view(spudgpu_image_view image_view) {
 		if (view_metal->_texture_view_mtl) {
 			[view_metal->_texture_view_mtl release];
 		}
+		SPUDGPU___LIVE_REMOVE(&view_metal->_parent_device->_live, SPUDGPU___OBJECT_IMAGE_VIEW);
 		const SPUD_ALLOCATOR allocator = view_metal->head.allocator;
 		spud_string_free(&allocator, view_metal->head.debug_name);
 		SPUD_DELETE(&allocator, spudgpu_image_view_metal, view_metal);

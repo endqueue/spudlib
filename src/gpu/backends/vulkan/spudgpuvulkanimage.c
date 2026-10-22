@@ -229,6 +229,8 @@ SPUDRESULT spudgpu_create_image(
         return SPUDRESULT_OUT_OF_MEMORY;
     }
     memcpy(pResult, &result, sizeof(spudgpu_image_vulkan));
+    // From here spudgpu_destroy_image frees it, and takes the count back.
+    SPUDGPU___LIVE_ADD(&pResult->_device._shared->live, SPUDGPU___OBJECT_IMAGE);
     if (spud_debug_name_set(pResult, desc->debug_name) != SPUD_SUCCESS) {
         spudgpu_destroy_image(pResult);
         return SPUDRESULT_OUT_OF_MEMORY;
@@ -260,6 +262,7 @@ void spudgpu_destroy_image(
     if (image->_heap)
         image->_heap->_placed_count--;
 #endif
+    SPUDGPU___LIVE_REMOVE(&image->_device._shared->live, SPUDGPU___OBJECT_IMAGE);
     const SPUD_ALLOCATOR allocator = image->head.allocator;
     spud_string_free(&allocator, image->head.debug_name);
     SPUD_DELETE(&allocator, spudgpu_image_vulkan, image);
@@ -292,9 +295,8 @@ SPUDRESULT spudgpu_create_image_view(
     // The cube view rules of spudgpu.h, the same on every backend.
     if (desc->type == SPUDGPU_IMAGE_VIEW_TYPE_CUBE || desc->type == SPUDGPU_IMAGE_VIEW_TYPE_CUBE_ARRAY) {
         if (!image->_desc.cube_capable) return SPUDRESULT_GPU_INVALID_IMAGE_VIEW_TYPE;
-        // SPUDGPU_DEVICE_PROPERTIES::cube_array_views, which D3D12 and Metal
-        // always have.
-        if (desc->type == SPUDGPU_IMAGE_VIEW_TYPE_CUBE_ARRAY && !image->_device._properties.cube_array_views)
+        // Without the feature imageCubeArray was never switched on.
+        if (desc->type == SPUDGPU_IMAGE_VIEW_TYPE_CUBE_ARRAY && !(image->_device._features & SPUDGPU_FEATURE_CUBE_ARRAY_VIEWS))
             return SPUDRESULT_GPU_INVALID_IMAGE_VIEW_TYPE;
         if (desc->type == SPUDGPU_IMAGE_VIEW_TYPE_CUBE &&
             (desc->subresource_range.base_array_layer != 0 || desc->subresource_range.array_layer_count != 6))
@@ -352,6 +354,8 @@ SPUDRESULT spudgpu_create_image_view(
         return SPUDRESULT_OUT_OF_MEMORY;
     }
     memcpy(pResult, &result, sizeof(spudgpu_image_view_vulkan));
+    pResult->_shared = image->_device._shared;
+    SPUDGPU___LIVE_ADD(&pResult->_shared->live, SPUDGPU___OBJECT_IMAGE_VIEW);
     *out_image_view = pResult;
     return SPUD_SUCCESS;
 }
@@ -359,6 +363,7 @@ SPUDRESULT spudgpu_create_image_view(
 void spudgpu_destroy_image_view(spudgpu_image_view image_view) {
     if (!image_view) return;
     vkDestroyImageView(image_view->_desc.parent_image->_device._logical_device_vk, image_view->_image_view_vk, NULL);
+    SPUDGPU___LIVE_REMOVE(&image_view->_shared->live, SPUDGPU___OBJECT_IMAGE_VIEW);
     const SPUD_ALLOCATOR allocator = image_view->head.allocator;
     spud_string_free(&allocator, image_view->head.debug_name);
     SPUD_DELETE(&allocator, spudgpu_image_view_vulkan, image_view);

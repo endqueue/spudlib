@@ -4,49 +4,9 @@
 #include "spudgpud3d12.hpp"
 #include <vector>
 #include <string>
+#include <cstring>
 #include "../../../spudstructbase.h"
 #include "../../spudgpushared.h"
-
-static SPUDRESULT ___internal_spudgpu_d3d12_create_command_queues_per_family(
-    spudgpu_device device,
-    const D3D12_COMMAND_QUEUE_DESC *desc,
-    std::array<spudgpu_command_queue, SPUD_D3D12_COMMAND_QUEUE_COUNT_PER_FAMILY>
-        &arr) {
-	// A queue that fails is released here; the ones already in arr are
-	// released with the device (___internal_spudgpu_d3d12_destroy_device).
-	for (size_t i = 0; i < arr.size(); ++i) {
-		spudgpu_command_queue_d3d12 *queue =
-		    SPUD_NEW(&device->head.allocator, spudgpu_command_queue_d3d12);
-		if (!queue)
-			return SPUDRESULT_OUT_OF_MEMORY;
-		queue                 = new (queue) spudgpu_command_queue_d3d12();
-		queue->head.allocator = device->head.allocator;
-		queue->_device        = device;
-		if (FAILED(device->_d3d_device->CreateCommandQueue(
-		        desc, IID_PPV_ARGS(&queue->_d3d_cmd_queue)))) {
-			queue->~spudgpu_command_queue_d3d12();
-			SPUD_DELETE(&device->head.allocator, spudgpu_command_queue_d3d12, queue);
-			return SPUDRESULT_API_SPECIFIC_FAILURE;
-		}
-		arr[i] = queue;
-	}
-	return SPUD_SUCCESS;
-}
-
-static void ___internal_spudgpu_d3d12_destroy_command_queues_per_family(
-    std::array<spudgpu_command_queue, SPUD_D3D12_COMMAND_QUEUE_COUNT_PER_FAMILY>
-        &arr) {
-	for (size_t i = 0; i < arr.size(); ++i) {
-		if (!arr[i])
-			continue;
-		spudgpu_command_queue_d3d12 *queue = arr[i];
-		const SPUD_ALLOCATOR allocator     = queue->head.allocator;
-		spud_string_free(&allocator, queue->head.debug_name);
-		queue->~spudgpu_command_queue_d3d12();
-		SPUD_DELETE(&allocator, spudgpu_command_queue_d3d12, queue);
-		arr[i] = nullptr;
-	}
-}
 
 #if _DEBUG
 static const char *spudgpu_d3d12_severity_name(D3D12_MESSAGE_SEVERITY severity) {
@@ -113,83 +73,192 @@ static void spudgpu_d3d12_unregister_debug_callback(spudgpu_device_d3d12 *device
 }
 #endif
 
-// Releases a device and everything it owns: its command queues, if one was
-// ever created its bindless state, the free lists of its shader-visible heaps
-// and its indirect draw signatures.
-static void ___internal_spudgpu_d3d12_destroy_device(spudgpu_device device) {
-	if (!device)
-		return;
-#if _DEBUG
-	// First: the callback's context is this device.
-	spudgpu_d3d12_unregister_debug_callback(device);
-#endif
-	const SPUD_ALLOCATOR allocator = device->head.allocator;
-	___internal_spudgpu_d3d12_destroy_command_queues_per_family(
-	    device->_cmd_queues_direct);
-	___internal_spudgpu_d3d12_destroy_command_queues_per_family(
-	    device->_cmd_queues_copy);
-	___internal_spudgpu_d3d12_destroy_command_queues_per_family(
-	    device->_cmd_queues_compute);
-	if (spudgpu_bindless_state_d3d12 *bindless = device->_bindless.load()) {
-		if (bindless->layout)
-			spud_string_free(&allocator, bindless->layout->head.debug_name);
-		SPUD_DELETE(&allocator, spudgpu_descriptor_set_layout_d3d12, bindless->layout);
-		bindless->~spudgpu_bindless_state_d3d12();
-		SPUD_DELETE(&allocator, spudgpu_bindless_state_d3d12, bindless);
-		device->_bindless.store(nullptr);
+// ---------------------------------------------------------------------------
+// Adapters
+// ---------------------------------------------------------------------------
+
+// What the backend needs of every device: 12_0 guarantees resource binding
+// tier 2, without which a descriptor table may hold only 128 SRVs per stage
+// and SpudGPU's descriptor sets have no such limit. Everything past it is a
+// feature an adapter has or lacks.
+static const D3D_FEATURE_LEVEL spudgpu_d3d12___minimum_feature_level = D3D_FEATURE_LEVEL_12_0;
+
+// Fills in what [adapter] is and can do. D3D12 answers the features only
+// through a device (CheckFeatureSupport is a device method), so this creates
+// a probe device on the adapter and releases it before returning: D3D12
+// hands back the one live device per adapter, and a probe still held would
+// become the caller's device later. Returns false when no device of the
+// minimum feature level can be made on the adapter, which is then not
+// listed.
+static bool spudgpu_d3d12___read_adapter_facts(spudgpu_adapter_d3d12 *adapter) {
+	spudgpu___adapter_facts *facts         = &adapter->_facts;
+	SPUDGPU_ADAPTER_PROPERTIES *properties = &facts->properties;
+	properties->base                       = spud_struct_base_out(SPUD_STRUCT_TYPE_GPU_ADAPTER_PROPERTIES);
+
+	DXGI_ADAPTER_DESC3 desc = {};
+	if (FAILED(adapter->_dxgi_adapter->GetDesc3(&desc)))
+		return false;
+
+	Microsoft::WRL::ComPtr<ID3D12Device> probe;
+	if (FAILED(D3D12CreateDevice(adapter->_dxgi_adapter.Get(), spudgpu_d3d12___minimum_feature_level, IID_PPV_ARGS(&probe))))
+		return false;
+
+	WideCharToMultiByte(CP_UTF8, 0, desc.Description, -1, properties->description, (int)sizeof(properties->description), NULL, NULL);
+	properties->description[sizeof(properties->description) - 1] = '\0';
+	properties->vendor_id                                         = desc.VendorId;
+	properties->device_id                                         = desc.DeviceId;
+	properties->subsystem_id                                      = desc.SubSysId;
+	properties->revision                                          = desc.Revision;
+	properties->dedicated_video_memory                            = desc.DedicatedVideoMemory;
+	properties->dedicated_system_memory                           = desc.DedicatedSystemMemory;
+	properties->shared_system_memory                              = desc.SharedSystemMemory;
+
+	// The LUID names the GPU until a restart or a driver restart, and is
+	// what interop names an adapter by.
+	static_assert(sizeof(desc.AdapterLuid) == 8, "a LUID is 8 bytes");
+	memset(properties->adapter_id, 0, sizeof(properties->adapter_id));
+	memcpy(properties->adapter_id, &desc.AdapterLuid, sizeof(desc.AdapterLuid));
+	memcpy(properties->luid, &desc.AdapterLuid, sizeof(desc.AdapterLuid));
+	properties->luid_valid = true;
+
+	D3D12_FEATURE_DATA_ARCHITECTURE1 architecture = {};
+	architecture.NodeIndex                        = 0;
+	const bool uma = SUCCEEDED(probe->CheckFeatureSupport(D3D12_FEATURE_ARCHITECTURE1, &architecture, sizeof(architecture))) &&
+	                 architecture.UMA;
+	properties->unified_memory = uma;
+	if (desc.Flags & DXGI_ADAPTER_FLAG3_SOFTWARE)
+		properties->adapter_type = SPUDGPU_ADAPTER_TYPE_SOFTWARE;
+	else if (uma)
+		properties->adapter_type = SPUDGPU_ADAPTER_TYPE_INTEGRATED;
+	else
+		properties->adapter_type = SPUDGPU_ADAPTER_TYPE_DISCRETE;
+
+	// A CBV's BufferLocation, and a raw buffer view's first byte, on every
+	// device.
+	properties->uniform_buffer_offset_alignment = D3D12_CONSTANT_BUFFER_DATA_PLACEMENT_ALIGNMENT;
+	properties->storage_buffer_offset_alignment = D3D12_RAW_UAV_SRV_BYTE_ALIGNMENT;
+	// ExecuteIndirect takes any MaxCommandCount.
+	properties->max_draw_indirect_count = UINT32_MAX;
+	// The largest shader-visible heaps every device allows (tier 3 may allow
+	// a larger CBV/SRV/UAV heap; one limit is kept for every tier).
+	properties->max_descriptors = D3D12_MAX_SHADER_VISIBLE_DESCRIPTOR_HEAP_SIZE_TIER_1;
+	properties->max_samplers    = D3D12_MAX_SHADER_VISIBLE_SAMPLER_HEAP_SIZE;
+
+	// A device makes as many queues of each type as asked, and D3D12 says
+	// nothing about where they run.
+	properties->queue_pool_count     = 3;
+	properties->queue_pools[0].kinds = SPUDGPU_QUEUE_KIND_DIRECT;
+	properties->queue_pools[1].kinds = SPUDGPU_QUEUE_KIND_COMPUTE;
+	properties->queue_pools[2].kinds = SPUDGPU_QUEUE_KIND_COPY;
+	for (uint32_t i = 0; i < 3; ++i) {
+		properties->queue_pools[i].max_queues = UINT32_MAX;
+		properties->queue_pools[i].engine     = SPUDGPU_QUEUE_POOL_ENGINE_UNKNOWN;
 	}
-	// Freed here, with the capacities they were made with, rather than in
-	// their structs' destructors, which have no allocator.
-	SPUD_DELETE_ARRAY(&allocator, spudgpu_d3d12_heap_range, device->_csv_heap.free_ranges, device->_csv_heap.free_capacity);
-	SPUD_DELETE_ARRAY(&allocator, spudgpu_d3d12_heap_range, device->_sampler_heap.free_ranges, device->_sampler_heap.free_capacity);
-	for (uint32_t i = 0; i < device->_indirect_signatures.count; ++i)
-		device->_indirect_signatures.entries[i].signature->Release();
-	SPUD_DELETE_ARRAY(&allocator, spudgpu_d3d12_indirect_signature, device->_indirect_signatures.entries, device->_indirect_signatures.capacity);
-	spud_string_free(&allocator, device->head.debug_name);
-	device->~spudgpu_device_d3d12();
-	SPUD_DELETE(&allocator, spudgpu_device_d3d12, device);
+
+	SPUDGPU_FEATURES features = 0;
+	// A layered pass needs the vertex shader to write
+	// SV_RenderTargetArrayIndex, which is this capability.
+	D3D12_FEATURE_DATA_D3D12_OPTIONS options = {};
+	const bool have_options = SUCCEEDED(probe->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS, &options, sizeof(options)));
+	if (have_options && options.VPAndRTArrayIndexFromAnyShaderFeedingRasterizerSupportedWithoutGSEmulation)
+		features |= SPUDGPU_FEATURE_LAYERED_RENDERING;
+	// DepthBiasClamp, IndependentBlendEnable, any ExecuteIndirect count,
+	// TEXTURECUBEARRAY views, a direct queue's timestamps, heaps of every
+	// kind and presenting: on every device of the minimum level.
+	features |= SPUDGPU_FEATURE_DEPTH_BIAS_CLAMP | SPUDGPU_FEATURE_INDEPENDENT_BLEND | SPUDGPU_FEATURE_MULTI_DRAW_INDIRECT |
+	            SPUDGPU_FEATURE_CUBE_ARRAY_VIEWS | SPUDGPU_FEATURE_PASS_TIMESTAMPS | SPUDGPU_FEATURE_MAPPABLE_HEAPS |
+	            SPUDGPU_FEATURE_PRESENT;
+	// SPUDGPU_MEMORY_KIND_DEVICE_MAPPABLE is a custom heap in pool L0 that
+	// the CPU can map, which holds a resource in any state only on a UMA
+	// adapter.
+	if (uma)
+		features |= SPUDGPU_FEATURE_DEVICE_MAPPABLE_MEMORY;
+	// Bindless binds SPUDGPU_BINDLESS_MAX_SLOTS_PER_CLASS storage images and
+	// as many storage buffers in one table, more UAVs than tier 2 allows a
+	// stage (64).
+	if (have_options && options.ResourceBindingTier >= D3D12_RESOURCE_BINDING_TIER_3) {
+		features |= SPUDGPU_FEATURE_BINDLESS;
+		facts->bindless_max_sampled_images  = SPUDGPU_BINDLESS_MAX_SLOTS_PER_CLASS;
+		facts->bindless_max_storage_images  = SPUDGPU_BINDLESS_MAX_SLOTS_PER_CLASS;
+		facts->bindless_max_storage_buffers = SPUDGPU_BINDLESS_MAX_SLOTS_PER_CLASS;
+	}
+	D3D12_FEATURE_DATA_D3D12_OPTIONS7 options7 = {};
+	if (SUCCEEDED(probe->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS7, &options7, sizeof(options7))) &&
+	    options7.MeshShaderTier != D3D12_MESH_SHADER_TIER_NOT_SUPPORTED) {
+		features |= SPUDGPU_FEATURE_MESH_SHADING;
+		// D3D12 has no query for these: Shader Model 6.5 guarantees them on
+		// every mesh shader tier.
+		facts->mesh_max_output_vertices       = 256;
+		facts->mesh_max_output_primitives     = 256;
+		facts->mesh_max_workgroup_invocations = 128;
+	}
+	D3D12_FEATURE_DATA_D3D12_OPTIONS2 options2 = {};
+	if (SUCCEEDED(probe->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS2, &options2, sizeof(options2))) &&
+	    options2.DepthBoundsTestSupported)
+		features |= SPUDGPU_FEATURE_DEPTH_BOUNDS_TEST;
+	properties->supported_features = features;
+	// The probe is released here, as the ComPtr goes.
+	return true;
 }
 
-static void ___internal_spudgpu_d3d12_destroy_devices(
-    spudgpu_device *devices, size_t count) {
-	for (size_t i = 0; i < count; ++i)
-		___internal_spudgpu_d3d12_destroy_device(devices[i]);
+static void spudgpu_d3d12___destroy_adapters(spudgpu_instance_d3d12 *instance) {
+	for (uint32_t i = 0; i < instance->_adapter_count; ++i) {
+		spudgpu_adapter_d3d12 *adapter = instance->_adapters[i];
+		if (!adapter)
+			continue;
+		const SPUD_ALLOCATOR allocator = adapter->head.allocator;
+		spud_string_free(&allocator, adapter->head.debug_name);
+		adapter->~spudgpu_adapter_d3d12();
+		SPUD_DELETE(&allocator, spudgpu_adapter_d3d12, adapter);
+	}
+	SPUD_DELETE_ARRAY(&instance->head.allocator, spudgpu_adapter, instance->_adapters, instance->_adapter_count);
+	instance->_adapters      = nullptr;
+	instance->_adapter_count = 0;
 }
 
-static SPUDRESULT
-___internal_spudgpu_d3d12_create_device_command_queues(spudgpu_device device) {
-	if (!device)
-		return SPUDRESULT_GPU_INVALID_DEVICE;
-
-	D3D12_COMMAND_QUEUE_DESC desc = {};
-	desc.Flags                    = D3D12_COMMAND_QUEUE_FLAG_NONE;
-	desc.NodeMask                 = 1;
-	desc.Priority                 = D3D12_COMMAND_QUEUE_PRIORITY_HIGH;
-
-	SPUDRESULT r = SPUD_SUCCESS;
-
-	// Direct Queues
-	desc.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
-	r         = ___internal_spudgpu_d3d12_create_command_queues_per_family(
-	    device, &desc, device->_cmd_queues_direct);
-	if (r != SPUD_SUCCESS)
-		return r;
-
-	// Copy Queues
-	desc.Type = D3D12_COMMAND_LIST_TYPE_COPY;
-	r         = ___internal_spudgpu_d3d12_create_command_queues_per_family(
-	    device, &desc, device->_cmd_queues_copy);
-	if (r != SPUD_SUCCESS)
-		return r;
-
-	// Compute Queues
-	desc.Type = D3D12_COMMAND_LIST_TYPE_COMPUTE;
-	r         = ___internal_spudgpu_d3d12_create_command_queues_per_family(
-	    device, &desc, device->_cmd_queues_compute);
-	if (r != SPUD_SUCCESS)
-		return r;
-
-	return r;
+// Lists the adapters DXGI gives, in its order, that a device of the minimum
+// level can be made on: one probe device at a time, each released before
+// the next. Software adapters (WARP) are listed too, marked.
+static SPUDRESULT spudgpu_d3d12___list_adapters(spudgpu_instance_d3d12 *instance) {
+	std::vector<spudgpu_adapter_d3d12 *> listed;
+	Microsoft::WRL::ComPtr<IDXGIAdapter1> dxgi_adapter1;
+	for (UINT index = 0; instance->_dxgi_factory->EnumAdapters1(index, &dxgi_adapter1) != DXGI_ERROR_NOT_FOUND; ++index) {
+		Microsoft::WRL::ComPtr<IDXGIAdapter4> dxgi_adapter;
+		if (!dxgi_adapter1 || FAILED(dxgi_adapter1.As(&dxgi_adapter)))
+			continue;
+		spudgpu_adapter_d3d12 *adapter = SPUD_NEW(&instance->head.allocator, spudgpu_adapter_d3d12);
+		if (!adapter) {
+			for (spudgpu_adapter_d3d12 *made : listed) {
+				made->~spudgpu_adapter_d3d12();
+				SPUD_DELETE(&instance->head.allocator, spudgpu_adapter_d3d12, made);
+			}
+			return SPUDRESULT_OUT_OF_MEMORY;
+		}
+		adapter                 = new (adapter) spudgpu_adapter_d3d12();
+		adapter->head.allocator = instance->head.allocator;
+		adapter->_instance      = instance;
+		adapter->_dxgi_adapter  = dxgi_adapter;
+		if (!spudgpu_d3d12___read_adapter_facts(adapter)) {
+			adapter->~spudgpu_adapter_d3d12();
+			SPUD_DELETE(&instance->head.allocator, spudgpu_adapter_d3d12, adapter);
+			continue;
+		}
+		listed.push_back(adapter);
+	}
+	if (listed.empty())
+		return SPUD_SUCCESS;
+	instance->_adapters = SPUD_NEW_ARRAY(&instance->head.allocator, spudgpu_adapter, listed.size());
+	if (!instance->_adapters) {
+		for (spudgpu_adapter_d3d12 *made : listed) {
+			made->~spudgpu_adapter_d3d12();
+			SPUD_DELETE(&instance->head.allocator, spudgpu_adapter_d3d12, made);
+		}
+		return SPUDRESULT_OUT_OF_MEMORY;
+	}
+	for (size_t i = 0; i < listed.size(); ++i)
+		instance->_adapters[i] = listed[i];
+	instance->_adapter_count = (uint32_t)listed.size();
+	return SPUD_SUCCESS;
 }
 
 extern "C" {
@@ -206,17 +275,18 @@ SPUDRESULT spudgpu_create_instance(
 	spudgpu_instance_d3d12 *pResult = SPUD_NEW(desc->allocator, spudgpu_instance_d3d12);
 	if (!pResult)
 		return SPUDRESULT_OUT_OF_MEMORY;
-	pResult                          = new (pResult) spudgpu_instance_d3d12();
-	pResult->head.allocator          = *desc->allocator;
-	pResult->application_name        = desc->application_name;
-	pResult->application_version     = desc->application_version;
-	pResult->engine_name             = desc->engine_name;
-	pResult->engine_version          = desc->engine_version;
-	pResult->_gpu_devices            = nullptr;
-	pResult->_gpu_device_count       = 0;
-	pResult->_gpu_devices_enumerated = false;
+	pResult                      = new (pResult) spudgpu_instance_d3d12();
+	pResult->head.allocator      = *desc->allocator;
+	pResult->application_name    = desc->application_name;
+	pResult->application_version = desc->application_version;
+	pResult->engine_name         = desc->engine_name;
+	pResult->engine_version      = desc->engine_version;
+	pResult->_adapters           = nullptr;
+	pResult->_adapter_count      = 0;
 
 #ifdef _DEBUG
+	// Before any device of the process, the adapters' probe devices included:
+	// switching the layer on removes every device that already exists.
 	Microsoft::WRL::ComPtr<ID3D12Debug1> d3dDebugController;
 	if (SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(&d3dDebugController)))) {
 		d3dDebugController->EnableDebugLayer();
@@ -228,12 +298,18 @@ SPUDRESULT spudgpu_create_instance(
 #ifdef _DEBUG
 	//dxgiFlags |= DXGI_CREATE_FACTORY_DEBUG;
 #endif
-	HRESULT hr =
-	    CreateDXGIFactory2(dxgiFlags, IID_PPV_ARGS(&pResult->_dxgi_factory));
+	HRESULT hr = CreateDXGIFactory2(dxgiFlags, IID_PPV_ARGS(&pResult->_dxgi_factory));
 	if (FAILED(hr)) {
 		pResult->~spudgpu_instance_d3d12();
 		SPUD_DELETE(desc->allocator, spudgpu_instance_d3d12, pResult);
-		return SPUDRESULT_API_SPECIFIC_FAILURE;
+		return SPUDRESULT_GPU_DEVICE_ENUMERATION_FAILURE;
+	}
+
+	const SPUDRESULT list_sr = spudgpu_d3d12___list_adapters(pResult);
+	if (list_sr != SPUD_SUCCESS) {
+		pResult->~spudgpu_instance_d3d12();
+		SPUD_DELETE(desc->allocator, spudgpu_instance_d3d12, pResult);
+		return list_sr;
 	}
 
 	*out_instance = pResult;
@@ -244,284 +320,246 @@ SPUDRESULT spudgpu_destroy_instance(spudgpu_instance instance) {
 	if (!instance)
 		return SPUD_SUCCESS;
 	const SPUD_ALLOCATOR allocator = instance->head.allocator;
-	___internal_spudgpu_d3d12_destroy_devices(
-	    instance->_gpu_devices, instance->_gpu_device_count);
-	SPUD_DELETE_ARRAY(&allocator, spudgpu_device, instance->_gpu_devices, instance->_gpu_device_count);
+	spudgpu_d3d12___destroy_adapters(instance);
 	spud_string_free(&allocator, instance->head.debug_name);
 	instance->~spudgpu_instance_d3d12();
 	SPUD_DELETE(&allocator, spudgpu_instance_d3d12, instance);
 	return SPUD_SUCCESS;
 }
 
-bool ___internal_spudgpu_d3d12_make_device_properties(
-    spudgpu_device_d3d12 *device) {
-	if (!device)
-		return false;
-	if (!device->_dxgi_adapter)
-		return false;
-	DXGI_ADAPTER_DESC3 aDesc;
-	if (FAILED(device->_dxgi_adapter->GetDesc3(&aDesc)))
-		return false;
-	int the_wide_dog_has_bluffed_the_smaller_dog_because_he_thinks_he_is_a_buffalo, strSize =
-	WideCharToMultiByte(
-	    CP_UTF8, 0, &aDesc.Description[0], 128,
-	    &device->_properties.description[0], 128, NULL, FALSE);
-	// device->_properties.description;
-	device->_properties.dedicated_video_memory  = aDesc.DedicatedVideoMemory;
-	device->_properties.dedicated_system_memory = aDesc.DedicatedSystemMemory;
-	device->_properties.shared_system_memory    = aDesc.SharedSystemMemory;
-	device->_properties.device_id               = aDesc.DeviceId;
-	device->_properties.revision                = aDesc.Revision;
-	device->_properties.subSys_id               = aDesc.SubSysId;
-	device->_properties.vendor_id               = aDesc.VendorId;
-
-	// The device exists by now: spudgpu_enumerate_devices creates it before
-	// calling this. A failed query leaves the device reported as not unified.
-	D3D12_FEATURE_DATA_ARCHITECTURE1 architecture = {};
-	architecture.NodeIndex                        = 0;
-	HRESULT hr                                    = device->_d3d_device->CheckFeatureSupport(
-	    D3D12_FEATURE_ARCHITECTURE1, &architecture, sizeof(architecture));
-	device->_properties.unified_memory = SUCCEEDED(hr) && architecture.UMA;
-	// SPUDGPU_MEMORY_KIND_DEVICE_MAPPABLE is a custom heap in pool L0 that
-	// the CPU can map, which holds a resource in any state only on a UMA
-	// adapter.
-	device->_properties.device_mappable_memory = device->_properties.unified_memory;
-
-	// A layered pass needs the vertex shader to write
-	// SV_RenderTargetArrayIndex, which is this capability. The pass itself
-	// needs nothing: the views' array sizes are what make it layered.
-	D3D12_FEATURE_DATA_D3D12_OPTIONS options = {};
-	hr = device->_d3d_device->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS, &options, sizeof(options));
-	device->_properties.layered_rendering =
-	    SUCCEEDED(hr) && options.VPAndRTArrayIndexFromAnyShaderFeedingRasterizerSupportedWithoutGSEmulation;
-	// Bindless binds SPUDGPU_BINDLESS_MAX_SLOTS_PER_CLASS storage images and
-	// as many storage buffers in one table, more UAVs than tier 2 allows a
-	// stage (64).
-	device->_bindless_supported = SUCCEEDED(hr) && options.ResourceBindingTier >= D3D12_RESOURCE_BINDING_TIER_3;
-	// An ID3D12Heap can have the heap properties of every kind.
-	device->_properties.mappable_heaps = true;
-	// D3D12_RASTERIZER_DESC::DepthBiasClamp and
-	// D3D12_BLEND_DESC::IndependentBlendEnable are on every device.
-	device->_properties.depth_bias_clamp  = true;
-	device->_properties.independent_blend = true;
-	// TEXTURECUBEARRAY views are in every feature level this backend lists.
-	device->_properties.cube_array_views = true;
-	// ExecuteIndirect takes any MaxCommandCount.
-	device->_properties.max_draw_indirect_count = UINT32_MAX;
-	// A CBV's BufferLocation, and a raw buffer view's first byte, on every
-	// device.
-	device->_properties.uniform_buffer_offset_alignment = D3D12_CONSTANT_BUFFER_DATA_PLACEMENT_ALIGNMENT;
-	device->_properties.storage_buffer_offset_alignment = D3D12_RAW_UAV_SRV_BYTE_ALIGNMENT;
-	// A direct queue's command lists can write timestamps anywhere.
-	device->_properties.pass_timestamps = true;
-	return true;
-}
-SPUDRESULT spudgpu_enumerate_devices(
+SPUDRESULT spudgpu_enumerate_adapters(
     spudgpu_instance instance,
-    spudgpu_device **ppOutputDevices,
-    uint32_t *pOutputDevicesCount) {
+    const spudgpu_adapter **out_adapters,
+    uint32_t *out_adapters_count) {
 	if (!instance)
 		return SPUDRESULT_GPU_INVALID_INSTANCE;
-	if (!ppOutputDevices)
+	if (!out_adapters)
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
-	if (!pOutputDevicesCount)
+	if (!out_adapters_count)
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
-	// The devices are made once; a later call hands out the same array.
-	if (instance->_gpu_devices_enumerated) {
-		*pOutputDevicesCount = instance->_gpu_device_count;
-		*ppOutputDevices     = instance->_gpu_devices;
-		return SPUD_SUCCESS;
-	}
-
-	SPUDRESULT sr = SPUD_SUCCESS;
-
-	// What the backend needs of every device: 12_0 guarantees resource
-	// binding tier 2, without which a descriptor table may hold only 128 SRVs
-	// per stage and SpudGPU's descriptor sets have no such limit. Everything
-	// past it is optional and reported per device - mesh shading
-	// (OPTIONS7), the depth bounds test (OPTIONS2), bindless (resource
-	// binding tier 3) - so a device without it is listed and says so.
-	const D3D_FEATURE_LEVEL minimumFeatureLevel = D3D_FEATURE_LEVEL_12_0;
-
-	std::vector<spudgpu_device_d3d12 *> gpuDevices =
-	    std::vector<spudgpu_device_d3d12 *>();
-
-	Microsoft::WRL::ComPtr<IDXGIAdapter1> dxgiAdapter1 = nullptr;
-	for (uint32_t adapterIndex = 0;
-	     instance->_dxgi_factory->EnumAdapters1(adapterIndex, &dxgiAdapter1) !=
-	     DXGI_ERROR_NOT_FOUND;
-	     ++adapterIndex) {
-		if (!dxgiAdapter1) // Don't mess with a null result.
-			continue;
-		DXGI_ADAPTER_DESC1 desc;
-		dxgiAdapter1->GetDesc1(&desc);
-		// Don't include a software graphics device.
-		if (desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE)
-			continue;
-
-		Microsoft::WRL::ComPtr<IDXGIAdapter4> dxgiAdapter = nullptr;
-		if (FAILED(dxgiAdapter1.As(&dxgiAdapter)))
-			continue;
-
-		// Validate a possible creation of an ID3D12Device
-		if (SUCCEEDED(D3D12CreateDevice(
-		        dxgiAdapter.Get(), minimumFeatureLevel,
-		        __uuidof(ID3D12Device14), nullptr))) {
-
-			// Create a new SpudGPU Device
-			// Every failure below releases this device and the ones
-			// already gathered, so nothing outlives a failed enumeration.
-			spudgpu_device_d3d12 *gpuDevice =
-			    SPUD_NEW(&instance->head.allocator, spudgpu_device_d3d12);
-			if (!gpuDevice) {
-				___internal_spudgpu_d3d12_destroy_devices(
-				    gpuDevices.data(), gpuDevices.size());
-				return SPUDRESULT_OUT_OF_MEMORY;
-			}
-			gpuDevice = new (gpuDevice) spudgpu_device_d3d12();
-			// Before anything that may destroy it: the device frees
-			// through its own copy.
-			gpuDevice->head.allocator = instance->head.allocator;
-			if (FAILED(D3D12CreateDevice(
-			        dxgiAdapter.Get(), minimumFeatureLevel,
-			        IID_PPV_ARGS(&gpuDevice->_d3d_device)))) {
-				// If a D3D12 Device creation failed,
-				// just return out of this function.
-				___internal_spudgpu_d3d12_destroy_device(gpuDevice);
-				___internal_spudgpu_d3d12_destroy_devices(
-				    gpuDevices.data(), gpuDevices.size());
-				return SPUDRESULT_API_SPECIFIC_FAILURE;
-			}
-			gpuDevice->_dxgi_adapter = dxgiAdapter;
-			gpuDevice->_instance     = instance;
-#if _DEBUG
-			spudgpu_d3d12_register_debug_callback(gpuDevice);
-#endif
-			if (!___internal_spudgpu_d3d12_make_device_properties(gpuDevice)) {
-				___internal_spudgpu_d3d12_destroy_device(gpuDevice);
-				___internal_spudgpu_d3d12_destroy_devices(
-				    gpuDevices.data(), gpuDevices.size());
-				// A feature query failed. This returned the outer sr,
-				// still SPUD_SUCCESS here, reporting success with every
-				// device released.
-				return SPUDRESULT_API_SPECIFIC_FAILURE;
-			}
-
-			// Create the premade command queues for use.
-			SPUDRESULT sr =
-			    ___internal_spudgpu_d3d12_create_device_command_queues(
-			        gpuDevice);
-			if (sr != SPUD_SUCCESS) {
-				___internal_spudgpu_d3d12_destroy_device(gpuDevice);
-				___internal_spudgpu_d3d12_destroy_devices(
-				    gpuDevices.data(), gpuDevices.size());
-				return sr;
-			}
-			gpuDevices.push_back(gpuDevice);
-			continue;
-		} else
-			continue;
-	}
-	// No array for zero devices: _gpu_devices stays null and the count 0.
-	if (!gpuDevices.empty()) {
-		// Freed by spudgpu_destroy_instance with _gpu_device_count, which
-		// is this size.
-		spudgpu_device *devices = SPUD_NEW_ARRAY(
-		    &instance->head.allocator, spudgpu_device, gpuDevices.size());
-		if (!devices) {
-			___internal_spudgpu_d3d12_destroy_devices(
-			    gpuDevices.data(), gpuDevices.size());
-			return SPUDRESULT_OUT_OF_MEMORY;
-		}
-		memcpy(
-		    devices, gpuDevices.data(),
-		    sizeof(spudgpu_device) * gpuDevices.size());
-		instance->_gpu_devices = devices;
-	}
-	instance->_gpu_device_count       = (uint32_t)gpuDevices.size();
-	instance->_gpu_devices_enumerated = true;
-
-	*pOutputDevicesCount = instance->_gpu_device_count;
-	*ppOutputDevices     = instance->_gpu_devices;
-
+	*out_adapters       = instance->_adapters;
+	*out_adapters_count = instance->_adapter_count;
 	return SPUD_SUCCESS;
 }
-SPUDRESULT spudgpu_get_device_properties(
-    spudgpu_device device, SPUDGPU_DEVICE_PROPERTIES *out_properties) {
-	if (!device)
-		return SPUDRESULT_GPU_INVALID_DEVICE;
-	if (!out_properties)
+
+SPUDRESULT spudgpu_get_adapter_properties(
+    spudgpu_adapter adapter,
+    SPUDGPU_ADAPTER_PROPERTIES *out_properties) {
+	if (!adapter)
+		return SPUDRESULT_GPU_INVALID_ADAPTER;
+	return spudgpu___internal_get_adapter_properties(&adapter->_facts, out_properties);
+}
+
+SPUDRESULT spudgpu_adapter_supports_surface(
+    spudgpu_adapter adapter,
+    spudgpu_surface surface,
+    bool *out_supported) {
+	if (!adapter)
+		return SPUDRESULT_GPU_INVALID_ADAPTER;
+	if (!surface)
+		return SPUDRESULT_GPU_INVALID_SURFACE;
+	if (!out_supported)
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
-	const SPUDRESULT base_sr = spud_struct_out_check(&out_properties->base, SPUD_STRUCT_TYPE_GPU_DEVICE_PROPERTIES);
-	if (base_sr != SPUD_SUCCESS)
-		return base_sr;
-	memcpy(
-	    out_properties, &device->_properties,
-	    sizeof(SPUDGPU_DEVICE_PROPERTIES));
-	// Whatever was copied over it, the base stays the caller's.
-	out_properties->base = spud_struct_base_out(SPUD_STRUCT_TYPE_GPU_DEVICE_PROPERTIES);
+	// A DXGI swap chain presents a window from any adapter.
+	*out_supported = (adapter->_facts.properties.supported_features & SPUDGPU_FEATURE_PRESENT) != 0;
 	return SPUD_SUCCESS;
+}
+
+} // extern "C"
+
+// ---------------------------------------------------------------------------
+// Devices
+// ---------------------------------------------------------------------------
+
+static void spudgpu_d3d12___destroy_queues(spudgpu_device_d3d12 *device, spudgpu_command_queue *queues, uint32_t count) {
+	if (!queues)
+		return;
+	for (uint32_t i = 0; i < count; ++i) {
+		spudgpu_command_queue_d3d12 *queue = queues[i];
+		if (!queue)
+			continue;
+		const SPUD_ALLOCATOR allocator = queue->head.allocator;
+		spud_string_free(&allocator, queue->head.debug_name);
+		queue->~spudgpu_command_queue_d3d12();
+		SPUD_DELETE(&allocator, spudgpu_command_queue_d3d12, queue);
+	}
+	SPUD_DELETE_ARRAY(&device->head.allocator, spudgpu_command_queue, queues, count);
+}
+
+// Makes [count] queues of [type] into a new array at [*out_queues]: all or
+// none. SpudGPU sets no priority (spudgpu.h): NORMAL, D3D12's own none.
+static SPUDRESULT spudgpu_d3d12___create_queues(
+    spudgpu_device_d3d12 *device,
+    D3D12_COMMAND_LIST_TYPE type,
+    uint32_t count,
+    spudgpu_command_queue **out_queues) {
+	*out_queues = nullptr;
+	if (count == 0)
+		return SPUD_SUCCESS;
+	spudgpu_command_queue *queues = SPUD_NEW_ARRAY_ZEROED(&device->head.allocator, spudgpu_command_queue, count);
+	if (!queues)
+		return SPUDRESULT_OUT_OF_MEMORY;
+	D3D12_COMMAND_QUEUE_DESC desc = {};
+	desc.Type                     = type;
+	desc.Flags                    = D3D12_COMMAND_QUEUE_FLAG_NONE;
+	desc.NodeMask                 = 1;
+	desc.Priority                 = D3D12_COMMAND_QUEUE_PRIORITY_NORMAL;
+	for (uint32_t i = 0; i < count; ++i) {
+		spudgpu_command_queue_d3d12 *queue = SPUD_NEW(&device->head.allocator, spudgpu_command_queue_d3d12);
+		if (!queue) {
+			spudgpu_d3d12___destroy_queues(device, queues, count);
+			return SPUDRESULT_OUT_OF_MEMORY;
+		}
+		queue                 = new (queue) spudgpu_command_queue_d3d12();
+		queue->head.allocator = device->head.allocator;
+		queue->_device        = device;
+		queues[i]             = queue;
+		if (FAILED(device->_d3d_device->CreateCommandQueue(&desc, IID_PPV_ARGS(&queue->_d3d_cmd_queue)))) {
+			spudgpu_d3d12___destroy_queues(device, queues, count);
+			return SPUDRESULT_API_SPECIFIC_FAILURE;
+		}
+	}
+	*out_queues = queues;
+	return SPUD_SUCCESS;
+}
+
+// Releases [device] and everything it owns, and gives its adapter back.
+// Every member is made or empty, so a device that failed part way is
+// released too.
+static void spudgpu_d3d12___free_device(spudgpu_device_d3d12 *device) {
+#if _DEBUG
+	// First: the callback's context is this device.
+	spudgpu_d3d12_unregister_debug_callback(device);
+#endif
+	const SPUD_ALLOCATOR allocator = device->head.allocator;
+	spudgpu_d3d12___destroy_queues(device, device->_cmd_queues_direct, device->_cmd_queue_count_direct);
+	spudgpu_d3d12___destroy_queues(device, device->_cmd_queues_compute, device->_cmd_queue_count_compute);
+	spudgpu_d3d12___destroy_queues(device, device->_cmd_queues_copy, device->_cmd_queue_count_copy);
+	if (spudgpu_bindless_state_d3d12 *bindless = device->_bindless) {
+		if (bindless->layout)
+			spud_string_free(&allocator, bindless->layout->head.debug_name);
+		SPUD_DELETE(&allocator, spudgpu_descriptor_set_layout_d3d12, bindless->layout);
+		bindless->~spudgpu_bindless_state_d3d12();
+		SPUD_DELETE(&allocator, spudgpu_bindless_state_d3d12, bindless);
+		device->_bindless = nullptr;
+	}
+	// Freed here, with the capacities they were made with, rather than in
+	// their structs' destructors, which have no allocator.
+	SPUD_DELETE_ARRAY(&allocator, spudgpu_d3d12_heap_range, device->_csv_heap.free_ranges, device->_csv_heap.free_capacity);
+	SPUD_DELETE_ARRAY(&allocator, spudgpu_d3d12_heap_range, device->_sampler_heap.free_ranges, device->_sampler_heap.free_capacity);
+	if (device->_tight_draw_signature)
+		device->_tight_draw_signature->Release();
+	if (device->_tight_draw_indexed_signature)
+		device->_tight_draw_indexed_signature->Release();
+	for (uint32_t i = 0; i < device->_indirect_signatures.count; ++i)
+		device->_indirect_signatures.entries[i].signature->Release();
+	SPUD_DELETE_ARRAY(&allocator, spudgpu_d3d12_indirect_signature, device->_indirect_signatures.entries, device->_indirect_signatures.capacity);
+	spudgpu_adapter_d3d12 *adapter = device->_adapter;
+	spud_string_free(&allocator, device->head.debug_name);
+	// The native device goes with the destructor, before the adapter is
+	// free for another: D3D12 hands back a device still alive.
+	device->~spudgpu_device_d3d12();
+	SPUD_DELETE(&allocator, spudgpu_device_d3d12, device);
+	adapter->_in_use.store(false);
+}
+
+extern "C" {
+
+SPUDRESULT spudgpu_create_device(
+    spudgpu_adapter adapter,
+    const spudgpu_device_desc *desc,
+    spudgpu_device *out_device) {
+	if (!adapter)
+		return SPUDRESULT_GPU_INVALID_ADAPTER;
+	const SPUDRESULT check_sr = spudgpu___internal_check_device_desc(&adapter->_facts, desc, out_device);
+	if (check_sr != SPUD_SUCCESS)
+		return check_sr;
+	// Last: one device per adapter at a time.
+	if (adapter->_in_use.exchange(true))
+		return SPUDRESULT_GPU_ADAPTER_IN_USE;
+
+	spudgpu_device_d3d12 *device = SPUD_NEW(&adapter->head.allocator, spudgpu_device_d3d12);
+	if (!device) {
+		adapter->_in_use.store(false);
+		return SPUDRESULT_OUT_OF_MEMORY;
+	}
+	device                 = new (device) spudgpu_device_d3d12();
+	device->head.allocator = adapter->head.allocator;
+	device->_adapter       = adapter;
+	device->_features      = desc->required_features;
+#if _DEBUG
+	if (!spudgpu___internal_live_init(&device->_live)) {
+		spudgpu_d3d12___free_device(device);
+		return SPUDRESULT_GENERAL_FAILURE;
+	}
+#endif
+
+	SPUDRESULT sr = SPUD_SUCCESS;
+	if (FAILED(D3D12CreateDevice(adapter->_dxgi_adapter.Get(), spudgpu_d3d12___minimum_feature_level, IID_PPV_ARGS(&device->_d3d_device))))
+		sr = SPUDRESULT_API_SPECIFIC_FAILURE;
+#if _DEBUG
+	if (sr == SPUD_SUCCESS)
+		spudgpu_d3d12_register_debug_callback(device);
+#endif
+	if (sr == SPUD_SUCCESS)
+		sr = spudgpu_d3d12___create_queues(device, D3D12_COMMAND_LIST_TYPE_DIRECT, desc->direct_queue_count, &device->_cmd_queues_direct);
+	if (sr == SPUD_SUCCESS) {
+		device->_cmd_queue_count_direct = desc->direct_queue_count;
+		sr = spudgpu_d3d12___create_queues(device, D3D12_COMMAND_LIST_TYPE_COMPUTE, desc->compute_queue_count, &device->_cmd_queues_compute);
+	}
+	if (sr == SPUD_SUCCESS) {
+		device->_cmd_queue_count_compute = desc->compute_queue_count;
+		sr = spudgpu_d3d12___create_queues(device, D3D12_COMMAND_LIST_TYPE_COPY, desc->copy_queue_count, &device->_cmd_queues_copy);
+	}
+	if (sr == SPUD_SUCCESS) {
+		device->_cmd_queue_count_copy = desc->copy_queue_count;
+		sr = spudgpu_d3d12___create_shader_heaps(device, desc->max_descriptors, desc->max_samplers);
+	}
+	if (sr == SPUD_SUCCESS && (desc->required_features & SPUDGPU_FEATURE_BINDLESS))
+		sr = spudgpu_d3d12___create_bindless_state(device);
+	if (sr == SPUD_SUCCESS) {
+		device->_tight_draw_signature =
+		    spudgpu_d3d12___create_draw_indirect_signature(device->_d3d_device.Get(), false, sizeof(spudgpu_draw_indirect_args));
+		device->_tight_draw_indexed_signature = spudgpu_d3d12___create_draw_indirect_signature(
+		    device->_d3d_device.Get(), true, sizeof(spudgpu_draw_indexed_indirect_args));
+		if (!device->_tight_draw_signature || !device->_tight_draw_indexed_signature)
+			sr = SPUDRESULT_API_SPECIFIC_FAILURE;
+	}
+	if (sr == SPUD_SUCCESS && spud_debug_name_set(device, desc->debug_name) != SPUD_SUCCESS)
+		sr = SPUDRESULT_OUT_OF_MEMORY;
+	if (sr != SPUD_SUCCESS) {
+#if _DEBUG
+		spudgpu___internal_live_destroy(&device->_live);
+#endif
+		spudgpu_d3d12___free_device(device);
+		return sr;
+	}
+
+	*out_device = device;
+	return SPUD_SUCCESS;
+}
+
+void spudgpu_destroy_device(spudgpu_device device) {
+	if (!device)
+		return;
+#if _DEBUG
+	spudgpu___internal_live_check_none(&device->_live, device->head.debug_name);
+	spudgpu___internal_live_destroy(&device->_live);
+#endif
+	spudgpu_d3d12___free_device(device);
+}
+
+spudgpu_adapter spudgpu_get_device_adapter(spudgpu_device device) {
+	return device ? device->_adapter : nullptr;
+}
+
+SPUDGPU_FEATURES spudgpu_get_device_features(spudgpu_device device) {
+	return device ? device->_features : 0;
 }
 
 SPUDGPU_NATIVE_API spudgpu_get_native_gpu_api(spudgpu_instance instance) {
 	return instance ? SPUDGPU_NATIVE_API_D3D12 : SPUDGPU_NATIVE_API_NONE;
 }
-
-#if SPUDGPU_EXT_MESH_SHADING
-SPUDRESULT spudgpu_get_mesh_shading_capabilities(
-    spudgpu_device device, spudgpu_mesh_shading_capabilities *out_caps) {
-	if (!device)
-		return SPUDRESULT_GPU_INVALID_DEVICE;
-	if (!out_caps)
-		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
-	const SPUDRESULT base_sr = spud_struct_out_check(&out_caps->base, SPUD_STRUCT_TYPE_GPU_MESH_SHADING_CAPABILITIES);
-	if (base_sr != SPUD_SUCCESS)
-		return base_sr;
-
-	*out_caps = {};
-	// Whatever was copied over it, the base stays the caller's.
-	out_caps->base = spud_struct_base_out(SPUD_STRUCT_TYPE_GPU_MESH_SHADING_CAPABILITIES);
-
-	D3D12_FEATURE_DATA_D3D12_OPTIONS7 options7 = {};
-	HRESULT hr                                 = device->_d3d_device->CheckFeatureSupport(
-	    D3D12_FEATURE_D3D12_OPTIONS7, &options7, sizeof(options7));
-	out_caps->supported =
-	    SUCCEEDED(hr) && options7.MeshShaderTier != D3D12_MESH_SHADER_TIER_NOT_SUPPORTED;
-	if (!out_caps->supported)
-		return SPUD_SUCCESS;
-
-	// D3D12/SM6.5 spec-mandated maximums (not a per-device query the way
-	// Vulkan's VkPhysicalDeviceMeshShaderPropertiesEXT is) - every tier
-	// (D3D12_MESH_SHADER_TIER_1) guarantees these limits.
-	out_caps->max_mesh_output_vertices       = 256;
-	out_caps->max_mesh_output_primitives     = 256;
-	out_caps->max_mesh_workgroup_invocations = 128;
-	return SPUD_SUCCESS;
-}
-#endif
-
-#if SPUDGPU_EXT_DEPTH_BOUNDS_TEST
-SPUDRESULT spudgpu_get_depth_bounds_capabilities(
-    spudgpu_device device, spudgpu_depth_bounds_capabilities *out_caps) {
-	if (!device)
-		return SPUDRESULT_GPU_INVALID_DEVICE;
-	if (!out_caps)
-		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
-	const SPUDRESULT base_sr = spud_struct_out_check(&out_caps->base, SPUD_STRUCT_TYPE_GPU_DEPTH_BOUNDS_CAPABILITIES);
-	if (base_sr != SPUD_SUCCESS)
-		return base_sr;
-
-	*out_caps = {};
-	// Whatever was copied over it, the base stays the caller's.
-	out_caps->base = spud_struct_base_out(SPUD_STRUCT_TYPE_GPU_DEPTH_BOUNDS_CAPABILITIES);
-
-	D3D12_FEATURE_DATA_D3D12_OPTIONS2 options2 = {};
-	HRESULT hr                                  = device->_d3d_device->CheckFeatureSupport(
-	    D3D12_FEATURE_D3D12_OPTIONS2, &options2, sizeof(options2));
-	out_caps->supported = SUCCEEDED(hr) && options2.DepthBoundsTestSupported;
-	return SPUD_SUCCESS;
-}
-#endif
 
 SPUDRESULT spudgpu_create_surface(
     spudgpu_instance instance,

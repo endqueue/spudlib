@@ -9,17 +9,10 @@
 
 #include "spudgpu.h"
 #include "../../../spudallocator.h"
+#include "../../spudgpushared.h"
 #include <Metal/Metal.h>
 #include <stdatomic.h>
 #include <QuartzCore/QuartzCore.h>
-
-// Metal command queues aren't partitioned into families the way Vulkan/D3D12
-// queues are (see the natives-header asymmetries in ../../../CLAUDE.md) - any
-// id<MTLCommandQueue> can encode render, compute, or blit work. These three
-// arrays exist purely to keep spudgpu_get_command_queue's (type, index) shape
-// symmetric with the other backends; each slot is still just a generic Metal
-// queue.
-#define SPUD_METAL_COMMAND_QUEUE_COUNT_PER_FAMILY 4
 
 // Metal's setViewports:count:/setScissorRects:count: always set from slot 0
 // with no first_viewport-style offset (unlike Vulkan's vkCmdSetViewport),
@@ -59,33 +52,54 @@
 typedef struct spudgpu_instance_t {
 	spud_object_head head;
 	// Metal has no top-level instance/factory object (unlike VkInstance or
-	// IDXGIFactory) - devices come straight from MTLCopyAllDevices(). This
-	// struct exists purely so spudgpu_instance can still own and clean up
-	// every spudgpu_device handed out by spudgpu_enumerate_devices, matching
-	// the ownership contract the Vulkan/D3D12 backends use (there is no
-	// public spudgpu_destroy_device).
-	// The array spudgpu_enumerate_devices hands out, made by its first call
-	// and freed with the instance.
-	spudgpu_device *_devices;
-	uint32_t _devices_count;
+	// IDXGIFactory): the GPUs come straight from MTLCopyAllDevices(). This
+	// holds the adapters listed when it was made, which never change, and
+	// frees them with itself.
+	spudgpu_adapter *_adapters;
+	uint32_t _adapter_count;
 } spudgpu_instance_metal;
+
+typedef struct spudgpu_adapter_t {
+	spud_object_head head;
+	// Retained for the adapter's life. Metal has one MTLDevice per GPU, which
+	// a device created on the adapter shares.
+	id<MTLDevice> _device_mtl;
+	// Read when the instance was made and never changed.
+	spudgpu___adapter_facts _facts;
+	// Whether a device exists on the adapter: one at a time, claimed with an
+	// exchange by spudgpu_create_device and given back by
+	// spudgpu_destroy_device. The adapter is shared, hidden state, so this is
+	// SpudGPU's to guard.
+	atomic_bool _in_use;
+} spudgpu_adapter_metal;
 
 typedef struct spudgpu_device_t {
 	spud_object_head head;
+	// The adapter's, retained again for the device's life.
 	id<MTLDevice> _device_mtl;
-	SPUDGPU_DEVICE_PROPERTIES _properties;
-	spudgpu_command_queue _cmd_queues_direct[SPUD_METAL_COMMAND_QUEUE_COUNT_PER_FAMILY];
-	spudgpu_command_queue _cmd_queues_copy[SPUD_METAL_COMMAND_QUEUE_COUNT_PER_FAMILY];
-	spudgpu_command_queue _cmd_queues_compute[SPUD_METAL_COMMAND_QUEUE_COUNT_PER_FAMILY];
-
-	// Set once at device enumeration (spudgpumetalcontext.m) from
-	// [_device_mtl supportsFamily:MTLGPUFamilyApple10] - unlike mesh shading
-	// (unconditionally true on every Metal 3 device this backend targets),
-	// depth bounds testing is a genuinely new (macOS/iOS 26+) primitive that
-	// only the newest Apple GPU family exposes. Mirrors
-	// spudgpu_depth_bounds_capabilities (see SPUDGPU_EXT_DEPTH_BOUNDS_TEST in
-	// spudgpu.h).
-	bool _depth_bounds_test_supported;
+	spudgpu_adapter_metal *_adapter;
+	// spudgpu_device_desc::required_features: what every call checks.
+	SPUDGPU_FEATURES _features;
+	// The queues the desc asked for, by kind, each array as long as its
+	// count (NULL for 0). Metal queues are not partitioned into families
+	// (see the natives-header asymmetries in ../../../CLAUDE.md): each is a
+	// plain MTLCommandQueue, and the kinds only keep
+	// spudgpu_get_command_queue's (type, index) shape the same on every
+	// backend.
+	spudgpu_command_queue *_cmd_queues_direct;
+	uint32_t _cmd_queue_count_direct;
+	spudgpu_command_queue *_cmd_queues_compute;
+	uint32_t _cmd_queue_count_compute;
+	spudgpu_command_queue *_cmd_queues_copy;
+	uint32_t _cmd_queue_count_copy;
+	// spudgpu_device_desc::max_descriptors and ::max_samplers: what the
+	// device's descriptor pools take out of.
+	spudgpu___descriptor_budget _budget;
+#if _DEBUG
+	// Objects made from the device and not yet destroyed, by kind;
+	// spudgpu_destroy_device reports and asserts on any left.
+	spudgpu___live_objects _live;
+#endif
 } spudgpu_device_metal;
 
 typedef struct spudgpu_buffer_t {
@@ -105,6 +119,9 @@ typedef struct spudgpu_buffer_view_t {
 	// the caller's desc.parent_buffer was - see spudgpu_create_buffer_view)
 	// - no separate redundant pointer field here.
 	spudgpu_buffer_view_desc _desc;
+	// The buffer's device, kept here because a view may be destroyed after
+	// its buffer (its live count is the device's).
+	spudgpu_device_metal *_parent_device;
 } spudgpu_buffer_view_metal;
 
 typedef struct spudgpu_image_t {
@@ -141,7 +158,7 @@ typedef struct spudgpu_heap_t {
 // spudgpu_create_buffer's desc checks, in its order, after its argument
 // checks: size, usage, memory kind, usage against kind, device.
 SPUDRESULT spudgpumetal___check_buffer_desc(
-    const SPUDGPU_DEVICE_PROPERTIES *properties,
+    SPUDGPU_FEATURES features,
     const spudgpu_buffer_desc *desc);
 // The storage and CPU cache modes a buffer of [memory_kind] is made with.
 MTLResourceOptions spudgpumetal___buffer_resource_options(SPUDGPU_MEMORY_KIND memory_kind);
@@ -159,6 +176,9 @@ typedef struct spudgpu_image_view_t {
 	// distinct view object - this is that view texture, not the parent's.
 	id<MTLTexture> _texture_view_mtl;
 	spudgpu_image_metal *_parent_image;
+	// The image's device, kept here because a view may be destroyed after
+	// its image (its live count is the device's).
+	spudgpu_device_metal *_parent_device;
 	spudgpu_image_view_desc _desc;
 } spudgpu_image_view_metal;
 
@@ -303,6 +323,7 @@ typedef struct spudgpu_timestamp_set_t {
 	// (spudgpumetalrenderpass.m).
 	id<MTLCounterSampleBuffer> _sample_buffer_mtl;
 	id<MTLDevice> _device_mtl;
+	spudgpu_device_metal *_parent_device;
 	uint32_t _count;
 	// sampleTimestamps:gpuTimestamp: at creation: the CPU and GPU clocks at
 	// one moment, which spudgpu_get_timestamps sets against a second pair.
@@ -330,6 +351,13 @@ void spudgpumetal___internal_end_active_compute_encoder(spudgpu_command_list_met
 // both of which must end any active blit encoder before opening their own -
 // see _active_blit_encoder's comment above.
 void spudgpumetal___internal_end_active_blit_encoder(spudgpu_command_list_metal *cmd_list_metal);
+
+// The largest draw_count one indirect draw on [device] takes:
+// SPUDGPU_ADAPTER_PROPERTIES::max_draw_indirect_count with
+// SPUDGPU_FEATURE_MULTI_DRAW_INDIRECT, else 1.
+static inline uint32_t spudgpumetal___max_draw_indirect_count(const spudgpu_device_metal *device) {
+	return (device->_features & SPUDGPU_FEATURE_MULTI_DRAW_INDIRECT) ? device->_adapter->_facts.properties.max_draw_indirect_count : 1;
+}
 
 // The device's timestamp counter set (MTLCommonCounterSetTimestamp),
 // retained, which the caller releases; or nil if it has none. Defined in
@@ -441,6 +469,7 @@ typedef struct spudgpu_semaphore_t {
 typedef struct spudgpu_sampler_t {
 	spud_object_head head;
 	id<MTLSamplerState> _sampler_state_mtl;
+	spudgpu_device_metal *_parent_device;
 } spudgpu_sampler_metal;
 
 typedef struct spudgpu_descriptor_set_layout_t {
@@ -467,6 +496,10 @@ typedef struct spudgpu_descriptor_pool_t {
 	// vkAllocateDescriptorSets' out-of-pool-memory failure without an actual
 	// pooled allocator behind it.
 	uint32_t _allocated_set_count;
+	// What the pool took out of its device's descriptor budget, given back
+	// when it is destroyed.
+	uint64_t _budget_descriptors;
+	uint64_t _budget_samplers;
 	// Owned array of every live set allocated from this pool (length
 	// _desc.max_sets) - purely so spudgpu_reset_descriptor_pool/
 	// spudgpu_destroy_descriptor_pool can free each set's MTLBuffer in bulk,

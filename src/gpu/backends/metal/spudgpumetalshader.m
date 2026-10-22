@@ -267,6 +267,9 @@ SPUDRESULT spudgpu_create_shader_module(
 		}
 	}
 
+	// From here spudgpu_destroy_shader_module frees it, and takes the count
+	// back.
+	SPUDGPU___LIVE_ADD(&device_metal->_live, SPUDGPU___OBJECT_SHADER_MODULE);
 	if (spud_debug_name_set(module_metal, desc->debug_name) != SPUD_SUCCESS) {
 		spudgpu_destroy_shader_module((spudgpu_shader_module)module_metal);
 		return SPUDRESULT_OUT_OF_MEMORY;
@@ -299,6 +302,7 @@ void spudgpu_destroy_shader_module(spudgpu_shader_module shader_module) {
 		if (module_metal->_library_mtl) {
 			[module_metal->_library_mtl release];
 		}
+		SPUDGPU___LIVE_REMOVE(&module_metal->_parent_device->_live, SPUDGPU___OBJECT_SHADER_MODULE);
 		const SPUD_ALLOCATOR allocator = module_metal->head.allocator;
 		spud_string_free(&allocator, module_metal->head.debug_name);
 		SPUD_DELETE(&allocator, spudgpu_shader_module_metal, module_metal);
@@ -450,7 +454,9 @@ SPUDRESULT spudgpu_create_shader_pipeline(
 		return SPUDRESULT_GPU_VERTEX_AND_FRAGMENT_SHADER_REQUIRED;
 	if (desc->vertex_module && desc->mesh_module)
 		return SPUDRESULT_GPU_INVALID_SHADER_STAGE; // Mutually exclusive - see spudgpu.h.
-	SPUDRESULT outputs = spudgpu___internal_check_pipeline_outputs(desc, &((spudgpu_device_metal *)device)->_properties);
+	if (desc->mesh_module && !(device->_features & SPUDGPU_FEATURE_MESH_SHADING))
+		return SPUDRESULT_GPU_EXT_MESH_SHADING_NOT_SUPPORTED;
+	SPUDRESULT outputs = spudgpu___internal_check_pipeline_outputs(desc, device->_features);
 	if (outputs != SPUD_SUCCESS)
 		return outputs;
 	// Metal has no geometry-shader stage at all, and tessellation goes
@@ -616,6 +622,7 @@ SPUDRESULT spudgpu_create_shader_pipeline(
 		}
 	}
 
+	SPUDGPU___LIVE_ADD(&device_metal->_live, SPUDGPU___OBJECT_SHADER_PIPELINE);
 	if (spud_debug_name_set(pipeline_metal, desc->debug_name) != SPUD_SUCCESS) {
 		spudgpu_destroy_shader_pipeline((spudgpu_shader_pipeline)pipeline_metal);
 		return SPUDRESULT_OUT_OF_MEMORY;
@@ -648,66 +655,12 @@ void spudgpu_destroy_shader_pipeline(spudgpu_shader_pipeline pipeline) {
 		if (pipeline_metal->_render_pipeline_state_mtl) {
 			[pipeline_metal->_render_pipeline_state_mtl release];
 		}
+		SPUDGPU___LIVE_REMOVE(&pipeline_metal->_parent_device->_live, SPUDGPU___OBJECT_SHADER_PIPELINE);
 		const SPUD_ALLOCATOR allocator = pipeline_metal->head.allocator;
 		spud_string_free(&allocator, pipeline_metal->head.debug_name);
 		SPUD_DELETE(&allocator, spudgpu_shader_pipeline_metal, pipeline_metal);
 	}
 }
-
-// -----------------------------------------------------------------------
-// Mesh shading capabilities
-// -----------------------------------------------------------------------
-
-#if SPUDGPU_EXT_MESH_SHADING
-SPUDRESULT spudgpu_get_mesh_shading_capabilities(
-    spudgpu_device device,
-    spudgpu_mesh_shading_capabilities *out_caps) {
-	if (!device)
-		return SPUDRESULT_GPU_INVALID_DEVICE;
-	if (!out_caps)
-		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
-	const SPUDRESULT base_sr = spud_struct_out_check(&out_caps->base, SPUD_STRUCT_TYPE_GPU_MESH_SHADING_CAPABILITIES);
-	if (base_sr != SPUD_SUCCESS)
-		return base_sr;
-
-	// Metal 3 mesh shading is required on every device this backend targets
-	// (see spudgpu.h's bindless section for the same Metal-3-only baseline).
-	// Metal has no single MTLDevice-level query for max mesh output vertex/
-	// primitive counts the way Vulkan/D3D12 report fixed hardware limits -
-	// Metal's own limit is a per-pipeline maxTotalThreadsPerMeshThreadgroup
-	// (memory/thread-count driven, not a fixed vertex/primitive cap). These
-	// are the conventional NV/AMD-style meshlet limits every sample in this
-	// project's mesh-shader family targets, not a hardware-queried ceiling.
-	out_caps->supported                       = true;
-	out_caps->max_mesh_output_vertices         = 256;
-	out_caps->max_mesh_output_primitives       = 256;
-	out_caps->max_mesh_workgroup_invocations   = 1024;
-	return SPUD_SUCCESS;
-}
-#endif // SPUDGPU_EXT_MESH_SHADING
-
-// -----------------------------------------------------------------------
-// Depth bounds test capabilities
-// -----------------------------------------------------------------------
-
-#if SPUDGPU_EXT_DEPTH_BOUNDS_TEST
-SPUDRESULT spudgpu_get_depth_bounds_capabilities(
-    spudgpu_device device,
-    spudgpu_depth_bounds_capabilities *out_caps) {
-	if (!device)
-		return SPUDRESULT_GPU_INVALID_DEVICE;
-	if (!out_caps)
-		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
-	const SPUDRESULT base_sr = spud_struct_out_check(&out_caps->base, SPUD_STRUCT_TYPE_GPU_DEPTH_BOUNDS_CAPABILITIES);
-	if (base_sr != SPUD_SUCCESS)
-		return base_sr;
-
-	// Set once at device enumeration (spudgpumetalcontext.m) from
-	// [_device_mtl supportsFamily:MTLGPUFamilyApple10].
-	out_caps->supported = device->_depth_bounds_test_supported;
-	return SPUD_SUCCESS;
-}
-#endif // SPUDGPU_EXT_DEPTH_BOUNDS_TEST
 
 // -----------------------------------------------------------------------
 // Compute pipelines
@@ -765,6 +718,7 @@ SPUDRESULT spudgpu_create_compute_pipeline(
 		}
 	}
 
+	SPUDGPU___LIVE_ADD(&device_metal->_live, SPUDGPU___OBJECT_COMPUTE_PIPELINE);
 	if (spud_debug_name_set(pipeline_metal, desc->debug_name) != SPUD_SUCCESS) {
 		spudgpu_destroy_compute_pipeline((spudgpu_compute_pipeline)pipeline_metal);
 		return SPUDRESULT_OUT_OF_MEMORY;
@@ -791,6 +745,7 @@ void spudgpu_destroy_compute_pipeline(spudgpu_compute_pipeline pipeline) {
 		if (pipeline_metal->_compute_pipeline_state_mtl) {
 			[pipeline_metal->_compute_pipeline_state_mtl release];
 		}
+		SPUDGPU___LIVE_REMOVE(&pipeline_metal->_parent_device->_live, SPUDGPU___OBJECT_COMPUTE_PIPELINE);
 		const SPUD_ALLOCATOR allocator = pipeline_metal->head.allocator;
 		spud_string_free(&allocator, pipeline_metal->head.debug_name);
 		SPUD_DELETE(&allocator, spudgpu_compute_pipeline_metal, pipeline_metal);

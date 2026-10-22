@@ -29,7 +29,9 @@ extern "C" {
 id<MTLDevice> spudgpu_get_mtl_device(spudgpu_device device);
 
 /* No physical/logical device split: id<MTLDevice> already covers both
- * roles Vulkan splits into VkPhysicalDevice/VkDevice. */
+ * roles Vulkan splits into VkPhysicalDevice/VkDevice, so an adapter and the
+ * device created on it hand back the same id<MTLDevice>. */
+id<MTLDevice> spudgpu_get_mtl_adapter_device(spudgpu_adapter adapter);
 
 id<MTLCommandQueue> spudgpu_get_mtl_command_queue(spudgpu_command_queue queue);
 

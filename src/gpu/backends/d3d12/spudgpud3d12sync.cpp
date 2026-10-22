@@ -43,6 +43,7 @@ SPUDRESULT spudgpu_create_fence(
 		return SPUDRESULT_API_SPECIFIC_FAILURE;
 	}
 
+	SPUDGPU___LIVE_ADD(&device->_live, SPUDGPU___OBJECT_FENCE);
 	*out_fence = pResult;
 
 	return SPUD_SUCCESS;
@@ -51,6 +52,7 @@ SPUDRESULT spudgpu_create_fence(
 void spudgpu_destroy_fence(spudgpu_fence fence) {
 	if (!fence)
 		return;
+	SPUDGPU___LIVE_REMOVE(&fence->_device->_live, SPUDGPU___OBJECT_FENCE);
 	const SPUD_ALLOCATOR allocator = fence->head.allocator;
 	spud_string_free(&allocator, fence->head.debug_name);
 	fence->~spudgpu_fence_d3d12();
@@ -159,6 +161,7 @@ SPUDRESULT spudgpu_create_semaphore(
 		return SPUDRESULT_API_SPECIFIC_FAILURE;
 	}
 
+	SPUDGPU___LIVE_ADD(&device->_live, SPUDGPU___OBJECT_SEMAPHORE);
 	*out_semaphore = pResult;
 
 	return SPUD_SUCCESS;
@@ -167,6 +170,7 @@ SPUDRESULT spudgpu_create_semaphore(
 void spudgpu_destroy_semaphore(spudgpu_semaphore semaphore) {
 	if (!semaphore)
 		return;
+	SPUDGPU___LIVE_REMOVE(&semaphore->_device->_live, SPUDGPU___OBJECT_SEMAPHORE);
 	const SPUD_ALLOCATOR allocator = semaphore->head.allocator;
 	spud_string_free(&allocator, semaphore->head.debug_name);
 	semaphore->~spudgpu_semaphore_d3d12();

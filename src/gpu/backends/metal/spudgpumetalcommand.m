@@ -16,29 +16,6 @@
 #include <string.h>
 #include "../../../spudstructbase.h"
 
-spudgpu_command_queue spudgpu_get_graphics_queue(spudgpu_device device) {
-	if (!device)
-		return NULL;
-
-	spudgpu_device_metal *device_metal = (spudgpu_device_metal *)device;
-	return device_metal->_cmd_queues_direct[0];
-}
-
-uint32_t spudgpu_get_max_queue_count(
-    spudgpu_device device,
-    SPUDGPU_COMMAND_LIST_TYPE type) {
-	if (!device)
-		return 0;
-	if (type > SPUDGPU_COMMAND_LIST_TYPE_COMPUTE)
-		return 0;
-	// Bundles aren't submitted to a queue directly on any backend (the D3D12
-	// backend has no bundle queue family either) - Metal has nothing to report.
-	if (type == SPUDGPU_COMMAND_LIST_TYPE_BUNDLE)
-		return 0;
-
-	return SPUD_METAL_COMMAND_QUEUE_COUNT_PER_FAMILY;
-}
-
 SPUDRESULT spudgpu_get_command_queue(
     spudgpu_device device,
     SPUDGPU_COMMAND_LIST_TYPE type,
@@ -46,31 +23,30 @@ SPUDRESULT spudgpu_get_command_queue(
     spudgpu_command_queue *out_queue) {
 	if (!device)
 		return SPUDRESULT_GPU_INVALID_DEVICE;
-	if (type != SPUDGPU_COMMAND_LIST_TYPE_DIRECT && type != SPUDGPU_COMMAND_LIST_TYPE_COPY &&
-	    type != SPUDGPU_COMMAND_LIST_TYPE_COMPUTE)
+	spudgpu_command_queue *queues = NULL;
+	uint32_t count                = 0;
+	switch (type) {
+	case SPUDGPU_COMMAND_LIST_TYPE_DIRECT:
+		queues = device->_cmd_queues_direct;
+		count  = device->_cmd_queue_count_direct;
+		break;
+	case SPUDGPU_COMMAND_LIST_TYPE_COMPUTE:
+		queues = device->_cmd_queues_compute;
+		count  = device->_cmd_queue_count_compute;
+		break;
+	case SPUDGPU_COMMAND_LIST_TYPE_COPY:
+		queues = device->_cmd_queues_copy;
+		count  = device->_cmd_queue_count_copy;
+		break;
+	default:
+		// Bundles aren't submitted to a queue, on any backend.
 		return SPUDRESULT_GPU_INVALID_COMMAND_LIST_TYPE;
-	if (index >= SPUD_METAL_COMMAND_QUEUE_COUNT_PER_FAMILY)
+	}
+	if (index >= count)
 		return SPUDRESULT_INDEX_OUT_OF_RANGE;
 	if (!out_queue)
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
-
-	spudgpu_device_metal *device_metal = (spudgpu_device_metal *)device;
-
-	switch (type) {
-	case SPUDGPU_COMMAND_LIST_TYPE_DIRECT:
-		*out_queue = device_metal->_cmd_queues_direct[index];
-		break;
-	case SPUDGPU_COMMAND_LIST_TYPE_COPY:
-		*out_queue = device_metal->_cmd_queues_copy[index];
-		break;
-	case SPUDGPU_COMMAND_LIST_TYPE_COMPUTE:
-		*out_queue = device_metal->_cmd_queues_compute[index];
-		break;
-	default:
-		// Bundles aren't submitted to a queue directly - see spudgpu_get_max_queue_count.
-		return SPUDRESULT_GPU_INVALID_COMMAND_LIST_TYPE;
-	}
-
+	*out_queue = queues[index];
 	return SPUD_SUCCESS;
 }
 
@@ -124,25 +100,23 @@ SPUDRESULT spudgpu_submit_command_lists_synced(
 	return spudgpu_queue_submit(queue, &desc);
 }
 
-// Metal has no queue-family partitioning (see SPUD_METAL_COMMAND_QUEUE_COUNT_PER_FAMILY
-// in spudgpumetal.h), so a command allocator's only real job on this backend is
-// to remember which cached device queue its command lists should pull fresh
-// id<MTLCommandBuffer> objects from. COPY/COMPUTE route to their matching
-// family; DIRECT and BUNDLE both route to the direct family, the same way
-// Vulkan's single graphics queue family backs every SPUDGPU_COMMAND_LIST_TYPE
-// (Metal has no bundle concept, let alone a bundle queue, to route to instead).
+// The queue a command allocator's lists pull their command buffers from:
+// the first of its type the device has, a bundle's the first direct one
+// (Metal has no bundle, let alone a bundle queue). NULL when the device has
+// none of that type, which spudgpu_create_command_allocator refuses.
 static spudgpu_command_queue_metal *spudgpumetal___internal_resolve_allocator_queue(
     spudgpu_device_metal *device,
     SPUDGPU_COMMAND_LIST_TYPE type) {
 	switch (type) {
 	case SPUDGPU_COMMAND_LIST_TYPE_COPY:
-		return (spudgpu_command_queue_metal *)device->_cmd_queues_copy[0];
+		return device->_cmd_queue_count_copy ? (spudgpu_command_queue_metal *)device->_cmd_queues_copy[0] : NULL;
 	case SPUDGPU_COMMAND_LIST_TYPE_COMPUTE:
-		return (spudgpu_command_queue_metal *)device->_cmd_queues_compute[0];
+		return device->_cmd_queue_count_compute ? (spudgpu_command_queue_metal *)device->_cmd_queues_compute[0] : NULL;
 	case SPUDGPU_COMMAND_LIST_TYPE_DIRECT:
 	case SPUDGPU_COMMAND_LIST_TYPE_BUNDLE:
+		return device->_cmd_queue_count_direct ? (spudgpu_command_queue_metal *)device->_cmd_queues_direct[0] : NULL;
 	default:
-		return (spudgpu_command_queue_metal *)device->_cmd_queues_direct[0];
+		return NULL;
 	}
 }
 
@@ -194,35 +168,29 @@ SPUDRESULT spudgpu_create_command_allocator(
 		return base_sr;
 	if (!out_allocator)
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
-
-	SPUDRESULT sr = SPUD_SUCCESS;
+	spudgpu_command_queue_metal *queue = spudgpumetal___internal_resolve_allocator_queue(device, desc->type);
+	if (!queue)
+		return SPUDRESULT_GPU_INVALID_COMMAND_LIST_TYPE;
 
 	spudgpu_command_allocator_metal *allocator_metal =
 	    SPUD_NEW_ZEROED(&device->head.allocator, spudgpu_command_allocator_metal);
-	if (!allocator_metal) {
-		sr = SPUDRESULT_GENERAL_FAILURE;
-		goto failedattempt;
-	}
+	if (!allocator_metal)
+		return SPUDRESULT_OUT_OF_MEMORY;
 	allocator_metal->head.allocator = device->head.allocator;
 	allocator_metal->_parent_device = (spudgpu_device_metal *)device;
 	allocator_metal->_desc          = *desc;
-	allocator_metal->_parent_queue  =
-	    spudgpumetal___internal_resolve_allocator_queue(allocator_metal->_parent_device, desc->type);
+	allocator_metal->_parent_queue  = queue;
 
+	SPUDGPU___LIVE_ADD(&allocator_metal->_parent_device->_live, SPUDGPU___OBJECT_COMMAND_ALLOCATOR);
 	*out_allocator = (spudgpu_command_allocator)allocator_metal;
-
-	return sr;
-
-failedattempt:
-	return sr;
+	return SPUD_SUCCESS;
 }
 
 void spudgpu_destroy_command_allocator(spudgpu_command_allocator allocator) {
 	spudgpu_command_allocator_metal *allocator_metal = (spudgpu_command_allocator_metal *)allocator;
 	if (allocator_metal) {
-		// _parent_queue is a borrowed reference into the device's cached
-		// queue families (owned/released by spudgpu_destroy_instance) - not
-		// this allocator's to release.
+		// _parent_queue is borrowed from the device, which releases it.
+		SPUDGPU___LIVE_REMOVE(&allocator_metal->_parent_device->_live, SPUDGPU___OBJECT_COMMAND_ALLOCATOR);
 		const SPUD_ALLOCATOR memory_allocator = allocator_metal->head.allocator;
 		spud_string_free(&memory_allocator, allocator_metal->head.debug_name);
 		SPUD_DELETE(&memory_allocator, spudgpu_command_allocator_metal, allocator_metal);
@@ -267,6 +235,7 @@ SPUDRESULT spudgpu_create_command_list(
 
 	spudgpumetal___internal_acquire_command_buffer(cmd_list_metal);
 
+	SPUDGPU___LIVE_ADD(&cmd_list_metal->_parent_allocator->_parent_device->_live, SPUDGPU___OBJECT_COMMAND_LIST);
 	*out_cmd_list = (spudgpu_command_list)cmd_list_metal;
 
 	return sr;
@@ -286,6 +255,7 @@ void spudgpu_destroy_command_list(spudgpu_command_list cmd) {
 		if (cmd_list_metal->_parent_allocator->_open_list == cmd)
 			cmd_list_metal->_parent_allocator->_open_list = NULL;
 #endif
+		SPUDGPU___LIVE_REMOVE(&cmd_list_metal->_parent_allocator->_parent_device->_live, SPUDGPU___OBJECT_COMMAND_LIST);
 		const SPUD_ALLOCATOR allocator = cmd_list_metal->head.allocator;
 		spud_string_free(&allocator, cmd_list_metal->head.debug_name);
 		SPUD_DELETE(&allocator, spudgpu_command_list_metal, cmd_list_metal);
@@ -828,14 +798,13 @@ void spudgpu_cmd_set_depth_bounds(
 	if (!cmd_list_metal->_active_render_encoder)
 		return;
 
-	// _depth_bounds_test_supported is set once at device enumeration (see
-	// spudgpumetalcontext.m) from [MTLDevice supportsFamily:
-	// MTLGPUFamilyApple10] - false here means calling
-	// setDepthTestMinBound:maxBound: at all would be invalid (unlike
-	// Vulkan/D3D12, Metal has no pipeline-level toggle to fall back to being
-	// a harmless no-op against - see spudgpu.h's
+	// Without the feature, setDepthTestMinBound:maxBound: may be invalid on
+	// this GPU (MTLGPUFamilyApple10 only), and Metal has no pipeline-level
+	// toggle to fall back to a harmless no-op against (see spudgpu.h's
 	// spudgpu_cmd_set_depth_bounds doc comment).
-	if (!cmd_list_metal->_parent_allocator->_parent_device->_depth_bounds_test_supported)
+	const bool enabled = (cmd_list_metal->_parent_allocator->_parent_device->_features & SPUDGPU_FEATURE_DEPTH_BOUNDS_TEST) != 0;
+	assert(enabled && "spudgpu_cmd_set_depth_bounds: the device was created without SPUDGPU_FEATURE_DEPTH_BOUNDS_TEST");
+	if (!enabled)
 		return;
 
 	if (@available(macOS 26.0, iOS 26.0, *)) {
@@ -855,7 +824,7 @@ void spudgpu_cmd_draw_indirect(
 		return;
 
 	spudgpu_command_list_metal *cmd_list_metal = (spudgpu_command_list_metal *)cmd;
-	if (draw_count > cmd_list_metal->_parent_allocator->_parent_device->_properties.max_draw_indirect_count)
+	if (draw_count > spudgpumetal___max_draw_indirect_count(cmd_list_metal->_parent_allocator->_parent_device))
 		return;
 	if (stride % 4 != 0 || stride < sizeof(spudgpu_draw_indirect_args))
 		return;
@@ -893,7 +862,7 @@ void spudgpu_cmd_draw_indexed_indirect(
 		return;
 
 	spudgpu_command_list_metal *cmd_list_metal = (spudgpu_command_list_metal *)cmd;
-	if (draw_count > cmd_list_metal->_parent_allocator->_parent_device->_properties.max_draw_indirect_count)
+	if (draw_count > spudgpumetal___max_draw_indirect_count(cmd_list_metal->_parent_allocator->_parent_device))
 		return;
 	if (stride % 4 != 0 || stride < sizeof(spudgpu_draw_indexed_indirect_args))
 		return;

@@ -8,23 +8,6 @@
 
 extern "C" {
 
-spudgpu_command_queue spudgpu_get_graphics_queue(spudgpu_device device) {
-	if (!device)
-		return nullptr;
-	return device->_cmd_queues_direct[0];
-}
-
-uint32_t spudgpu_get_max_queue_count(
-    spudgpu_device device, SPUDGPU_COMMAND_LIST_TYPE type) {
-	if (!device)
-		return 0;
-	// Bundles aren't submitted to a queue directly, so they have no queues.
-	if (type != SPUDGPU_COMMAND_LIST_TYPE_DIRECT && type != SPUDGPU_COMMAND_LIST_TYPE_COPY &&
-	    type != SPUDGPU_COMMAND_LIST_TYPE_COMPUTE)
-		return 0;
-	return SPUD_D3D12_COMMAND_QUEUE_COUNT_PER_FAMILY;
-}
-
 SPUDRESULT spudgpu_get_command_queue(
     spudgpu_device device,
     SPUDGPU_COMMAND_LIST_TYPE type,
@@ -32,26 +15,30 @@ SPUDRESULT spudgpu_get_command_queue(
     spudgpu_command_queue *out_queue) {
 	if (!device)
 		return SPUDRESULT_GPU_INVALID_DEVICE;
-	if (type != SPUDGPU_COMMAND_LIST_TYPE_DIRECT && type != SPUDGPU_COMMAND_LIST_TYPE_COPY &&
-	    type != SPUDGPU_COMMAND_LIST_TYPE_COMPUTE)
+	spudgpu_command_queue *queues = nullptr;
+	uint32_t count                = 0;
+	switch (type) {
+	case SPUDGPU_COMMAND_LIST_TYPE_DIRECT:
+		queues = device->_cmd_queues_direct;
+		count  = device->_cmd_queue_count_direct;
+		break;
+	case SPUDGPU_COMMAND_LIST_TYPE_COMPUTE:
+		queues = device->_cmd_queues_compute;
+		count  = device->_cmd_queue_count_compute;
+		break;
+	case SPUDGPU_COMMAND_LIST_TYPE_COPY:
+		queues = device->_cmd_queues_copy;
+		count  = device->_cmd_queue_count_copy;
+		break;
+	default:
+		// Bundles aren't submitted to a queue, on any backend.
 		return SPUDRESULT_GPU_INVALID_COMMAND_LIST_TYPE;
-	if (index >= SPUD_D3D12_COMMAND_QUEUE_COUNT_PER_FAMILY)
+	}
+	if (index >= count)
 		return SPUDRESULT_INDEX_OUT_OF_RANGE;
 	if (!out_queue)
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
-	switch (type) {
-	case SPUDGPU_COMMAND_LIST_TYPE_DIRECT:
-		*out_queue = device->_cmd_queues_direct[index];
-		break;
-	case SPUDGPU_COMMAND_LIST_TYPE_COPY:
-		*out_queue = device->_cmd_queues_copy[index];
-		break;
-	case SPUDGPU_COMMAND_LIST_TYPE_COMPUTE:
-		*out_queue = device->_cmd_queues_compute[index];
-		break;
-	default:
-		return SPUDRESULT_GPU_INVALID_COMMAND_LIST_TYPE;
-	}
+	*out_queue = queues[index];
 	return SPUD_SUCCESS;
 }
 
@@ -115,6 +102,25 @@ SPUDRESULT spudgpu_create_command_allocator(
 		return base_sr;
 	if (!out_allocator)
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
+	// The lists of an allocator are submitted to a queue of its kind, a
+	// bundle's run inside a direct list: the device must have one.
+	uint32_t queues = 0;
+	switch (desc->type) {
+	case SPUDGPU_COMMAND_LIST_TYPE_DIRECT:
+	case SPUDGPU_COMMAND_LIST_TYPE_BUNDLE:
+		queues = device->_cmd_queue_count_direct;
+		break;
+	case SPUDGPU_COMMAND_LIST_TYPE_COMPUTE:
+		queues = device->_cmd_queue_count_compute;
+		break;
+	case SPUDGPU_COMMAND_LIST_TYPE_COPY:
+		queues = device->_cmd_queue_count_copy;
+		break;
+	default:
+		break;
+	}
+	if (queues == 0)
+		return SPUDRESULT_GPU_INVALID_COMMAND_LIST_TYPE;
 	spudgpu_command_allocator_d3d12 *pResult =
 	    SPUD_NEW(&device->head.allocator, spudgpu_command_allocator_d3d12);
 	if (!pResult)
@@ -130,6 +136,7 @@ SPUDRESULT spudgpu_create_command_allocator(
 		SPUD_DELETE(&device->head.allocator, spudgpu_command_allocator_d3d12, pResult);
 		return SPUDRESULT_API_SPECIFIC_FAILURE;
 	}
+	SPUDGPU___LIVE_ADD(&device->_live, SPUDGPU___OBJECT_COMMAND_ALLOCATOR);
 	*out_allocator = pResult;
 	return SPUD_SUCCESS;
 }
@@ -137,6 +144,7 @@ SPUDRESULT spudgpu_create_command_allocator(
 void spudgpu_destroy_command_allocator(spudgpu_command_allocator allocator) {
 	if (!allocator)
 		return;
+	SPUDGPU___LIVE_REMOVE(&allocator->_device->_live, SPUDGPU___OBJECT_COMMAND_ALLOCATOR);
 	const SPUD_ALLOCATOR memory_allocator = allocator->head.allocator;
 	spud_string_free(&memory_allocator, allocator->head.debug_name);
 	allocator->~spudgpu_command_allocator_d3d12();
@@ -176,6 +184,7 @@ SPUDRESULT spudgpu_create_command_list(
         SPUD_DELETE(&allocator->_device->head.allocator, spudgpu_command_list_d3d12, pResult);
         return SPUDRESULT_API_SPECIFIC_FAILURE;
     }
+	SPUDGPU___LIVE_ADD(&allocator->_device->_live, SPUDGPU___OBJECT_COMMAND_LIST);
 	*out_cmd_list = pResult;
     return SPUD_SUCCESS;
 }
@@ -186,6 +195,7 @@ void spudgpu_destroy_command_list(spudgpu_command_list cmd) {
     if (cmd->_allocator->_open_list == cmd)
         cmd->_allocator->_open_list = nullptr;
 #endif
+    SPUDGPU___LIVE_REMOVE(&cmd->_allocator->_device->_live, SPUDGPU___OBJECT_COMMAND_LIST);
     const SPUD_ALLOCATOR allocator = cmd->head.allocator;
     spud_string_free(&allocator, cmd->head.debug_name);
     cmd->~spudgpu_command_list_d3d12();
@@ -399,6 +409,12 @@ void spudgpu_cmd_set_depth_bounds(
     float max_depth_bounds) {
 	if (!cmd)
 		return;
+	// Without the feature the device may not have the test (OPTIONS2), and
+	// the device has exactly what it was created with.
+	const bool enabled = (cmd->_allocator->_device->_features & SPUDGPU_FEATURE_DEPTH_BOUNDS_TEST) != 0;
+	assert(enabled && "spudgpu_cmd_set_depth_bounds: the device was created without SPUDGPU_FEATURE_DEPTH_BOUNDS_TEST");
+	if (!enabled)
+		return;
 	// OMSetDepthBounds is declared on ID3D12GraphicsCommandList1 - _d3d_cmd_list
 	// is stored as the newer ID3D12GraphicsCommandList10 (spudgpud3d12.hpp),
 	// which already inherits it, so no QueryInterface is needed here.
@@ -406,15 +422,42 @@ void spudgpu_cmd_set_depth_bounds(
 }
 #endif
 
+} // extern "C"
+
+ID3D12CommandSignature *spudgpu_d3d12___create_draw_indirect_signature(
+    ID3D12Device *d3d_device, bool indexed, uint32_t stride) {
+	D3D12_INDIRECT_ARGUMENT_DESC argument_desc = {};
+	argument_desc.Type = indexed ? D3D12_INDIRECT_ARGUMENT_TYPE_DRAW_INDEXED
+	                              : D3D12_INDIRECT_ARGUMENT_TYPE_DRAW;
+
+	D3D12_COMMAND_SIGNATURE_DESC signature_desc = {};
+	signature_desc.pArgumentDescs = &argument_desc;
+	signature_desc.NumArgumentDescs = 1;
+	signature_desc.ByteStride       = stride;
+
+	// rootSignature is nullptr: only valid (and required) when every argument
+	// in the signature is DRAW/DRAW_INDEXED/DISPATCH — no root-parameter
+	// update arguments, which SpudGPU's indirect draw never uses.
+	ID3D12CommandSignature *signature = nullptr;
+	if (FAILED(d3d_device->CreateCommandSignature(&signature_desc, nullptr, IID_PPV_ARGS(&signature))))
+		return nullptr;
+	return signature;
+}
+
 // The root-signature-less command signature spudgpu_cmd_draw_indirect /
-// _indexed_indirect execute with, for one kind of draw and one stride, made
-// and kept on the device the first time it is asked for. Mechanical
-// translation, not a policy choice: D3D12 needs this object for any
-// ExecuteIndirect call, and its ByteStride is where the caller's stride
-// goes - ExecuteIndirect takes no stride of its own. Null if it can't be
+// _indexed_indirect execute with, for one kind of draw and one stride.
+// Mechanical translation, not a policy choice: D3D12 needs this object for
+// any ExecuteIndirect call, and its ByteStride is where the caller's stride
+// goes - ExecuteIndirect takes no stride of its own. The tightly packed pair
+// is made with the device and read with no lock; any other stride is made
+// and kept on the device the first time it is asked for. Null if it can't be
 // made.
 static ID3D12CommandSignature *spudgpu_d3d12___get_draw_indirect_signature(
     spudgpu_device_d3d12 *device, bool indexed, uint32_t stride) {
+	if (!indexed && stride == sizeof(spudgpu_draw_indirect_args))
+		return device->_tight_draw_signature;
+	if (indexed && stride == sizeof(spudgpu_draw_indexed_indirect_args))
+		return device->_tight_draw_indexed_signature;
 	std::lock_guard<std::mutex> lock(device->_indirect_signature_mutex);
 	spudgpu_d3d12_indirect_signatures &kept = device->_indirect_signatures;
 	for (uint32_t i = 0; i < kept.count; ++i)
@@ -431,25 +474,15 @@ static ID3D12CommandSignature *spudgpu_d3d12___get_draw_indirect_signature(
 		kept.capacity = capacity;
 	}
 
-	D3D12_INDIRECT_ARGUMENT_DESC argument_desc = {};
-	argument_desc.Type = indexed ? D3D12_INDIRECT_ARGUMENT_TYPE_DRAW_INDEXED
-	                              : D3D12_INDIRECT_ARGUMENT_TYPE_DRAW;
-
-	D3D12_COMMAND_SIGNATURE_DESC signature_desc = {};
-	signature_desc.pArgumentDescs = &argument_desc;
-	signature_desc.NumArgumentDescs = 1;
-	signature_desc.ByteStride       = stride;
-
-	// rootSignature is nullptr: only valid (and required) when every argument
-	// in the signature is DRAW/DRAW_INDEXED/DISPATCH — no root-parameter
-	// update arguments, which SpudGPU's indirect draw never uses.
-	ID3D12CommandSignature *signature = nullptr;
-	if (FAILED(device->_d3d_device->CreateCommandSignature(
-	        &signature_desc, nullptr, IID_PPV_ARGS(&signature))))
+	ID3D12CommandSignature *signature =
+	    spudgpu_d3d12___create_draw_indirect_signature(device->_d3d_device.Get(), indexed, stride);
+	if (!signature)
 		return nullptr;
 	kept.entries[kept.count++] = {signature, stride, indexed};
 	return signature;
 }
+
+extern "C" {
 
 void spudgpu_cmd_draw_indirect(
     spudgpu_command_list cmd,
@@ -459,7 +492,7 @@ void spudgpu_cmd_draw_indirect(
     uint32_t stride) {
 	if (!cmd || !buffer || draw_count == 0)
 		return;
-	if (draw_count > cmd->_allocator->_device->_properties.max_draw_indirect_count)
+	if (draw_count > spudgpu_d3d12___max_draw_indirect_count(cmd->_allocator->_device))
 		return;
 	if (stride % 4 != 0 || stride < sizeof(spudgpu_draw_indirect_args))
 		return;
@@ -479,7 +512,7 @@ void spudgpu_cmd_draw_indexed_indirect(
     uint32_t stride) {
 	if (!cmd || !buffer || draw_count == 0)
 		return;
-	if (draw_count > cmd->_allocator->_device->_properties.max_draw_indirect_count)
+	if (draw_count > spudgpu_d3d12___max_draw_indirect_count(cmd->_allocator->_device))
 		return;
 	if (stride % 4 != 0 || stride < sizeof(spudgpu_draw_indexed_indirect_args))
 		return;

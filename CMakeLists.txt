@@ -559,6 +559,14 @@ if(NOT TARGET spudlib)
             SPUDCORE_TEST_CMAKE_VERSION="${PROJECT_VERSION}")
         add_test(NAME spudcore_test COMMAND spudcore_test)
 
+        # SpudGPU's adapters and devices: needs a GPU, no window and nobody
+        # watching, so a ctest. With no adapter it exits 77, reported as
+        # skipped.
+        add_executable(spudgpu_device_test tests/spudgpu_device_test.c)
+        target_link_libraries(spudgpu_device_test PRIVATE spudlib)
+        add_test(NAME spudgpu_device_test COMMAND spudgpu_device_test)
+        set_tests_properties(spudgpu_device_test PROPERTIES SKIP_RETURN_CODE 77)
+
         add_executable(spudperf_test tests/spudperf_test.c)
         target_link_libraries(spudperf_test PRIVATE spudlib)
         add_test(NAME spudperf_test COMMAND spudperf_test)

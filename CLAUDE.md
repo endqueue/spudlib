@@ -17,7 +17,7 @@ consistent C interface and stops there. It never makes a decision on the caller'
 behalf, never has a default that hides a choice, and holds no global state.
 
 - Expose enumeration/query functions so the caller can inspect and
-  decide — `spudgpu_enumerate_devices`, not `spudgpu_select_best_device`.
+  decide — `spudgpu_enumerate_adapters`, not `spudgpu_select_best_device`.
 - No "convenience" fallback that picks something for the caller. If a change feels
   like it wants one, that decision belongs to the caller, not here.
 - Everything flows through explicit handles the caller owns and passes in — no
@@ -198,10 +198,21 @@ GameInput and evdev builds were not run.
     checks `D3D12_FEATURE_DATA_D3D12_OPTIONS7::MeshShaderTier`
     (`spudgpud3d12context.cpp`), and only Metal's is unconditionally true (Metal 3
     mesh shading is guaranteed on every Apple Silicon target this backend already
-    requires). `spudgpu_get_mesh_shading_capabilities` and
-    `SPUDRESULT_GPU_EXT_MESH_SHADING_NOT_SUPPORTED` exist precisely to surface that
-    per-device fact to the caller — don't assume `SPUDGPU_EXT_MESH_SHADING == 1`
+    requires). `SPUDGPU_FEATURE_MESH_SHADING` in an adapter's
+    `supported_features`, and in the device's features when the device was
+    created with it, surface that per-GPU fact to the caller, and
+    `SPUDRESULT_GPU_EXT_MESH_SHADING_NOT_SUPPORTED` refuses a mesh pipeline on a
+    device created without it — don't assume `SPUDGPU_EXT_MESH_SHADING == 1`
     means a given device can actually draw with it.
+  - Since 2026-10-21 (`SPUDGPU_DEVICE_TODO.md`): an `EXT` macro says what the
+    backend in this build implements and nothing about any GPU, and every
+    one's comment says so. Where support also varies by GPU it pairs with a
+    `SPUDGPU_FEATURE_<NAME>` bit, and its `SPUDRESULT_GPU_EXT_<NAME>_NOT_SUPPORTED`
+    means "the device wasn't created with the feature". The bits are always
+    defined, never inside an `#if`; a bit whose macro is 0 is never in any
+    adapter's supported features. Bindless is `SPUDGPU_EXT_BINDLESS` /
+    `SPUDGPU_FEATURE_BINDLESS` / `SPUDRESULT_GPU_EXT_BINDLESS_NOT_SUPPORTED`
+    (it was `..._BINDLESS_DESCRIPTOR_INDEXING`).
   - `SPUDGPU_LEGACY_<NAME>` gates a fallback for hardware that some devices *within*
     a single backend's target range lack, even though every *currently* targeted
     device of that backend has it (dynamic rendering on old/low-end Vulkan hardware
@@ -210,8 +221,8 @@ GameInput and evdev builds were not run.
     hardware — so `SPUDGPU_LEGACY_<NAME>` must gate an opt-in build configuration for
     targeting that constrained hardware profile (e.g. a dedicated CMake option),
     never `GRAPHICS_BACKEND` itself. Which path a given device actually needs is
-    surfaced to the caller as a capability query (mirroring
-    `spudgpu_bindless_capabilities::supported`), never resolved silently inside
+    surfaced to the caller as a feature bit of the adapter (as
+    `SPUDGPU_FEATURE_BINDLESS` is), never resolved silently inside
     SpudLib — the caller decides which path to take per-device; SpudLib only reports
     the fact and does the mechanical object construction for whichever path is
     chosen. `SPUDGPU_LEGACY_<NAME>` may grow the public surface by exactly one
@@ -275,9 +286,9 @@ GameInput and evdev builds were not run.
   write and `spudgpu_invalidate_buffer` before a mapped read, and a backend
   that has nothing to do for one does the checks and returns. An image has
   no kind at all: it is in the device's memory and never mapped.
-  `DEVICE_MAPPABLE` is the one kind a device may lack, reported by
-  `SPUDGPU_DEVICE_PROPERTIES::device_mappable_memory` and refused with
-  `SPUDRESULT_GPU_MEMORY_KIND_NOT_SUPPORTED`; it has no `SPUDGPU_EXT_*`
+  `DEVICE_MAPPABLE` is the one kind a device may lack: it needs a device
+  created with `SPUDGPU_FEATURE_DEVICE_MAPPABLE_MEMORY` and is refused with
+  `SPUDRESULT_GPU_MEMORY_KIND_NOT_SUPPORTED` otherwise; it has no `SPUDGPU_EXT_*`
   macro because every backend implements it. Written 2026-10-10, compiled
   for Metal only; D3D12's custom heap for it has never run.
 - **A buffer or image desc carries no flag only one API acts on.**
@@ -495,10 +506,14 @@ GameInput and evdev builds were not run.
   `assert(cmd->_d3d_cmd_list);`. An assert documents what create guarantees and
   compiles out of release builds; it is not a substitute for checking the handle
   argument.
-- The exception is a member that is created lazily, after the handle exists (in
-  the D3D12 backend: `_rtv_heap`, `_dsv_heap`, `_bindless`, the indirect command
-  signatures). Null is a valid state for those, so the function that uses one
-  checks it and creates it there.
+- The exception is a member that is created lazily, after the handle exists:
+  what is keyed by a value the caller passes at a call, or belongs to an object
+  the caller synchronizes (in the D3D12 backend: a command list's `_rtv_heap`
+  and `_dsv_heap`, and the device's indirect command signatures of strides
+  other than the tightly packed ones). Null is a valid state for those, so the
+  function that uses one checks it and creates it there. Everything else a
+  device needs (its queues, its bindless table, D3D12's shader-visible heaps
+  and tightly packed signatures) is made by `spudgpu_create_device`.
 - **All of SpudLib's own memory comes from the caller's allocator** (`SPUD_ALLOCATOR`,
   `spudcore.h`, since 2026-10-21). A module's instance desc takes it, the
   instance keeps a copy, and every object made from the instance keeps a copy of
@@ -560,8 +575,9 @@ GameInput and evdev builds were not run.
 - A failed allocation is then a null pointer the function turns into a
   `SPUDRESULT_OUT_OF_MEMORY`, where an allocating `new` would throw, and no
   exception may cross SpudLib's C boundary.
-- Objects with no destroy call of their own are released by their owner: a
-  device, its command queues and its bindless state by `spudgpu_destroy_instance`;
+- Objects with no destroy call of their own are released by their owner: the
+  adapters by `spudgpu_destroy_instance`; a device's command queues and its
+  bindless state by `spudgpu_destroy_device`;
   descriptor sets by their pool, on reset and on destroy; a swap chain's back
   buffer images and views by the swap chain.
 - What is left: `std::vector` and `std::string` (function locals in
@@ -724,9 +740,10 @@ printed its 6 warnings on each.
 
 - **Threads in SpudGPU (2026-10-21): SpudLib locks what it hides; the
   caller synchronizes the handles it holds.** State the caller can't see is
-  SpudGPU's to guard, on every backend: the bindless slot table, a lazily
-  made device array or bindless state, D3D12's shared descriptor heaps and
-  indirect signatures. Handles the caller holds are the caller's: a queue,
+  SpudGPU's to guard, on every backend: the bindless slot table, an
+  adapter's one-device claim (an atomic exchange), a device's descriptor
+  budget, D3D12's shared descriptor heaps and indirect signatures. Handles
+  the caller holds are the caller's: a queue,
   like a command list, allocator or swap chain, is used by one thread at a
   time, on every backend, and SpudGPU takes no lock for it (`spudgpu.h`,
   `spudgpu_submit_command_lists`). A lock there would be a decision made for
@@ -743,61 +760,60 @@ printed its 6 warnings on each.
     swap chain is made and when a list takes its command buffer; Metal's
     queue allows that from any thread, and it has no Vulkan or D3D12
     counterpart.
-  - Vulkan: the device makes its graphics queue once (`_graphics_queue`), so
-    `spudgpu_get_graphics_queue` hands out the same one every call, as D3D12
-    and Metal do (it made, and leaked, a new one on each call). Bindless
-    registering and unregistering hold the bindless state's `spud_mutex`
-    (`src/spudthread.h`) across the `vkUpdateDescriptorSets` too, since the
-    set is externally synchronized; the state is made only with the device,
-    never retried later. A first `spudgpu_enumerate_devices` on each of two
-    threads makes one set of devices (`_devices_lock`). A threaded test on a
-    fake driver found each race on the old code (8 logical devices, a slot
-    handed out twice, TSan reports) and none on the new, TSan, ASan and UBSan
-    clean; the debug assert fired on unsynchronized submits and not on
-    synchronized ones.
-  - D3D12: the bindless state is still made on first use, now under
-    `_bindless_create_mutex` with a second look inside it, and published
-    through an atomic pointer, so the bind calls (made while lists record on
-    any thread) take only an acquire load. Its slot stacks are guarded by
-    the state's `lock`; the `Create*View` writes are outside it, as D3D12
-    allows. Type-checked on Linux against DirectX-Headers (command and
-    descriptors clean; context and swap chain no new errors over the
-    original against a stub DXGI); not run.
-  - Metal's debug check was written on Linux and not compiled.
-  Not done: the Metal and D3D12 `spudgpu_enumerate_devices` first call is not
-  locked; `spudgpu.h` states the queue rule, and nothing yet about bindless
+  - Since 2026-10-21 nothing is made later: the instance lists its adapters
+    when it is created and never changes the list, so every adapter call is
+    lock-free; a device's queues and bindless table are made by
+    `spudgpu_create_device`, before the device is handed out, and read with
+    no lock after (the old `_devices_lock`, `_bindless_create_mutex` and D3D12's
+    atomic `_bindless` went with the lazy state they guarded). One device per
+    adapter is an atomic exchange on the adapter.
+  - Bindless registering and unregistering hold the bindless state's lock
+    (Vulkan's `spud_mutex` across the `vkUpdateDescriptorSets` too, since the
+    set is externally synchronized; D3D12's around its slot stacks, with the
+    `Create*View` writes outside it, as D3D12 allows).
+  - A threaded test on a fake driver (before 2026-10-21) found the old lazy
+    races (8 logical devices, a slot handed out twice, TSan reports) and none
+    after the fix, TSan, ASan and UBSan clean; the debug assert fired on
+    unsynchronized submits and not on synchronized ones.
+  Not done: `spudgpu.h` states the queue rule, and nothing yet about bindless
   or the other calls.
 - An indirect draw's `stride` is a multiple of 4 and at least the size of
   its args struct, on every backend (Vulkan's rule); otherwise nothing is
   recorded. A larger stride skips the caller's data between entries. Until
   2026-10-16 D3D12 ignored `stride`: its one cached command signature fixed
   `ByteStride` at the args size. It now keeps a signature per stride and
-  kind on the device (`_indirect_signatures`, mutex-guarded), released with
+  kind on the device: the two tightly packed ones made with the device (so
+  the common case takes no lock, since 2026-10-21), any other in
+  `_indirect_signatures`, mutex-guarded, made at first use; all released with
   the device. `apricottests`' `test_draw_indirect_stride` draws with a
   32-byte stride; it fails on the old D3D12 code and passes on all three
   devices here. The same test found that D3D12's `spudgpu_create_buffer_view`
   refused a buffer that was not a vertex, index or uniform buffer (Vulkan and
   Metal make a view of any buffer); it now keeps the range for any usage.
-- The D3D12 backend lists devices of feature level 12_0 and up (it
+- The D3D12 backend lists adapters of feature level 12_0 and up (it
   required 12_2, from its first commit, for no reason any code had; changed
   2026-10-16). 12_0 guarantees resource binding tier 2, which descriptor
-  sets of more than 128 SRVs need. Everything past it is probed per device:
+  sets of more than 128 SRVs need. Everything past it is a feature bit,
+  read per adapter at instance creation through a probe device released
+  before the next adapter's (since 2026-10-21; `SPUDGPU_DEVICE_TODO.md`):
   mesh shading (OPTIONS7), the depth bounds test (OPTIONS2), and bindless,
-  which needs resource binding tier 3 (`_bindless_supported`; without it
-  every bindless call reports not supported). Run on an Iris Xe (12_1, tier
-  3) and an RTX A2000; the tier-2 path has not run on any device.
+  which needs resource binding tier 3. WARP is listed, as
+  `SPUDGPU_ADAPTER_TYPE_SOFTWARE`. Run on an Iris Xe (12_1, tier 3) and an
+  RTX A2000 before the adapter change; the tier-2 path has not run on any
+  device, and nothing of the adapter change has run on D3D12.
 - D3D12's shader-visible descriptors are in two heaps per device
-  (`spudgpu_device_d3d12::_csv_heap`, `_sampler_heap`), made by the first
-  descriptor pool or bindless call, and every pool and the bindless state
-  take a range of them (`spudgpud3d12descriptors.cpp`). Before 2026-10-16
-  each pool had heaps of its own, so binding sets of two pools, or bindless
-  and a pool, for one draw left a table in a heap no longer set. The heaps
-  are the largest D3D12 allows on every device: 1,000,000 CBV/SRV/UAV
-  descriptors and 2048 samplers, shared by every live pool, so a pool that
-  asks for more samplers than are left fails with
-  `SPUDRESULT_API_SPECIFIC_FAILURE`. The CBV/SRV/UAV heap is made in full
-  on first use whatever the pools ask for. Run on D3D12 (NVIDIA RTX A2000)
-  by the samples and `aprend_gpu_tests`, debug layer clean.
+  (`spudgpu_device_d3d12::_csv_heap`, `_sampler_heap`), and every pool and
+  the bindless state take a range of them (`spudgpud3d12descriptors.cpp`).
+  Before 2026-10-16 each pool had heaps of its own, so binding sets of two
+  pools, or bindless and a pool, for one draw left a table in a heap no
+  longer set. Since 2026-10-21 the heaps are made by `spudgpu_create_device`,
+  sized by the caller's descriptor budget (`spudgpu_device_desc::max_descriptors`
+  and `::max_samplers`, at most 1,000,000 and 2048), and a budget of 0 makes
+  no heap. On every backend a pool past what is left of the budget is
+  refused with `SPUDRESULT_GPU_OUT_OF_DESCRIPTORS` (Vulkan and Metal keep a
+  count, D3D12 the heaps, whose free ranges may be fragmented, which the
+  header allows everywhere). Run on D3D12 (NVIDIA RTX A2000) by the samples
+  and `aprend_gpu_tests` before the budget, debug layer clean.
 - A D3D12 `TEXTURE2D` view has no array slice, so until 2026-10-16 every
   `SPUDGPU_IMAGE_VIEW_TYPE_2D` view on D3D12 saw layer 0 whatever its
   `base_array_layer` (render target, depth, shader resource and storage
@@ -837,28 +853,28 @@ printed its 6 warnings on each.
 - Until 2026-10-16 the Vulkan device never enabled `imageCubeArray`, so a
   `SPUDGPU_IMAGE_VIEW_TYPE_CUBE_ARRAY` view, and any shader that declares a
   cube array, were outside Vulkan's rules on every device. It is enabled
-  where reported, and `SPUDGPU_DEVICE_PROPERTIES::cube_array_views` says so
-  (always true on D3D12 and Metal); `spudgpu_create_image_view` refuses a
-  `CUBE_ARRAY` view without it. Run on Vulkan by `test_cube_storage_views`
+  for a device created with `SPUDGPU_FEATURE_CUBE_ARRAY_VIEWS` (every D3D12
+  and Metal adapter has it), and `spudgpu_create_image_view` refuses a
+  `CUBE_ARRAY` view on a device without it, on every backend. Run on Vulkan by `test_cube_storage_views`
   on both devices here, validation layer clean, and on Metal, where the
   property is true and both cubes ran (validation clean).
-- Since 2026-10-16 the Vulkan device enables `multiDrawIndirect` where it
-  is reported, and `SPUDGPU_DEVICE_PROPERTIES::max_draw_indirect_count`
-  reports what one indirect call takes (1 without it; UINT32_MAX on D3D12
-  and Metal). A larger count records nothing, on every backend.
+- Since 2026-10-16 the Vulkan device can enable `multiDrawIndirect` (since
+  2026-10-21 only with `SPUDGPU_FEATURE_MULTI_DRAW_INDIRECT`), and
+  `SPUDGPU_ADAPTER_PROPERTIES::max_draw_indirect_count` reports what one
+  indirect call takes on a device with it (1 without it, on every backend;
+  UINT32_MAX on D3D12 and Metal). A larger count records nothing, on every
+  backend.
 
 - The debug name rule (see "A debug name is copied") was
-  applied to every module on 2026-10-09. The queue
-  `spudgpu_get_graphics_queue` returns on Vulkan had no release path, a new
-  one on each call, until 2026-10-21: it is the device's now, freed with it,
-  name and all. Descriptor sets had none either until 2026-10-21; a Vulkan pool now keeps its sets in a list
+  applied to every module on 2026-10-09. A device's queues are the device's,
+  made and freed with it, names and all (Vulkan's graphics queue had no
+  release path, a new one on each call, until 2026-10-21). Descriptor sets had none either until 2026-10-21; a Vulkan pool now keeps its sets in a list
   and frees them on reset and destroy, as D3D12's does.
 - Cross-backend return values (see "A function returns the same value for the
   same condition in every backend") were aligned across SpudGPU and SpudAudio on
   2026-10-09; SpudFiles, SpudMemory and SpudNet already matched. What still
   differs in SpudGPU, each a gap in one backend and not a choice:
-  - Vulkan has no `spudgpu_get_command_queue` or `spudgpu_get_max_queue_count`;
-    Metal has no `spudgpu_get_shader_pipeline_desc`, bundle or bindless calls;
+  - Metal has no `spudgpu_get_shader_pipeline_desc`, bundle or bindless calls;
     D3D12 has no `spudgpu_create_surface_from_callback` or swap chain
     semaphore getters.
   - D3D12 returns `SPUDRESULT_GPU_INVALID_IMAGE_TYPE` for an image desc
@@ -978,8 +994,13 @@ printed its 6 warnings on each.
   (left) as `BTN_X`, which the kernel defines as `BTN_NORTH`, and Y (top) as
   `BTN_WEST`; SpudInput passes the kernel's code on, as it has no table of
   devices.
-- Three CTest targets exist: `spudcore_test` (the version as the header,
-  CMake and the library each have it, and result names), `spudinput_test`
+- Four CTest targets exist: `spudcore_test` (the version as the header,
+  CMake and the library each have it, and result names), `spudgpu_device_test`
+  (adapters and devices: listing, adapter properties with chained limits,
+  every create-device check, queues by kind, the descriptor budget, one
+  device per adapter, a device made again after one is destroyed; it needs a
+  GPU and no window, and exits 77, skipped, with no adapter; passes on Metal,
+  plain, ASan and TSan, 2026-10-21), `spudinput_test`
   (above) and `spudperf_test` (the monotonic clocks,
   `spudperf_sleep_until_monotonic_ns` and `spudperf_sleep_until_monotonic_ms`),
   which needs nothing but the machine. It has run on macOS; the Windows and
@@ -988,7 +1009,8 @@ printed its 6 warnings on each.
   `SPUDLIB_BUILD_TESTS` but deliberately not registered with ctest because each
   needs something real: `spudaudio_sine` (an audio device and someone listening)
   and `spudnet_test` (a local server, started by `tests/run_spudnet_test.sh`).
-  SpudGPU, SpudFiles and SpudMemory have no committed tests; SpudGPU is
+  SpudFiles and SpudMemory have no committed tests. SpudGPU's only one is
+  `spudgpu_device_test`, which draws nothing; the rest of SpudGPU is
   verified by running the `spudgpusamples` samples.
 - No static/immutable sampler support. `spudgpu_sampler` (added alongside
   `SpudGPUDynamicIndexing`) only covers the dynamic, descriptor-bound case — a real

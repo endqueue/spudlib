@@ -22,7 +22,8 @@ extern "C" {
 
 VkInstance spudgpu_get_vk_instance(spudgpu_instance instance);
 
-VkPhysicalDevice spudgpu_get_vk_physical_device(spudgpu_device device);
+/* An adapter is a VkPhysicalDevice. */
+VkPhysicalDevice spudgpu_get_vk_physical_device(spudgpu_adapter adapter);
 
 VkDevice spudgpu_get_vk_device(spudgpu_device device);
 

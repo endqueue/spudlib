@@ -178,6 +178,9 @@ SPUDRESULT spudgpu_create_shader_module(
 		return SPUDRESULT_OUT_OF_MEMORY;
 	}
 	memcpy(pResult, &result, sizeof(spudgpu_shader_module_vulkan));
+	// From here spudgpu_destroy_shader_module frees it, and takes the count
+	// back.
+	SPUDGPU___LIVE_ADD(&pResult->_device._shared->live, SPUDGPU___OBJECT_SHADER_MODULE);
 	if (spud_debug_name_set(pResult, desc->debug_name) != SPUD_SUCCESS) {
 		spudgpu_destroy_shader_module(pResult);
 		return SPUDRESULT_OUT_OF_MEMORY;
@@ -193,6 +196,7 @@ void spudgpu_destroy_shader_module(spudgpu_shader_module shader_module) {
 	vkDestroyShaderModule(
 	    shader_module->_device._logical_device_vk,
 	    shader_module->_shader_module_vk, NULL);
+	SPUDGPU___LIVE_REMOVE(&shader_module->_device._shared->live, SPUDGPU___OBJECT_SHADER_MODULE);
 	const SPUD_ALLOCATOR allocator = shader_module->head.allocator;
 	spud_string_free(&allocator, shader_module->head.debug_name);
 	SPUD_DELETE(&allocator, spudgpu_shader_module_vulkan, shader_module);
@@ -220,7 +224,9 @@ SPUDRESULT spudgpu_create_shader_pipeline(
 		return SPUDRESULT_GPU_VERTEX_AND_FRAGMENT_SHADER_REQUIRED;
 	if (desc->vertex_module && desc->mesh_module)
 		return SPUDRESULT_GPU_INVALID_SHADER_STAGE;
-	SPUDRESULT outputs = spudgpu___internal_check_pipeline_outputs(desc, &device->_properties);
+	if (desc->mesh_module && !(device->_features & SPUDGPU_FEATURE_MESH_SHADING))
+		return SPUDRESULT_GPU_EXT_MESH_SHADING_NOT_SUPPORTED;
+	SPUDRESULT outputs = spudgpu___internal_check_pipeline_outputs(desc, device->_features);
 	if (outputs != SPUD_SUCCESS)
 		return outputs;
 
@@ -425,8 +431,11 @@ SPUDRESULT spudgpu_create_shader_pipeline(
 	depthStencil.depthWriteEnable =
 	    desc->depth_write_enable ? VK_TRUE : VK_FALSE;
 	depthStencil.depthCompareOp        = (VkCompareOp)desc->depth_compare_op;
+	// Only on a device created with the feature, which is what switched
+	// depthBounds on: without it the pipeline behaves as if the test were off
+	// (spudgpu.h).
 	depthStencil.depthBoundsTestEnable =
-	    desc->depth_bounds_test_enable ? VK_TRUE : VK_FALSE;
+	    desc->depth_bounds_test_enable && (device->_features & SPUDGPU_FEATURE_DEPTH_BOUNDS_TEST) ? VK_TRUE : VK_FALSE;
 	depthStencil.stencilTestEnable     = VK_FALSE;
 
 	// ------------------------------------------------------------------
@@ -588,6 +597,7 @@ SPUDRESULT spudgpu_create_shader_pipeline(
 		return SPUDRESULT_OUT_OF_MEMORY;
 	}
 	memcpy(pResult, &result, sizeof(spudgpu_shader_pipeline_vulkan));
+	SPUDGPU___LIVE_ADD(&pResult->_device._shared->live, SPUDGPU___OBJECT_SHADER_PIPELINE);
 	if (spud_debug_name_set(pResult, desc->debug_name) != SPUD_SUCCESS) {
 		spudgpu_destroy_shader_pipeline(pResult);
 		return SPUDRESULT_OUT_OF_MEMORY;
@@ -606,6 +616,7 @@ void spudgpu_destroy_shader_pipeline(spudgpu_shader_pipeline pipeline) {
 	VkDevice vk_device = vkPipeline->_device._logical_device_vk;
 	vkDestroyPipeline(vk_device, vkPipeline->_pipeline_vk, NULL);
 	vkDestroyPipelineLayout(vk_device, vkPipeline->_pipeline_layout_vk, NULL);
+	SPUDGPU___LIVE_REMOVE(&vkPipeline->_device._shared->live, SPUDGPU___OBJECT_SHADER_PIPELINE);
 	const SPUD_ALLOCATOR allocator = vkPipeline->head.allocator;
 	spud_string_free(&allocator, vkPipeline->head.debug_name);
 	SPUD_DELETE(&allocator, spudgpu_shader_pipeline_vulkan, vkPipeline);
@@ -704,6 +715,7 @@ SPUDRESULT spudgpu_create_compute_pipeline(
 		return SPUDRESULT_OUT_OF_MEMORY;
 	}
 	memcpy(pResult, &result, sizeof(spudgpu_compute_pipeline_vulkan));
+	SPUDGPU___LIVE_ADD(&pResult->_device._shared->live, SPUDGPU___OBJECT_COMPUTE_PIPELINE);
 	if (spud_debug_name_set(pResult, desc->debug_name) != SPUD_SUCCESS) {
 		spudgpu_destroy_compute_pipeline(pResult);
 		return SPUDRESULT_OUT_OF_MEMORY;
@@ -722,6 +734,7 @@ void spudgpu_destroy_compute_pipeline(spudgpu_compute_pipeline pipeline) {
 	VkDevice vk_device = vkPipeline->_device._logical_device_vk;
 	vkDestroyPipeline(vk_device, vkPipeline->_pipeline_vk, NULL);
 	vkDestroyPipelineLayout(vk_device, vkPipeline->_pipeline_layout_vk, NULL);
+	SPUDGPU___LIVE_REMOVE(&vkPipeline->_device._shared->live, SPUDGPU___OBJECT_COMPUTE_PIPELINE);
 	const SPUD_ALLOCATOR allocator = vkPipeline->head.allocator;
 	spud_string_free(&allocator, vkPipeline->head.debug_name);
 	SPUD_DELETE(&allocator, spudgpu_compute_pipeline_vulkan, vkPipeline);

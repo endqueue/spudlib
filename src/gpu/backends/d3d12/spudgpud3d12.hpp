@@ -2,6 +2,7 @@
 #if SPUDGPU_COMPILE_D3D12_API
 
 #include "../../../spudallocator.h"
+#include "../../spudgpushared.h"
 #include "d3dx12.h"
 #include "spudgpu.h"
 #include "spudgpu_d3d12_natives.h"
@@ -16,7 +17,6 @@
 
 #define D3D12_GPU_VIRTUAL_ADDRESS_NULL ((D3D12_GPU_VIRTUAL_ADDRESS)0)
 #define D3D12_GPU_VIRTUAL_ADDRESS_UNKNOWN ((D3D12_GPU_VIRTUAL_ADDRESS) - 1)
-#define SPUD_D3D12_COMMAND_QUEUE_COUNT_PER_FAMILY 4
 
 
 inline D3D12_COMMAND_LIST_TYPE
@@ -123,10 +123,28 @@ typedef struct spudgpu_instance_t {
 	const char *engine_name;
 	uint32_t engine_version;
 	Microsoft::WRL::ComPtr<IDXGIFactory7> _dxgi_factory;
-	spudgpu_device *_gpu_devices;
-	uint32_t _gpu_device_count;
-	bool _gpu_devices_enumerated;
+	// The adapters listed when the instance was made, which never change,
+	// freed with it.
+	spudgpu_adapter *_adapters;
+	uint32_t _adapter_count;
 } spudgpu_instance_d3d12;
+
+typedef struct spudgpu_adapter_t {
+	spud_object_head head;
+	// The instance that listed the adapter, which outlives it and every
+	// device made on it; its DXGI factory makes swap chains.
+	spudgpu_instance_d3d12 *_instance;
+	Microsoft::WRL::ComPtr<IDXGIAdapter4> _dxgi_adapter;
+	// Read when the instance was made, through a probe device released at
+	// once (spudgpud3d12context.cpp), and never changed.
+	spudgpu___adapter_facts _facts;
+	// Whether a device exists on the adapter: one at a time, claimed with an
+	// exchange by spudgpu_create_device and given back by
+	// spudgpu_destroy_device. D3D12 hands back the one live device to a
+	// second D3D12CreateDevice, so a second spudgpu_device would be the same
+	// native device.
+	std::atomic<bool> _in_use{false};
+} spudgpu_adapter_d3d12;
 
 #define SPUDGPU_BINDLESS_MAX_SLOTS_PER_CLASS 4096
 
@@ -134,13 +152,6 @@ typedef struct spudgpu_instance_t {
 // to this before its full definition (with the rest of the descriptor-set
 // types) appears further down this file.
 typedef struct spudgpu_descriptor_set_layout_t spudgpu_descriptor_set_layout_d3d12;
-
-// Lazily created the first time bindless capabilities/registration is used on
-// a device. Safe to lazy-init here (unlike the Vulkan backend): every D3D12
-// struct above stores spudgpu_device_d3d12* by pointer, never by value, so
-// there is no stale-snapshot risk from initializing this after other objects
-// already exist. Two threads making the first call at once make one: see
-// spudgpu_device_d3d12::_bindless.
 
 // One unused range of a spudgpu_d3d12_shader_heap: descriptors
 // [offset, offset + count).
@@ -154,8 +165,9 @@ typedef struct spudgpu_d3d12_heap_range {
 // command list have one shader-visible CBV_SRV_UAV heap and one sampler heap
 // set at a time, so sets from different pools, and bindless beside them,
 // can only be bound for one draw if they are all in the same two heaps.
-// Each heap is the largest D3D12 allows a shader-visible heap of its type
-// (spudgpud3d12descriptors.cpp).
+// Each is made with the device, as large as the device's descriptor budget
+// (spudgpu_device_desc::max_descriptors, ::max_samplers), and not made at all
+// for a budget of 0 (spudgpud3d12descriptors.cpp).
 typedef struct spudgpu_d3d12_shader_heap {
 	Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> heap;
 	uint32_t increment = 0;
@@ -225,47 +237,43 @@ typedef struct spudgpu_bindless_state_d3d12 {
 
 typedef struct spudgpu_device_t {
 	spud_object_head head;
-	spudgpu_instance_d3d12 *_instance;
-	Microsoft::WRL::ComPtr<IDXGIAdapter4> _dxgi_adapter;
+	spudgpu_adapter_d3d12 *_adapter;
 	Microsoft::WRL::ComPtr<ID3D12Device14> _d3d_device;
-	SPUDGPU_DEVICE_PROPERTIES _properties;
-	std::array<spudgpu_command_queue, SPUD_D3D12_COMMAND_QUEUE_COUNT_PER_FAMILY>
-	    _cmd_queues_direct;
-	std::array<spudgpu_command_queue, SPUD_D3D12_COMMAND_QUEUE_COUNT_PER_FAMILY>
-	    _cmd_queues_copy;
-	std::array<spudgpu_command_queue, SPUD_D3D12_COMMAND_QUEUE_COUNT_PER_FAMILY>
-	    _cmd_queues_compute;
+	// spudgpu_device_desc::required_features: what every call checks.
+	SPUDGPU_FEATURES _features;
+	// The queues the desc asked for, by kind, each array as long as its
+	// count (NULL for 0).
+	spudgpu_command_queue *_cmd_queues_direct;
+	uint32_t _cmd_queue_count_direct;
+	spudgpu_command_queue *_cmd_queues_compute;
+	uint32_t _cmd_queue_count_compute;
+	spudgpu_command_queue *_cmd_queues_copy;
+	uint32_t _cmd_queue_count_copy;
 
-	// Lazily allocated by the first spudgpu_get_bindless_capabilities /
-	// spudgpu_bindless_register_* / spudgpu_get_bindless_descriptor_set_layout
-	// / spudgpu_cmd_bind_bindless_resources* call, and never replaced after.
-	// nullptr until then. Made under _bindless_create_mutex and published
-	// with a release store, so the bind calls, which run while lists are
-	// recorded on any thread, only take an acquire load once it is made
-	// (spudgpud3d12___ensure_bindless_state). Released with the device.
-	std::atomic<spudgpu_bindless_state_d3d12 *> _bindless{nullptr};
-	std::mutex _bindless_create_mutex;
-	// Whether the device has resource binding tier 3, which bindless needs.
-	// Without it _bindless is never made and every bindless call reports
-	// SPUDRESULT_GPU_EXT_BINDLESS_DESCRIPTOR_INDEXING_NOT_SUPPORTED (or
-	// supported = false).
-	bool _bindless_supported;
+	// Made with the device when SPUDGPU_FEATURE_BINDLESS is asked for, and
+	// NULL exactly when it is not; never replaced. Released with the device.
+	spudgpu_bindless_state_d3d12 *_bindless;
 
 	// The shader-visible descriptor heaps every descriptor pool and the
-	// bindless state take ranges of (spudgpu_d3d12_shader_heap). Created
-	// together by the first pool or bindless call that needs them; empty
-	// until then. Their free lists are guarded by _shader_heap_mutex, as
-	// pools may be made and destroyed on any thread; once made, the heaps
-	// themselves are not replaced until the device is destroyed.
+	// bindless state take ranges of (spudgpu_d3d12_shader_heap), made with
+	// the device and sized by its descriptor budget: the budget is these
+	// heaps. Their free lists are guarded by _shader_heap_mutex, as pools may
+	// be made and destroyed on any thread; the heaps themselves are never
+	// replaced.
 	spudgpu_d3d12_shader_heap _csv_heap;
 	spudgpu_d3d12_shader_heap _sampler_heap;
 	std::mutex _shader_heap_mutex;
 
 	// The command signatures spudgpu_cmd_draw_indirect / _indexed_indirect
-	// have used on this device, one for each stride and kind asked for (a
-	// signature fixes its ByteStride), each made by the first call that needs
-	// it. Guarded by _indirect_signature_mutex: lists may be recorded on
+	// use, one for each stride and kind (a signature fixes its ByteStride).
+	// The two for tightly packed arguments are made with the device, so the
+	// common case takes no lock: _tight_draw_signature and
+	// _tight_draw_indexed_signature. A signature for any other stride is
+	// keyed by the caller's stride, so it is made by the first draw that
+	// uses it, under _indirect_signature_mutex: lists may be recorded on
 	// several threads.
+	ID3D12CommandSignature *_tight_draw_signature;
+	ID3D12CommandSignature *_tight_draw_indexed_signature;
 	spudgpu_d3d12_indirect_signatures _indirect_signatures;
 	std::mutex _indirect_signature_mutex;
 
@@ -275,8 +283,18 @@ typedef struct spudgpu_device_t {
 	// destroyed. 0 if none was registered: the debug layer is off, or the
 	// runtime has no ID3D12InfoQueue1 (before Windows 11).
 	DWORD _debug_callback_cookie;
+	// Objects made from the device and not yet destroyed, by kind;
+	// spudgpu_destroy_device reports and asserts on any left.
+	spudgpu___live_objects _live;
 #endif
 } spudgpu_device_d3d12;
+
+// The largest draw_count one indirect draw on [device] takes:
+// SPUDGPU_ADAPTER_PROPERTIES::max_draw_indirect_count with
+// SPUDGPU_FEATURE_MULTI_DRAW_INDIRECT, else 1.
+inline uint32_t spudgpu_d3d12___max_draw_indirect_count(const spudgpu_device_d3d12 *device) {
+	return (device->_features & SPUDGPU_FEATURE_MULTI_DRAW_INDIRECT) ? device->_adapter->_facts.properties.max_draw_indirect_count : 1;
+}
 
 typedef struct spudgpu_command_queue_t {
 	spud_object_head head;
@@ -355,6 +373,7 @@ typedef struct spudgpu_timestamp_set_t {
 	uint32_t _count;
 	// The queue's GetTimestampFrequency: ticks a second.
 	uint64_t _frequency;
+	spudgpu_device_d3d12 *_device;
 } spudgpu_timestamp_set_d3d12;
 
 typedef struct spudgpu_buffer_t {
@@ -374,6 +393,9 @@ typedef struct spudgpu_buffer_view_t {
 	spudgpu_buffer_d3d12 *_buffer;
 	spudgpu_buffer_view_desc _desc;
 	SPUDGPU_D3D12_BUFFER_VIEW _d3d_view;
+	// The buffer's device, kept here because a view may be destroyed after
+	// its buffer (its live count is the device's).
+	spudgpu_device_d3d12 *_device;
 } spudgpu_buffer_view_d3d12;
 
 typedef struct spudgpu_image_t {
@@ -431,7 +453,7 @@ typedef struct spudgpu_heap_t {
 // spudgpu_create_buffer's desc checks, in its order, after its argument
 // checks: size, usage, memory kind, usage against kind, device.
 SPUDRESULT spudgpu_d3d12_check_buffer_desc(
-    const SPUDGPU_DEVICE_PROPERTIES *properties,
+    SPUDGPU_FEATURES features,
     const spudgpu_buffer_desc *desc);
 CD3DX12_RESOURCE_DESC spudgpu_d3d12_create_resource_desc_from_buffer(
     const spudgpu_buffer_desc *desc);
@@ -459,6 +481,10 @@ typedef struct spudgpu_image_view_t {
 	// What a descriptor write reads, whatever else the image is used for.
 	D3D12_SHADER_RESOURCE_VIEW_DESC _d3d_srv;
 	D3D12_UNORDERED_ACCESS_VIEW_DESC _d3d_uav;
+	// The image's device, kept here because a view may be destroyed after
+	// its image (its live count is the device's). NULL for a swap chain's
+	// own views, which the swap chain frees.
+	spudgpu_device_d3d12 *_device;
 } spudgpu_image_view_d3d12;
 
 // A root parameter index that no table or constant block was given.
@@ -542,6 +568,7 @@ typedef struct spudgpu_d3d12_binding_slot {
 typedef struct spudgpu_sampler_t {
 	spud_object_head head;
 	D3D12_SAMPLER_DESC _d3d_desc;
+	spudgpu_device_d3d12 *_device;
 } spudgpu_sampler_d3d12;
 
 typedef struct spudgpu_descriptor_set_layout_t {
@@ -617,5 +644,23 @@ typedef struct spudgpu_swap_chain_t {
 	Microsoft::WRL::ComPtr<ID3D12Fence1> _frame_fence;
 	uint64_t _frame_fence_next_value;
 } spudgpu_swap_chain_d3d12;
+
+// Made with the device by spudgpu_create_device (spudgpud3d12context.cpp).
+// Defined in spudgpud3d12descriptors.cpp: the shader-visible heaps, sized by
+// the descriptor budget (a budget of 0 makes no heap), both or neither; and
+// the bindless table, when SPUDGPU_FEATURE_BINDLESS is asked for, after the
+// heaps. C linkage, as the definitions sit inside the files' extern "C"
+// blocks.
+extern "C" {
+SPUDRESULT spudgpu_d3d12___create_shader_heaps(
+    spudgpu_device_d3d12 *device,
+    uint32_t max_descriptors,
+    uint32_t max_samplers);
+SPUDRESULT spudgpu_d3d12___create_bindless_state(spudgpu_device_d3d12 *device);
+// Defined in spudgpud3d12command.cpp: a root-signature-less command
+// signature of one DRAW (or DRAW_INDEXED) every [stride] bytes, or null.
+ID3D12CommandSignature *spudgpu_d3d12___create_draw_indirect_signature(
+    ID3D12Device *d3d_device, bool indexed, uint32_t stride);
+}
 
 #endif // SPUDGPU_COMPILE_D3D12_API

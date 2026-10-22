@@ -334,6 +334,8 @@ SPUDRESULT spudgpu_create_image(
 	}
 	pResult->_current_state = d3dInitialState;
 
+	// From here spudgpu_destroy_image frees it, and takes the count back.
+	SPUDGPU___LIVE_ADD(&device->_live, SPUDGPU___OBJECT_IMAGE);
 	if (spud_debug_name_set(pResult, desc->debug_name) != SPUD_SUCCESS) {
 		spudgpu_destroy_image(pResult);
 		return SPUDRESULT_OUT_OF_MEMORY;
@@ -350,6 +352,7 @@ void spudgpu_destroy_image(spudgpu_image image) {
     if (image->_heap)
         image->_heap->_placed_count--;
 #endif
+    SPUDGPU___LIVE_REMOVE(&image->_device->_live, SPUDGPU___OBJECT_IMAGE);
     const SPUD_ALLOCATOR allocator = image->head.allocator;
     spud_string_free(&allocator, image->head.debug_name);
     image->~spudgpu_image_d3d12();
@@ -384,6 +387,8 @@ SPUDRESULT spudgpu_create_image_view(
 	// first face to give, so it is always array slices 0 to 5.
 	if (desc->type == SPUDGPU_IMAGE_VIEW_TYPE_CUBE || desc->type == SPUDGPU_IMAGE_VIEW_TYPE_CUBE_ARRAY) {
 		if (!image->_desc.cube_capable)
+			return SPUDRESULT_GPU_INVALID_IMAGE_VIEW_TYPE;
+		if (desc->type == SPUDGPU_IMAGE_VIEW_TYPE_CUBE_ARRAY && !(image->_device->_features & SPUDGPU_FEATURE_CUBE_ARRAY_VIEWS))
 			return SPUDRESULT_GPU_INVALID_IMAGE_VIEW_TYPE;
 		if (desc->type == SPUDGPU_IMAGE_VIEW_TYPE_CUBE &&
 		    (desc->subresource_range.base_array_layer != 0 || desc->subresource_range.array_layer_count != 6))
@@ -479,12 +484,15 @@ SPUDRESULT spudgpu_create_image_view(
 	spudgpu_d3d12_fill_srv(pResult->_d3d_srv, image->_desc.format, desc);
 	spudgpu_d3d12_fill_uav(pResult->_d3d_uav, image->_desc.format, desc);
 
+	pResult->_device = image->_device;
+	SPUDGPU___LIVE_ADD(&pResult->_device->_live, SPUDGPU___OBJECT_IMAGE_VIEW);
 	*out_image_view = pResult;
     return SPUD_SUCCESS;
 }
 void spudgpu_destroy_image_view(spudgpu_image_view image_view) {
 	if (!image_view)
 		return;
+	SPUDGPU___LIVE_REMOVE(&image_view->_device->_live, SPUDGPU___OBJECT_IMAGE_VIEW);
 	const SPUD_ALLOCATOR allocator = image_view->head.allocator;
 	spud_string_free(&allocator, image_view->head.debug_name);
 	SPUD_DELETE(&allocator, spudgpu_image_view_d3d12, image_view);

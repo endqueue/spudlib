@@ -24,7 +24,7 @@ CD3DX12_RESOURCE_DESC spudgpu_d3d12_create_resource_desc_from_buffer(
 }
 
 SPUDRESULT spudgpu_d3d12_check_buffer_desc(
-    const SPUDGPU_DEVICE_PROPERTIES *properties,
+    SPUDGPU_FEATURES features,
     const spudgpu_buffer_desc *desc) {
 	if (desc->size == 0)
 		return SPUDRESULT_GPU_ZERO_BUFFER_SIZE;
@@ -40,7 +40,7 @@ SPUDRESULT spudgpu_d3d12_check_buffer_desc(
 		return SPUDRESULT_GPU_INVALID_BUFFER_USAGE;
 	if (desc->memory_kind == SPUDGPU_MEMORY_KIND_READBACK && desc->usage != SPUDGPU_BUFFER_USAGE_TRANSFER_DST)
 		return SPUDRESULT_GPU_INVALID_BUFFER_USAGE;
-	if (desc->memory_kind == SPUDGPU_MEMORY_KIND_DEVICE_MAPPABLE && !properties->device_mappable_memory)
+	if (desc->memory_kind == SPUDGPU_MEMORY_KIND_DEVICE_MAPPABLE && !(features & SPUDGPU_FEATURE_DEVICE_MAPPABLE_MEMORY))
 		return SPUDRESULT_GPU_MEMORY_KIND_NOT_SUPPORTED;
 	return SPUD_SUCCESS;
 }
@@ -60,7 +60,7 @@ SPUDRESULT spudgpu_create_buffer(
 		return base_sr;
 	if (!out_buffer)
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
-	const SPUDRESULT descResult = spudgpu_d3d12_check_buffer_desc(&device->_properties, desc);
+	const SPUDRESULT descResult = spudgpu_d3d12_check_buffer_desc(device->_features, desc);
 	if (descResult != SPUD_SUCCESS)
 		return descResult;
 
@@ -92,6 +92,8 @@ SPUDRESULT spudgpu_create_buffer(
 	// spudgpu_get_buffer_gpu_address hands this back (see spudgpu.h).
 	pResult->_d3d_gpu_address = pResult->_d3d_resource->GetGPUVirtualAddress();
 
+	// From here spudgpu_destroy_buffer frees it, and takes the count back.
+	SPUDGPU___LIVE_ADD(&device->_live, SPUDGPU___OBJECT_BUFFER);
 	if (spud_debug_name_set(pResult, desc->debug_name) != SPUD_SUCCESS) {
 		spudgpu_destroy_buffer(pResult);
 		return SPUDRESULT_OUT_OF_MEMORY;
@@ -108,6 +110,7 @@ void spudgpu_destroy_buffer(spudgpu_buffer buffer) {
 	if (buffer->_heap)
 		buffer->_heap->_placed_count--;
 #endif
+	SPUDGPU___LIVE_REMOVE(&buffer->_device->_live, SPUDGPU___OBJECT_BUFFER);
 	const SPUD_ALLOCATOR allocator = buffer->head.allocator;
 	spud_string_free(&allocator, buffer->head.debug_name);
 	buffer->~spudgpu_buffer_d3d12();
@@ -196,12 +199,15 @@ SPUDRESULT spudgpu_create_buffer_view(
 	// made from _desc's range. Vulkan and Metal make a view of a buffer of
 	// any usage, and so does this backend.
 
+	pResult->_device = buffer->_device;
+	SPUDGPU___LIVE_ADD(&pResult->_device->_live, SPUDGPU___OBJECT_BUFFER_VIEW);
 	*out_buffer_view = pResult;
 	return SPUD_SUCCESS;
 }
 void spudgpu_destroy_buffer_view(spudgpu_buffer_view buffer) {
 	if (!buffer)
 		return;
+	SPUDGPU___LIVE_REMOVE(&buffer->_device->_live, SPUDGPU___OBJECT_BUFFER_VIEW);
 	const SPUD_ALLOCATOR allocator = buffer->head.allocator;
 	spud_string_free(&allocator, buffer->head.debug_name);
 	SPUD_DELETE(&allocator, spudgpu_buffer_view_d3d12, buffer);

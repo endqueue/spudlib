@@ -131,7 +131,7 @@ static VkMappedMemoryRange spudgpuvulkan___internal_buffer_memory_range(
 }
 
 SPUDRESULT spudgpuvulkan___check_buffer_desc(
-    const SPUDGPU_DEVICE_PROPERTIES *properties,
+    SPUDGPU_FEATURES features,
     const spudgpu_buffer_desc *desc) {
     if (desc->size == 0) return SPUDRESULT_GPU_ZERO_BUFFER_SIZE;
     if (desc->usage == 0) return SPUDRESULT_GPU_INVALID_BUFFER_USAGE;
@@ -145,7 +145,7 @@ SPUDRESULT spudgpuvulkan___check_buffer_desc(
         return SPUDRESULT_GPU_INVALID_BUFFER_USAGE;
     if (desc->memory_kind == SPUDGPU_MEMORY_KIND_READBACK && desc->usage != SPUDGPU_BUFFER_USAGE_TRANSFER_DST)
         return SPUDRESULT_GPU_INVALID_BUFFER_USAGE;
-    if (desc->memory_kind == SPUDGPU_MEMORY_KIND_DEVICE_MAPPABLE && !properties->device_mappable_memory)
+    if (desc->memory_kind == SPUDGPU_MEMORY_KIND_DEVICE_MAPPABLE && !(features & SPUDGPU_FEATURE_DEVICE_MAPPABLE_MEMORY))
         return SPUDRESULT_GPU_MEMORY_KIND_NOT_SUPPORTED;
     return SPUD_SUCCESS;
 }
@@ -182,7 +182,7 @@ SPUDRESULT spudgpu_create_buffer(
     if (base_sr != SPUD_SUCCESS) return base_sr;
     if (!out_buffer) return SPUDRESULT_NULL_OUTPUT_PARAMETER;
 
-    const SPUDRESULT descResult = spudgpuvulkan___check_buffer_desc(&device->_properties, desc);
+    const SPUDRESULT descResult = spudgpuvulkan___check_buffer_desc(device->_features, desc);
     if (descResult != SPUD_SUCCESS) return descResult;
 
     // Create the result struct
@@ -264,6 +264,8 @@ SPUDRESULT spudgpu_create_buffer(
         return SPUDRESULT_OUT_OF_MEMORY;
     }
     memcpy(pResult, &result, sizeof(spudgpu_buffer_vulkan));
+    // From here spudgpu_destroy_buffer frees it, and takes the count back.
+    SPUDGPU___LIVE_ADD(&device->_shared->live, SPUDGPU___OBJECT_BUFFER);
     if (spud_debug_name_set(pResult, desc->debug_name) != SPUD_SUCCESS) {
         spudgpu_destroy_buffer(pResult);
         return SPUDRESULT_OUT_OF_MEMORY;
@@ -303,6 +305,7 @@ void spudgpu_destroy_buffer(spudgpu_buffer buffer) {
     if (buffer->_heap)
         buffer->_heap->_placed_count--;
 #endif
+    SPUDGPU___LIVE_REMOVE(&buffer->_device._shared->live, SPUDGPU___OBJECT_BUFFER);
     const SPUD_ALLOCATOR allocator = buffer->head.allocator;
     spud_string_free(&allocator, buffer->head.debug_name);
     SPUD_DELETE(&allocator, spudgpu_buffer_vulkan, buffer);
@@ -342,6 +345,8 @@ SPUDRESULT spudgpu_create_buffer_view(
     spudgpu_buffer_view pResult = SPUD_NEW(&result.head.allocator, spudgpu_buffer_view_vulkan);
     if (!pResult) return SPUDRESULT_OUT_OF_MEMORY;
     memcpy(pResult, &result, sizeof(spudgpu_buffer_view_vulkan));
+    pResult->_shared = buffer->_device._shared;
+    SPUDGPU___LIVE_ADD(&pResult->_shared->live, SPUDGPU___OBJECT_BUFFER_VIEW);
     *out_view = pResult;
     return SPUD_SUCCESS;
 }
@@ -361,6 +366,7 @@ void spudgpu_destroy_buffer_view(spudgpu_buffer_view buffer_view) {
 	vkDestroyBufferView(
 	    buffer_view->_desc.parent_buffer->_device._logical_device_vk,
 	    buffer_view->_buffer_view_vk, NULL);
+	SPUDGPU___LIVE_REMOVE(&buffer_view->_shared->live, SPUDGPU___OBJECT_BUFFER_VIEW);
 	const SPUD_ALLOCATOR allocator = buffer_view->head.allocator;
 	spud_string_free(&allocator, buffer_view->head.debug_name);
 	SPUD_DELETE(&allocator, spudgpu_buffer_view_vulkan, buffer_view);

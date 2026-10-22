@@ -104,28 +104,34 @@ static SPUDRESULT spudgpu_d3d12___create_shader_heap(
 	return SPUD_SUCCESS;
 }
 
-// Creates both shader-visible heaps on the first call. The caller holds
-// device->_shader_heap_mutex. Each is the largest shader-visible heap of its
-// type D3D12 allows on every device (resource binding tier 1 and up), so
-// what one pool or the bindless state takes is never limited by a size
-// chosen here.
-static SPUDRESULT spudgpu_d3d12___ensure_shader_heaps(spudgpu_device_d3d12 *device) {
-	if (device->_csv_heap.heap)
-		return SPUD_SUCCESS;
+// Releases [heap] and its free list, leaving it empty.
+static void spudgpu_d3d12___release_shader_heap(const SPUD_ALLOCATOR *allocator, spudgpu_d3d12_shader_heap &heap) {
+	heap.heap.Reset();
+	SPUD_DELETE_ARRAY(allocator, spudgpu_d3d12_heap_range, heap.free_ranges, heap.free_capacity);
+	heap.free_ranges   = nullptr;
+	heap.free_count    = 0;
+	heap.free_capacity = 0;
+}
+
+SPUDRESULT spudgpu_d3d12___create_shader_heaps(
+    spudgpu_device_d3d12 *device,
+    uint32_t max_descriptors,
+    uint32_t max_samplers) {
 	ID3D12Device *d3dDevice = device->_d3d_device.Get();
-	SPUDRESULT sr           = spudgpu_d3d12___create_shader_heap(
-        &device->head.allocator, d3dDevice, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, D3D12_MAX_SHADER_VISIBLE_DESCRIPTOR_HEAP_SIZE_TIER_1, device->_csv_heap);
+	SPUDRESULT sr           = SPUD_SUCCESS;
+	// A budget of 0 is no heap: D3D12 makes no heap of 0 descriptors, and
+	// every pool that asks for one of that kind is refused.
+	if (max_descriptors > 0)
+		sr = spudgpu_d3d12___create_shader_heap(
+		    &device->head.allocator, d3dDevice, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, max_descriptors, device->_csv_heap);
 	if (sr != SPUD_SUCCESS)
 		return sr;
-	sr = spudgpu_d3d12___create_shader_heap(
-	    &device->head.allocator, d3dDevice, D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER, D3D12_MAX_SHADER_VISIBLE_SAMPLER_HEAP_SIZE, device->_sampler_heap);
+	if (max_samplers > 0)
+		sr = spudgpu_d3d12___create_shader_heap(
+		    &device->head.allocator, d3dDevice, D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER, max_samplers, device->_sampler_heap);
 	if (sr != SPUD_SUCCESS) {
-		// Both or neither: _csv_heap.heap is what says they exist.
-		device->_csv_heap.heap.Reset();
-		SPUD_DELETE_ARRAY(&device->head.allocator, spudgpu_d3d12_heap_range, device->_csv_heap.free_ranges, device->_csv_heap.free_capacity);
-		device->_csv_heap.free_ranges   = nullptr;
-		device->_csv_heap.free_count    = 0;
-		device->_csv_heap.free_capacity = 0;
+		// Both or neither.
+		spudgpu_d3d12___release_shader_heap(&device->head.allocator, device->_csv_heap);
 		return sr;
 	}
 	return SPUD_SUCCESS;
@@ -150,8 +156,11 @@ static SPUDRESULT spudgpu_d3d12___heap_take(spudgpu_d3d12_shader_heap &heap, uin
 		}
 		return SPUD_SUCCESS;
 	}
-	// The heap is as large as D3D12 allows: its descriptors are all taken.
-	return SPUDRESULT_API_SPECIFIC_FAILURE;
+	// The device's budget, which is this heap, has no run of [count]
+	// descriptors left: too few, or what destroyed pools gave back is in
+	// pieces (spudgpu.h allows the latter on every backend). No heap at all
+	// (a budget of 0) has no free range either.
+	return SPUDRESULT_GPU_OUT_OF_DESCRIPTORS;
 }
 
 // Gives [count] descriptors at [offset] back to [heap], merged with the
@@ -201,8 +210,7 @@ static void spudgpu_d3d12___heap_give_back(
 }
 
 // Takes [csv_count] CBV/SRV/UAV and [sampler_count] sampler descriptors of
-// the device's shader-visible heaps, making the heaps on the first call.
-// Takes both or neither.
+// the device's shader-visible heaps: both or neither.
 static SPUDRESULT spudgpu_d3d12___take_shader_heap_ranges(
     spudgpu_device_d3d12 *device,
     uint32_t csv_count,
@@ -210,10 +218,7 @@ static SPUDRESULT spudgpu_d3d12___take_shader_heap_ranges(
     uint32_t *out_csv_offset,
     uint32_t *out_sampler_offset) {
 	std::lock_guard<std::mutex> lock(device->_shader_heap_mutex);
-	SPUDRESULT sr = spudgpu_d3d12___ensure_shader_heaps(device);
-	if (sr != SPUD_SUCCESS)
-		return sr;
-	sr = spudgpu_d3d12___heap_take(device->_csv_heap, csv_count, out_csv_offset);
+	SPUDRESULT sr = spudgpu_d3d12___heap_take(device->_csv_heap, csv_count, out_csv_offset);
 	if (sr != SPUD_SUCCESS)
 		return sr;
 	sr = spudgpu_d3d12___heap_take(device->_sampler_heap, sampler_count, out_sampler_offset);
@@ -248,13 +253,19 @@ static D3D12_GPU_DESCRIPTOR_HANDLE spudgpu_d3d12___gpu_handle(const spudgpu_d3d1
 	return handle;
 }
 
-// Sets the device's two shader-visible heaps on [cmd_list]. Every call that
-// binds descriptor tables sets the same two, so a table bound earlier stays
-// in a heap that is set. The heaps exist: a pool or the bindless state was
-// made before anything could be bound from it.
+// Sets the device's shader-visible heaps on [cmd_list]. Every call that
+// binds descriptor tables sets the same ones, so a table bound earlier stays
+// in a heap that is set. A heap of a budget of 0 doesn't exist, and nothing
+// can be bound from it.
 static void spudgpu_d3d12___set_shader_heaps(ID3D12GraphicsCommandList *cmd_list, spudgpu_device_d3d12 *device) {
-	ID3D12DescriptorHeap *heaps[] = {device->_csv_heap.heap.Get(), device->_sampler_heap.heap.Get()};
-	cmd_list->SetDescriptorHeaps(2, heaps);
+	ID3D12DescriptorHeap *heaps[2];
+	UINT count = 0;
+	if (device->_csv_heap.heap)
+		heaps[count++] = device->_csv_heap.heap.Get();
+	if (device->_sampler_heap.heap)
+		heaps[count++] = device->_sampler_heap.heap.Get();
+	if (count)
+		cmd_list->SetDescriptorHeaps(count, heaps);
 }
 
 extern "C" {
@@ -296,7 +307,10 @@ SPUDRESULT spudgpu_create_sampler(
 	}
 	pResult->_d3d_desc.MinLOD         = desc->min_lod;
 	pResult->_d3d_desc.MaxLOD         = desc->max_lod;
+	pResult->_device                  = device;
 
+	// From here spudgpu_destroy_sampler frees it, and takes the count back.
+	SPUDGPU___LIVE_ADD(&device->_live, SPUDGPU___OBJECT_SAMPLER);
 	if (spud_debug_name_set(pResult, desc->debug_name) != SPUD_SUCCESS) {
 		spudgpu_destroy_sampler(pResult);
 		return SPUDRESULT_OUT_OF_MEMORY;
@@ -309,6 +323,7 @@ SPUDRESULT spudgpu_create_sampler(
 void spudgpu_destroy_sampler(spudgpu_sampler sampler) {
 	if (!sampler)
 		return;
+	SPUDGPU___LIVE_REMOVE(&sampler->_device->_live, SPUDGPU___OBJECT_SAMPLER);
 	const SPUD_ALLOCATOR allocator = sampler->head.allocator;
 	spud_string_free(&allocator, sampler->head.debug_name);
 	SPUD_DELETE(&allocator, spudgpu_sampler_d3d12, sampler);
@@ -361,6 +376,7 @@ SPUDRESULT spudgpu_create_descriptor_set_layout(
 	pResult->_cbv_srv_uav_count = csv_cursor;
 	pResult->_sampler_count     = sampler_cursor;
 
+	SPUDGPU___LIVE_ADD(&pResult->_device->_live, SPUDGPU___OBJECT_DESCRIPTOR_SET_LAYOUT);
 	if (spud_debug_name_set(pResult, desc->debug_name) != SPUD_SUCCESS) {
 		spudgpu_destroy_descriptor_set_layout(pResult);
 		return SPUDRESULT_OUT_OF_MEMORY;
@@ -374,6 +390,7 @@ SPUDRESULT spudgpu_create_descriptor_set_layout(
 void spudgpu_destroy_descriptor_set_layout(spudgpu_descriptor_set_layout layout) {
 	if (!layout)
 		return;
+	SPUDGPU___LIVE_REMOVE(&layout->_device->_live, SPUDGPU___OBJECT_DESCRIPTOR_SET_LAYOUT);
 	const SPUD_ALLOCATOR allocator = layout->head.allocator;
 	spud_string_free(&allocator, layout->head.debug_name);
 	SPUD_DELETE(&allocator, spudgpu_descriptor_set_layout_d3d12, layout);
@@ -395,25 +412,28 @@ SPUDRESULT spudgpu_create_descriptor_pool(
 	if (desc->pool_size_count > SPUDGPU_MAX_DESCRIPTOR_POOL_SIZES)
 		return SPUDRESULT_GPU_TOO_MANY_DESCRIPTOR_POOLS;
 
-	// Sum capacities per heap type.
-	uint32_t csvCapacity     = 0;
-	uint32_t samplerCapacity = 0;
-	for (uint32_t i = 0; i < desc->pool_size_count; ++i) {
-		SPUDGPU_DESCRIPTOR_TYPE t = desc->pool_sizes[i].descriptor_type;
-		uint32_t count            = desc->pool_sizes[i].count;
-		if (t == SPUDGPU_DESCRIPTOR_TYPE_SAMPLER) {
-			samplerCapacity += count;
-		} else {
-			csvCapacity += count;
-			if (t == SPUDGPU_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
-				samplerCapacity += count; // also needs sampler slots
-		}
-	}
+	// What the pool takes out of the device's budget, which on D3D12 is its
+	// shader-visible heaps: the same count on every backend.
+	uint64_t descriptors = 0;
+	uint64_t samplers    = 0;
+	spudgpu___internal_pool_descriptor_counts(desc, &descriptors, &samplers);
+	// No heap is larger than a budget, which is at most UINT32_MAX.
+	if (descriptors > UINT32_MAX || samplers > UINT32_MAX)
+		return SPUDRESULT_GPU_OUT_OF_DESCRIPTORS;
+	const uint32_t csvCapacity     = (uint32_t)descriptors;
+	const uint32_t samplerCapacity = (uint32_t)samplers;
+	uint32_t csvOffset             = 0;
+	uint32_t samplerOffset         = 0;
+	SPUDRESULT sr = spudgpu_d3d12___take_shader_heap_ranges(device, csvCapacity, samplerCapacity, &csvOffset, &samplerOffset);
+	if (sr != SPUD_SUCCESS)
+		return sr;
 
 	spudgpu_descriptor_pool_d3d12 *pResult =
 	    SPUD_NEW(&device->head.allocator, spudgpu_descriptor_pool_d3d12);
-	if (!pResult)
+	if (!pResult) {
+		spudgpu_d3d12___give_back_shader_heap_ranges(device, csvOffset, csvCapacity, samplerOffset, samplerCapacity);
 		return SPUDRESULT_OUT_OF_MEMORY;
+	}
 	pResult                        = new (pResult) spudgpu_descriptor_pool_d3d12();
 	pResult->head.allocator        = device->head.allocator;
 	pResult->_device               = device;
@@ -422,17 +442,14 @@ SPUDRESULT spudgpu_create_descriptor_pool(
 	pResult->_sampler_capacity     = samplerCapacity;
 	pResult->_cbv_srv_uav_cursor   = 0;
 	pResult->_sampler_cursor       = 0;
-
 	// Ranges of the device's shader-visible heaps, not heaps of its own:
 	// see spudgpu_d3d12_shader_heap.
-	SPUDRESULT sr = spudgpu_d3d12___take_shader_heap_ranges(
-	    device, csvCapacity, samplerCapacity, &pResult->_cbv_srv_uav_offset, &pResult->_sampler_offset);
-	if (sr != SPUD_SUCCESS) {
-		pResult->~spudgpu_descriptor_pool_d3d12();
-		SPUD_DELETE(&device->head.allocator, spudgpu_descriptor_pool_d3d12, pResult);
-		return sr;
-	}
+	pResult->_cbv_srv_uav_offset = csvOffset;
+	pResult->_sampler_offset     = samplerOffset;
 
+	// From here spudgpu_destroy_descriptor_pool frees it, gives its ranges
+	// back and takes the count back.
+	SPUDGPU___LIVE_ADD(&device->_live, SPUDGPU___OBJECT_DESCRIPTOR_POOL);
 	if (spud_debug_name_set(pResult, desc->debug_name) != SPUD_SUCCESS) {
 		spudgpu_destroy_descriptor_pool(pResult);
 		return SPUDRESULT_OUT_OF_MEMORY;
@@ -460,6 +477,7 @@ void spudgpu_destroy_descriptor_pool(spudgpu_descriptor_pool pool) {
 	spudgpu_d3d12___free_descriptor_sets(p, nullptr);
 	spudgpu_d3d12___give_back_shader_heap_ranges(
 	    p->_device, p->_cbv_srv_uav_offset, p->_cbv_srv_uav_capacity, p->_sampler_offset, p->_sampler_capacity);
+	SPUDGPU___LIVE_REMOVE(&p->_device->_live, SPUDGPU___OBJECT_DESCRIPTOR_POOL);
 	const SPUD_ALLOCATOR allocator = p->head.allocator;
 	spud_string_free(&allocator, p->head.debug_name);
 	p->~spudgpu_descriptor_pool_d3d12();
@@ -736,25 +754,11 @@ void spudgpu_cmd_bind_descriptor_sets_compute(
 //  Bindless / Descriptor Indexing
 // ============================================================================
 
-// Lazy-init is safe here (unlike Vulkan): every D3D12 struct stores
-// spudgpu_device_d3d12* by pointer, so there is no stale-snapshot risk from
-// initializing this after other device-owned objects already exist.
-//
-// Once made, the state is only read through an acquire load, so the bind
-// calls, made while lists are recorded on any thread, take no lock. The
-// first calls take _bindless_create_mutex and look again under it, so two
-// threads making the first call at once make one state, not two (which
-// would each take a range of the heap, and leave one leaked and some
-// registrations in a table no longer set).
-static SPUDRESULT spudgpud3d12___ensure_bindless_state(spudgpu_device_d3d12 *device) {
-	if (device->_bindless.load(std::memory_order_acquire))
-		return SPUD_SUCCESS;
-	if (!device->_bindless_supported)
-		return SPUDRESULT_GPU_EXT_BINDLESS_DESCRIPTOR_INDEXING_NOT_SUPPORTED;
-	std::lock_guard<std::mutex> create_lock(device->_bindless_create_mutex);
-	if (device->_bindless.load(std::memory_order_relaxed))
-		return SPUD_SUCCESS;
-
+// Made by spudgpu_create_device when SPUDGPU_FEATURE_BINDLESS is asked for,
+// before the device is handed out, and never replaced: every call after reads
+// device->_bindless with no lock. spudgpu_create_device checked that the table
+// fits in the descriptor budget.
+SPUDRESULT spudgpu_d3d12___create_bindless_state(spudgpu_device_d3d12 *device) {
 	// A range of the device's shader-visible CBV/SRV/UAV heap, which the
 	// descriptor pools share, so bindless and pool sets bind together. Kept
 	// for the device's life.
@@ -819,7 +823,7 @@ static SPUDRESULT spudgpud3d12___ensure_bindless_state(spudgpu_device_d3d12 *dev
 	state->offset = offset;
 	state->layout = layout;
 
-	device->_bindless.store(state, std::memory_order_release);
+	device->_bindless = state;
 	return SPUD_SUCCESS;
 }
 
@@ -839,38 +843,12 @@ static SPUDRESULT spudgpud3d12___bindless_alloc_index(
 	return SPUD_SUCCESS;
 }
 
-SPUDRESULT spudgpu_get_bindless_capabilities(
-    spudgpu_device device,
-    spudgpu_bindless_capabilities *out_caps) {
-	if (!device)
-		return SPUDRESULT_GPU_INVALID_DEVICE;
-	if (!out_caps)
-		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
-	const SPUDRESULT base_sr = spud_struct_out_check(&out_caps->base, SPUD_STRUCT_TYPE_GPU_BINDLESS_CAPABILITIES);
-	if (base_sr != SPUD_SUCCESS)
-		return base_sr;
-
-	*out_caps = {};
-	// Whatever was copied over it, the base stays the caller's.
-	out_caps->base = spud_struct_base_out(SPUD_STRUCT_TYPE_GPU_BINDLESS_CAPABILITIES);
-	// Lazily attempted on first call, unlike Vulkan's device-creation-time
-	// attempt — safe here since D3D12's lazy init carries no staleness risk
-	// (see spudgpud3d12___ensure_bindless_state).
-	out_caps->supported = spudgpud3d12___ensure_bindless_state(device) == SPUD_SUCCESS;
-	if (!out_caps->supported)
-		return SPUD_SUCCESS;
-	out_caps->max_sampled_images  = SPUDGPU_BINDLESS_MAX_SLOTS_PER_CLASS;
-	out_caps->max_storage_images  = SPUDGPU_BINDLESS_MAX_SLOTS_PER_CLASS;
-	out_caps->max_storage_buffers = SPUDGPU_BINDLESS_MAX_SLOTS_PER_CLASS;
-	return SPUD_SUCCESS;
-}
-
 spudgpu_descriptor_set_layout spudgpu_get_bindless_descriptor_set_layout(spudgpu_device device) {
 	if (!device)
 		return nullptr;
-	if (spudgpud3d12___ensure_bindless_state(device) != SPUD_SUCCESS)
+	if (!device->_bindless)
 		return nullptr;
-	return (spudgpu_descriptor_set_layout)device->_bindless.load(std::memory_order_acquire)->layout;
+	return (spudgpu_descriptor_set_layout)device->_bindless->layout;
 }
 
 SPUDRESULT spudgpu_bindless_register_sampled_image(
@@ -883,10 +861,10 @@ SPUDRESULT spudgpu_bindless_register_sampled_image(
 		return SPUDRESULT_GPU_INVALID_IMAGE_VIEW;
 	if (!out_index)
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
-	if (spudgpud3d12___ensure_bindless_state(device) != SPUD_SUCCESS)
-		return SPUDRESULT_GPU_EXT_BINDLESS_DESCRIPTOR_INDEXING_NOT_SUPPORTED;
+	if (!device->_bindless)
+		return SPUDRESULT_GPU_EXT_BINDLESS_NOT_SUPPORTED;
 
-	spudgpu_bindless_state_d3d12 *state = device->_bindless.load(std::memory_order_acquire);
+	spudgpu_bindless_state_d3d12 *state = device->_bindless;
 	SPUDRESULT sr;
 	{
 		std::lock_guard<std::mutex> slots_lock(state->lock);
@@ -909,7 +887,7 @@ SPUDRESULT spudgpu_bindless_register_sampled_image(
 void spudgpu_bindless_unregister_sampled_image(spudgpu_device device, uint32_t index) {
 	if (!device)
 		return;
-	spudgpu_bindless_state_d3d12 *state = device->_bindless.load(std::memory_order_acquire);
+	spudgpu_bindless_state_d3d12 *state = device->_bindless;
 	if (!state)
 		return;
 	if (index == SPUDGPU_BINDLESS_INVALID_INDEX)
@@ -928,10 +906,10 @@ SPUDRESULT spudgpu_bindless_register_storage_image(
 		return SPUDRESULT_GPU_INVALID_IMAGE_VIEW;
 	if (!out_index)
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
-	if (spudgpud3d12___ensure_bindless_state(device) != SPUD_SUCCESS)
-		return SPUDRESULT_GPU_EXT_BINDLESS_DESCRIPTOR_INDEXING_NOT_SUPPORTED;
+	if (!device->_bindless)
+		return SPUDRESULT_GPU_EXT_BINDLESS_NOT_SUPPORTED;
 
-	spudgpu_bindless_state_d3d12 *state = device->_bindless.load(std::memory_order_acquire);
+	spudgpu_bindless_state_d3d12 *state = device->_bindless;
 	SPUDRESULT sr;
 	{
 		std::lock_guard<std::mutex> slots_lock(state->lock);
@@ -954,7 +932,7 @@ SPUDRESULT spudgpu_bindless_register_storage_image(
 void spudgpu_bindless_unregister_storage_image(spudgpu_device device, uint32_t index) {
 	if (!device)
 		return;
-	spudgpu_bindless_state_d3d12 *state = device->_bindless.load(std::memory_order_acquire);
+	spudgpu_bindless_state_d3d12 *state = device->_bindless;
 	if (!state)
 		return;
 	if (index == SPUDGPU_BINDLESS_INVALID_INDEX)
@@ -973,10 +951,10 @@ SPUDRESULT spudgpu_bindless_register_storage_buffer(
 		return SPUDRESULT_GPU_INVALID_BUFFER_VIEW;
 	if (!out_index)
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
-	if (spudgpud3d12___ensure_bindless_state(device) != SPUD_SUCCESS)
-		return SPUDRESULT_GPU_EXT_BINDLESS_DESCRIPTOR_INDEXING_NOT_SUPPORTED;
+	if (!device->_bindless)
+		return SPUDRESULT_GPU_EXT_BINDLESS_NOT_SUPPORTED;
 
-	spudgpu_bindless_state_d3d12 *state = device->_bindless.load(std::memory_order_acquire);
+	spudgpu_bindless_state_d3d12 *state = device->_bindless;
 	SPUDRESULT sr;
 	{
 		std::lock_guard<std::mutex> slots_lock(state->lock);
@@ -1014,7 +992,7 @@ SPUDRESULT spudgpu_bindless_register_storage_buffer(
 void spudgpu_bindless_unregister_storage_buffer(spudgpu_device device, uint32_t index) {
 	if (!device)
 		return;
-	spudgpu_bindless_state_d3d12 *state = device->_bindless.load(std::memory_order_acquire);
+	spudgpu_bindless_state_d3d12 *state = device->_bindless;
 	if (!state)
 		return;
 	if (index == SPUDGPU_BINDLESS_INVALID_INDEX)
@@ -1035,9 +1013,9 @@ void spudgpu_cmd_bind_bindless_resources(
 	if (pipeline->_root_layout.cbv_srv_uav_param[set_index] == SPUDGPU_D3D12_NO_ROOT_PARAMETER)
 		return;
 	spudgpu_device_d3d12 *device = cmd->_allocator->_device;
-	if (spudgpud3d12___ensure_bindless_state(device) != SPUD_SUCCESS)
+	spudgpu_bindless_state_d3d12 *state = device->_bindless;
+	if (!state)
 		return;
-	spudgpu_bindless_state_d3d12 *state = device->_bindless.load(std::memory_order_acquire);
 
 	ID3D12GraphicsCommandList *cmdList = cmd->_d3d_cmd_list.Get();
 
@@ -1061,9 +1039,9 @@ void spudgpu_cmd_bind_bindless_resources_compute(
 	if (pipeline->_root_layout.cbv_srv_uav_param[set_index] == SPUDGPU_D3D12_NO_ROOT_PARAMETER)
 		return;
 	spudgpu_device_d3d12 *device = cmd->_allocator->_device;
-	if (spudgpud3d12___ensure_bindless_state(device) != SPUD_SUCCESS)
+	spudgpu_bindless_state_d3d12 *state = device->_bindless;
+	if (!state)
 		return;
-	spudgpu_bindless_state_d3d12 *state = device->_bindless.load(std::memory_order_acquire);
 
 	ID3D12GraphicsCommandList *cmdList = cmd->_d3d_cmd_list.Get();
 

@@ -42,7 +42,7 @@ SPUDRESULT spudgpu_create_timestamp_set(
 	if (!out_set)
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
 	spudgpu_device_metal *device_metal = (spudgpu_device_metal *)device;
-	if (!device_metal->_properties.pass_timestamps)
+	if (!(device_metal->_features & SPUDGPU_FEATURE_PASS_TIMESTAMPS))
 		return SPUDRESULT_GPU_TIMESTAMPS_NOT_SUPPORTED;
 
 	spudgpu_timestamp_set_metal *set = SPUD_NEW_ZEROED(&device_metal->head.allocator, spudgpu_timestamp_set_metal);
@@ -66,8 +66,10 @@ SPUDRESULT spudgpu_create_timestamp_set(
 	}
 	set->_sample_buffer_mtl = buffer;
 	set->_device_mtl        = [device_metal->_device_mtl retain];
+	set->_parent_device     = device_metal;
 	set->_count             = count;
 	[device_metal->_device_mtl sampleTimestamps:&set->_cpu_origin gpuTimestamp:&set->_gpu_origin];
+	SPUDGPU___LIVE_ADD(&device_metal->_live, SPUDGPU___OBJECT_TIMESTAMP_SET);
 	*out_set = (spudgpu_timestamp_set)set;
 	return SPUD_SUCCESS;
 }
@@ -76,6 +78,7 @@ void spudgpu_destroy_timestamp_set(spudgpu_timestamp_set set) {
 	if (!set)
 		return;
 	spudgpu_timestamp_set_metal *set_metal = (spudgpu_timestamp_set_metal *)set;
+	SPUDGPU___LIVE_REMOVE(&set_metal->_parent_device->_live, SPUDGPU___OBJECT_TIMESTAMP_SET);
 	[set_metal->_sample_buffer_mtl release];
 	[set_metal->_device_mtl release];
 	const SPUD_ALLOCATOR allocator = set_metal->head.allocator;

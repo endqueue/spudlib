@@ -10,8 +10,8 @@ IDXGIFactory7 *spudgpu_get_dxgi_factory(spudgpu_instance instance) {
     return instance ? instance->_dxgi_factory.Get() : nullptr;
 }
 
-IDXGIAdapter4 *spudgpu_get_dxgi_adapter(spudgpu_device device) {
-    return device ? device->_dxgi_adapter.Get() : nullptr;
+IDXGIAdapter4 *spudgpu_get_dxgi_adapter(spudgpu_adapter adapter) {
+    return adapter ? adapter->_dxgi_adapter.Get() : nullptr;
 }
 ID3D12Device14 *spudgpu_get_d3d12_device(spudgpu_device device) {
     return device ? device->_d3d_device.Get() : nullptr;

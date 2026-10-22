@@ -3,6 +3,7 @@
 
 #include "spudgpuvulkan.h"
 #include "../../spudgpushared.h"
+#include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include "../../../spudstructbase.h"
@@ -442,6 +443,11 @@ void spudgpu_cmd_begin_rendering(
 		return;
 	if (spud_struct_check(&desc->base, SPUD_STRUCT_TYPE_GPU_RENDERING_BEGIN_DESC) != SPUD_SUCCESS)
 		return;
+	// A layered pass needs a device created with
+	// SPUDGPU_FEATURE_LAYERED_RENDERING, which is what switched
+	// shaderOutputLayer on (spudgpu.h, spudgpu_rendering_begin_desc::layer_count).
+	assert((desc->layer_count == 0 || (cmd->_allocator._device._features & SPUDGPU_FEATURE_LAYERED_RENDERING)) &&
+	       "spudgpu_cmd_begin_rendering: a layered pass on a device created without SPUDGPU_FEATURE_LAYERED_RENDERING");
 
 	uint32_t color_count = desc->color_attachment_count;
 	if (color_count > SPUDGPU_MAX_COLOR_ATTACHMENTS)

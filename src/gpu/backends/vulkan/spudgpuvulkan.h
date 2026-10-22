@@ -10,22 +10,52 @@
 #include "spudgpu.h"
 #include "../../../spudallocator.h"
 #include "../../../spudthread.h"
+#include "../../spudgpushared.h"
 #include <vulkan/vulkan.h>
 #include <stdatomic.h>
 
 typedef struct spudgpu_instance_t {
     spud_object_head head;
     VkInstance _instance_vk;
-    // The array spudgpu_enumerate_devices hands out, made by its first call
-    // and freed with the instance, devices and all.
-    spudgpu_device *_devices;
-    uint32_t _devices_count;
-    // Held for the whole of spudgpu_enumerate_devices, so that two first
-    // calls on two threads make one set of devices, not two. A pointer
-    // because each device keeps a copy of this struct (_instance), and a
-    // mutex is never copied.
-    spud_mutex *_devices_lock;
+    // The adapters listed when the instance was made, which never change,
+    // freed with it. Each device and surface keeps a copy of this struct
+    // (_instance), taken after the list was made.
+    spudgpu_adapter *_adapters;
+    uint32_t _adapter_count;
 } spudgpu_instance_vulkan;
+
+typedef struct spudgpu_adapter_t {
+    spud_object_head head;
+    VkPhysicalDevice _physical_device_vk;
+    // Read when the instance was made and never changed.
+    spudgpu___adapter_facts _facts;
+    VkPhysicalDeviceProperties _properties_vk;
+    // The queue family each kind of queue is made from, by the rule in
+    // spudgpu.h (spudgpu_device_desc::direct_queue_count): direct from the
+    // first family with graphics; compute from the first with compute and
+    // without graphics, else the direct family; copy from the first with
+    // transfer and neither graphics nor compute, else the compute family.
+    uint32_t _family_direct;
+    uint32_t _family_compute;
+    uint32_t _family_copy;
+    // Whether a device exists on the adapter: one at a time, claimed with an
+    // exchange by spudgpu_create_device and given back by
+    // spudgpu_destroy_device. The adapter is shared, hidden state, so this is
+    // SpudGPU's to guard.
+    atomic_bool _in_use;
+} spudgpu_adapter_vulkan;
+
+// What a device keeps that changes while it lives: its descriptor budget,
+// and in a debug build its live objects. Every struct below holds the device
+// by value, so this is allocated once, with the device, and every copy of
+// the device reaches the same one through its pointer; a mutex in it is
+// never copied.
+typedef struct spudgpu_device_shared_vulkan {
+    spudgpu___descriptor_budget budget;
+#if _DEBUG
+    spudgpu___live_objects live;
+#endif
+} spudgpu_device_shared_vulkan;
 
 #define SPUDGPU_BINDLESS_MAX_SLOTS_PER_CLASS 4096
 
@@ -60,50 +90,47 @@ typedef struct spudgpu_device_t {
     VkDevice _logical_device_vk;
     VkPhysicalDevice _physical_device_vk;
     spudgpu_instance_vulkan _instance;
-    SPUDGPU_DEVICE_PROPERTIES _properties;
+    spudgpu_adapter_vulkan *_adapter;
+    // spudgpu_device_desc::required_features: what every call checks.
+    SPUDGPU_FEATURES _features;
+    // The adapter's, copied for the limits the backend reads.
     VkPhysicalDeviceProperties _properties_vk;
-    VkPhysicalDeviceFeatures _features_vk;
+    // The family direct queues are made from (the adapter's _family_direct).
     uint32_t _graphics_queue_family_index;
 
-    // Set once at device creation (spudgpuvulkancontext.c) after checking
-    // both VK_EXT_mesh_shader's presence in vkEnumerateDeviceExtensionProperties
-    // *and* querying VkPhysicalDeviceMeshShaderFeaturesEXT::meshShader via
-    // vkGetPhysicalDeviceFeatures2 - the extension being enumerable doesn't
-    // by itself guarantee the feature bit is supported. Mirrors
-    // spudgpu_mesh_shading_capabilities (see SPUDGPU_EXT_MESH_SHADING in
-    // spudgpu.h).
-    bool _mesh_shading_supported;
-    uint32_t _mesh_shading_max_output_vertices;
-    uint32_t _mesh_shading_max_output_primitives;
-    uint32_t _mesh_shading_max_workgroup_invocations;
-
-    // Set once at device creation (spudgpuvulkancontext.c) from
-    // VkPhysicalDeviceFeatures::depthBounds - queried before the logical
-    // device exists (unlike _properties_vk/_features_vk below, which are
-    // only populated after), since it must also decide whether to request
-    // the depthBounds feature bit when creating the device. Mirrors
-    // spudgpu_depth_bounds_capabilities (see SPUDGPU_EXT_DEPTH_BOUNDS_TEST
-    // in spudgpu.h).
-    bool _depth_bounds_test_supported;
-    // NULL when _mesh_shading_supported is false. Loaded via
+    // NULL without SPUDGPU_FEATURE_MESH_SHADING. Loaded via
     // vkGetDeviceProcAddr since VK_EXT_mesh_shader's entry points don't come
-    // statically linked the way VK_KHR_swapchain's do (the only other
-    // device extension this backend has ever enabled).
+    // statically linked the way VK_KHR_swapchain's do.
     PFN_vkCmdDrawMeshTasksEXT _vkCmdDrawMeshTasksEXT;
     // NULL when the instance has no VK_EXT_debug_utils
     // (spudgpu_cmd_begin_debug_label records nothing then).
     PFN_vkCmdBeginDebugUtilsLabelEXT _vkCmdBeginDebugUtilsLabelEXT;
     PFN_vkCmdEndDebugUtilsLabelEXT _vkCmdEndDebugUtilsLabelEXT;
 
-    // Made with the device, before it is first copied (every struct above
-    // embeds spudgpu_device_vulkan by value), and never replaced, so every
-    // copy holds the same pointer. NULL if bindless could not be made.
+    // Made with the device when SPUDGPU_FEATURE_BINDLESS is asked for, before
+    // it is first copied (every struct below embeds spudgpu_device_vulkan by
+    // value), and never replaced, so every copy holds the same pointer. NULL
+    // exactly when the feature was not asked for.
     spudgpu_bindless_state_vulkan *_bindless;
-    // The queue spudgpu_get_graphics_queue hands out: made with the device,
-    // before it is first copied, and freed with it. NULL if the logical
-    // device could not be made.
-    struct spudgpu_command_queue_t *_graphics_queue;
+    // The queues the desc asked for, by kind, each array as long as its
+    // count (NULL for 0): made with the device and freed with it.
+    struct spudgpu_command_queue_t **_cmd_queues_direct;
+    uint32_t _cmd_queue_count_direct;
+    struct spudgpu_command_queue_t **_cmd_queues_compute;
+    uint32_t _cmd_queue_count_compute;
+    struct spudgpu_command_queue_t **_cmd_queues_copy;
+    uint32_t _cmd_queue_count_copy;
+    // See spudgpu_device_shared_vulkan.
+    spudgpu_device_shared_vulkan *_shared;
 } spudgpu_device_vulkan;
+
+// The largest draw_count one indirect draw on [device] takes:
+// SPUDGPU_ADAPTER_PROPERTIES::max_draw_indirect_count with
+// SPUDGPU_FEATURE_MULTI_DRAW_INDIRECT, else 1 (Vulkan's own rule without
+// multiDrawIndirect).
+static inline uint32_t spudgpuvulkan___max_draw_indirect_count(const spudgpu_device_vulkan *device) {
+    return (device->_features & SPUDGPU_FEATURE_MULTI_DRAW_INDIRECT) ? device->_adapter->_facts.properties.max_draw_indirect_count : 1;
+}
 
 // One per VkQueue, owned by the device. Never copied: a swap chain keeps a
 // pointer. A queue is the caller's to synchronize (spudgpu.h,
@@ -194,6 +221,8 @@ typedef struct spudgpu_timestamp_set_t {
     uint32_t _count;
     // VkPhysicalDeviceLimits::timestampPeriod: nanoseconds a tick.
     float _period_ns;
+    // The device's, for its live count.
+    spudgpu_device_shared_vulkan *_shared;
 } spudgpu_timestamp_set_vulkan;
 
 typedef struct spudgpu_buffer_t {
@@ -222,6 +251,9 @@ typedef struct spudgpu_buffer_view_t {
     spud_object_head head;
     VkBufferView _buffer_view_vk;
     spudgpu_buffer_view_desc _desc;
+    // The buffer's device's, kept here because a view may be destroyed after
+    // its buffer (its live count is the device's).
+    spudgpu_device_shared_vulkan *_shared;
 } spudgpu_buffer_view_vulkan;
 
 typedef struct spudgpu_image_t {
@@ -263,6 +295,10 @@ typedef struct spudgpu_image_view_t {
     spud_object_head head;
     VkImageView _image_view_vk;
     spudgpu_image_view_desc _desc;
+    // The image's device's, kept here because a view may be destroyed after
+    // its image (its live count is the device's). NULL for a swap chain's own
+    // views, which the swap chain frees.
+    spudgpu_device_shared_vulkan *_shared;
 } spudgpu_image_view_vulkan;
 
 typedef struct spudgpu_surface_t {
@@ -278,12 +314,17 @@ typedef struct spudgpu_fence_t {
     // (one bit, reset by hand) is not.
     VkSemaphore _semaphore_vk;
     VkDevice _device_vk;
+    // The device's, for its live count.
+    spudgpu_device_shared_vulkan *_shared;
 } spudgpu_fence_vulkan;
 
 typedef struct spudgpu_semaphore_t {
     spud_object_head head;
     VkSemaphore _semaphore_vk;
     VkDevice _device_vk;
+    // The device's, for its live count. NULL for a swap chain's own
+    // semaphores, which the swap chain frees.
+    spudgpu_device_shared_vulkan *_shared;
 } spudgpu_semaphore_vulkan;
 
 typedef struct spudgpu_swap_chain_t {
@@ -359,6 +400,10 @@ typedef struct spudgpu_descriptor_pool_t {
     VkDescriptorPool _pool_vk;
     spudgpu_device_vulkan _device;
     spudgpu_descriptor_pool_desc _desc;
+    // What the pool took out of its device's descriptor budget, given back
+    // when it is destroyed.
+    uint64_t _budget_descriptors;
+    uint64_t _budget_samplers;
     // Every set handle made from the pool and not yet released, newest
     // first, linked through their _next. spudgpu.h has the pool release its
     // sets when it is reset or destroyed, handles and all.
@@ -390,7 +435,7 @@ VkShaderStageFlags spudgpuvulkan___shader_stages(SPUDGPU_SHADER_STAGE stages);
 // spudgpu_create_buffer's desc checks, in its order, after its argument
 // checks: size, usage, memory kind, usage against kind, device.
 SPUDRESULT spudgpuvulkan___check_buffer_desc(
-    const SPUDGPU_DEVICE_PROPERTIES *properties,
+    SPUDGPU_FEATURES features,
     const spudgpu_buffer_desc *desc);
 // The VkBufferCreateInfo of a buffer of [desc].
 void spudgpuvulkan___buffer_create_info(
@@ -411,13 +456,16 @@ void spudgpuvulkan___image_create_info(
     const spudgpu_image_desc *desc,
     VkImageCreateInfo *out_info);
 
-// Defined in spudgpuvulkandescriptors.c. Called once, by
-// spudgpu_enumerate_devices, before the device's first by-value copy
-// (command allocator/buffer/image/pipeline creation, ...), so every copy
-// holds the same _bindless. Nothing makes it later: a device whose bindless
-// state could not be made then has none, and a later attempt would be one
-// the copies already taken never see.
+// Defined in spudgpuvulkandescriptors.c. Called by spudgpu_create_device when
+// SPUDGPU_FEATURE_BINDLESS is asked for, before the device's first by-value
+// copy (command allocator/buffer/image/pipeline creation, ...), so every copy
+// holds the same _bindless. Nothing makes it later; a failure fails the
+// device's creation.
 SPUDRESULT spudgpuvulkan___create_bindless_state(spudgpu_device device);
+
+// Defined in spudgpuvulkancontext.c: the queue family [type]'s queues and
+// command pools are made from on [adapter] (a bundle's is the direct one).
+uint32_t spudgpuvulkan___family_of(const spudgpu_adapter_vulkan *adapter, SPUDGPU_COMMAND_LIST_TYPE type);
 void spudgpuvulkan___destroy_bindless_state(spudgpu_device device);
 
 #if _DEBUG
