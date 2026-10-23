@@ -707,7 +707,31 @@ failed to link on D3D12 (debug layer error 660), which matches the stages
 by register in order, while Vulkan and Metal match by location and took it;
 `spudgpu_create_shader_pipeline`'s comment now states the rule that holds
 on all three (declare every output from location 0 up to the last one
-read).
+read). On 2026-10-23 a caller's GPU tests ran on Windows 11, Debug, on D3D12 (debug layer printing) and Vulkan (validation layer, plain
+and under synchronization validation), on the Intel Iris Xe and the NVIDIA
+RTX A2000, two devices each: the first runs off Metal of combined image
+samplers, a layered pass with the layer from the vertex shader (D3D12's
+`VPAndRTArrayIndexFromAnyShaderFeedingRasterizer...` on both GPUs), a mesh
+shader drawn (RTX A2000; `quad.mesh`, SPIR-V 1.5, through SPIRV-Cross to
+HLSL on D3D12), a stencil aspect sampled and a cube array view sampled.
+Every check passed; D3D12 was silent, and synchronization validation
+found no hazard. The Vulkan validation layer found two bugs in this
+backend, both fixed and rerun clean: a mesh or task shader module was
+made on a device without `SPUDGPU_FEATURE_MESH_SHADING` (its SPIR-V needs
+`VK_EXT_mesh_shader` enabled even as a module), so
+`spudgpu_create_shader_module` now refuses one with
+`SPUDRESULT_GPU_EXT_MESH_SHADING_NOT_SUPPORTED`, on every backend, after
+the alignment check; and a vertex shader's `gl_Layer` in SPIR-V before 1.5
+(glslc's default) is the `ShaderViewportIndexLayerEXT` capability, which
+needs `VK_EXT_shader_viewport_index_layer` and not only
+`shaderOutputLayer`. A Vulkan adapter has `SPUDGPU_FEATURE_LAYERED_RENDERING`
+now only with the extension and `shaderOutputViewportIndex` as well (the
+extension, enabled beside `VkPhysicalDeviceVulkan12Features`, needs both
+on: VUID-VkDeviceCreateInfo-ppEnabledExtensionNames-02835), and a device
+created with it enables all three; both GPUs here keep the bit. The
+module check is compiled for Vulkan and D3D12 and no run has reached it
+(the caller refuses a mesh shader first); Metal's line has not been
+compiled.
 
 - **Vulkan** — reference backend, plain C23, complete. Build against this first;
   D3D12 and Metal follow its shape.
@@ -1110,7 +1134,10 @@ read).
   each combined sampler at cross-compilation (`spudgpumetalshader.m`), a
   second argument in the layout's encoder and a second write
   (`spudgpumetaldescriptors.m`). A layout with a combined binding refuses a
-  binding at or past 1024. Run on Metal by `../apricottests`'
-  `test_combined_image_samplers`; `spudgpusamples/Samples/HelloTexture`
-  still uses the separate `SAMPLED_IMAGE` + `SAMPLER` pair it was written
-  with.
+  binding at or past 1024. Run on Metal by a caller's test of two
+  combined samplers beside a separate pair, and by the same test on D3D12
+  and Vulkan
+  (2026-10-23, Windows 11, Intel Iris Xe and NVIDIA RTX A2000, debug and
+  validation layers silent), where combined samplers needed no change;
+  `spudgpusamples/Samples/HelloTexture` still uses the separate
+  `SAMPLED_IMAGE` + `SAMPLER` pair it was written with.

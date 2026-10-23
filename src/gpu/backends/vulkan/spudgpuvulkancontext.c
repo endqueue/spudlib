@@ -402,7 +402,15 @@ static bool spudgpuvulkan___read_adapter_facts(const SPUD_ALLOCATOR *allocator, 
     features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
     features2.pNext = &vk12;
     vkGetPhysicalDeviceFeatures2(physicalDevice, &features2);
-    if (vk12.shaderOutputLayer) features |= SPUDGPU_FEATURE_LAYERED_RENDERING;
+    // shaderOutputLayer covers SPIR-V 1.5's ShaderLayer; a vertex shader's
+    // gl_Layer in earlier SPIR-V (glslc's default) is ShaderViewportIndexLayerEXT,
+    // which needs the extension enabled even on Vulkan 1.2 and later; and
+    // the extension, enabled beside VkPhysicalDeviceVulkan12Features, needs
+    // shaderOutputViewportIndex on as well (VUID-VkDeviceCreateInfo-
+    // ppEnabledExtensionNames-02835).
+    if (vk12.shaderOutputLayer && vk12.shaderOutputViewportIndex &&
+        spudgpuvulkan___device_extension_available(allocator, physicalDevice, VK_EXT_SHADER_VIEWPORT_INDEX_LAYER_EXTENSION_NAME))
+        features |= SPUDGPU_FEATURE_LAYERED_RENDERING;
     // Every descriptor indexing feature the bindless table switches on, and
     // room for the table's three classes in one stage.
     const uint32_t slots = SPUDGPU_BINDLESS_MAX_SLOTS_PER_CLASS;
@@ -774,6 +782,7 @@ static VkResult spudgpuvulkan___create_logical_device(
     vk12Features.bufferDeviceAddress = VK_TRUE;
     vk12Features.timelineSemaphore   = VK_TRUE;
     vk12Features.shaderOutputLayer   = (features & SPUDGPU_FEATURE_LAYERED_RENDERING) ? VK_TRUE : VK_FALSE;
+    vk12Features.shaderOutputViewportIndex = vk12Features.shaderOutputLayer;
     // The bindless table (spudgpuvulkandescriptors.c), and only with it.
     if (features & SPUDGPU_FEATURE_BINDLESS) {
         vk12Features.descriptorIndexing                            = VK_TRUE;
@@ -794,10 +803,12 @@ static VkResult spudgpuvulkan___create_logical_device(
     vk13Features.dynamicRendering = VK_TRUE;
     vk13Features.synchronization2 = VK_TRUE;
 
-    const char *deviceExtensions[2];
+    const char *deviceExtensions[3];
     uint32_t deviceExtensionCount = 0;
     if (features & SPUDGPU_FEATURE_PRESENT)
         deviceExtensions[deviceExtensionCount++] = VK_KHR_SWAPCHAIN_EXTENSION_NAME;
+    if (features & SPUDGPU_FEATURE_LAYERED_RENDERING)
+        deviceExtensions[deviceExtensionCount++] = VK_EXT_SHADER_VIEWPORT_INDEX_LAYER_EXTENSION_NAME;
     VkPhysicalDeviceMeshShaderFeaturesEXT meshShaderFeatures = {0};
     if (features & SPUDGPU_FEATURE_MESH_SHADING) {
         deviceExtensions[deviceExtensionCount++] = VK_EXT_MESH_SHADER_EXTENSION_NAME;

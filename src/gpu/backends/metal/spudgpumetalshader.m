@@ -246,6 +246,11 @@ SPUDRESULT spudgpu_create_shader_module(
 		return SPUDRESULT_GPU_NULL_SPIRV;
 	if (desc->spirv_size % 4 != 0)
 		return SPUDRESULT_GPU_INVALID_SPIRV_ALIGNMENT;
+	// Vulkan's rule (a mesh module is outside it there without the feature),
+	// held here too.
+	if ((desc->stage == SPUDGPU_SHADER_STAGE_MESH || desc->stage == SPUDGPU_SHADER_STAGE_TASK) &&
+	    !(device->_features & SPUDGPU_FEATURE_MESH_SHADING))
+		return SPUDRESULT_GPU_EXT_MESH_SHADING_NOT_SUPPORTED;
 
 	spudgpu_device_metal *device_metal = (spudgpu_device_metal *)device;
 	SPUDRESULT sr                      = SPUD_SUCCESS;

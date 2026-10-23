@@ -155,6 +155,11 @@ SPUDRESULT spudgpu_create_shader_module(
 	if (desc->spirv_size % 4 != 0)
 		return SPUDRESULT_GPU_INVALID_SPIRV_ALIGNMENT; // SPIR-V must be 4-byte
 		                                               // aligned
+	// A mesh or task module's SPIR-V declares MeshShadingEXT, which a device
+	// without VK_EXT_mesh_shader can't take even as a module.
+	if ((desc->stage == SPUDGPU_SHADER_STAGE_MESH || desc->stage == SPUDGPU_SHADER_STAGE_TASK) &&
+	    !(device->_features & SPUDGPU_FEATURE_MESH_SHADING))
+		return SPUDRESULT_GPU_EXT_MESH_SHADING_NOT_SUPPORTED;
 
 	spudgpu_shader_module_vulkan result = {0};
 	result.head.allocator               = device->head.allocator;

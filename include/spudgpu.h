@@ -423,8 +423,12 @@ enum {
 typedef uint64_t SPUDGPU_FEATURES;
 
 /** spudgpu_rendering_begin_desc::layer_count above 0, with the vertex shader
- * choosing each primitive's layer. Vulkan:
- * `VkPhysicalDeviceVulkan12Features::shaderOutputLayer`. D3D12:
+ * choosing each primitive's layer, in SPIR-V of any version (before 1.5 a
+ * vertex shader's `gl_Layer` is the `ShaderViewportIndexLayerEXT`
+ * capability, from 1.5 `ShaderLayer`). Vulkan:
+ * `VkPhysicalDeviceVulkan12Features::shaderOutputLayer` and
+ * `::shaderOutputViewportIndex`, and `VK_EXT_shader_viewport_index_layer`,
+ * all enabled with it. D3D12:
  * `D3D12_FEATURE_DATA_D3D12_OPTIONS::VPAndRTArrayIndexFromAnyShaderFeedingRasterizerSupportedWithoutGSEmulation`.
  * Metal: `MTLGPUFamilyApple5` or `MTLGPUFamilyMac2`. */
 #define SPUDGPU_FEATURE_LAYERED_RENDERING (UINT64_C(1) << 0)
@@ -474,9 +478,11 @@ typedef uint64_t SPUDGPU_FEATURES;
  * tier 3. Metal: never (SPUDGPU_EXT_BINDLESS is 0). */
 #define SPUDGPU_FEATURE_BINDLESS (UINT64_C(1) << 8)
 /** Mesh-shader pipelines and spudgpu_cmd_dispatch_mesh()
- * (SPUDGPU_EXT_MESH_SHADING); a pipeline is refused with
- * SPUDRESULT_GPU_EXT_MESH_SHADING_NOT_SUPPORTED. Vulkan: `VK_EXT_mesh_shader`
- * with `meshShader`. D3D12: `D3D12_FEATURE_DATA_D3D12_OPTIONS7::MeshShaderTier`.
+ * (SPUDGPU_EXT_MESH_SHADING); a pipeline, and a mesh or task shader module,
+ * is refused with SPUDRESULT_GPU_EXT_MESH_SHADING_NOT_SUPPORTED (on Vulkan the
+ * module's SPIR-V is itself outside the rules without the extension).
+ * Vulkan: `VK_EXT_mesh_shader` with `meshShader`. D3D12:
+ * `D3D12_FEATURE_DATA_D3D12_OPTIONS7::MeshShaderTier`.
  * Metal: every adapter. */
 #define SPUDGPU_FEATURE_MESH_SHADING (UINT64_C(1) << 9)
 /** The depth bounds test (SPUDGPU_EXT_DEPTH_BOUNDS_TEST). Vulkan:
@@ -4458,6 +4464,9 @@ typedef struct spudgpu_shader_module_desc {
  *         `desc->spirv_size` is 0.
  * @retval SPUDRESULT_GPU_INVALID_SPIRV_ALIGNMENT `desc->spirv_size` is not a
  *         multiple of 4.
+ * @retval SPUDRESULT_GPU_EXT_MESH_SHADING_NOT_SUPPORTED `desc->stage` is
+ *         SPUDGPU_SHADER_STAGE_MESH or SPUDGPU_SHADER_STAGE_TASK and `device`
+ *         was created without SPUDGPU_FEATURE_MESH_SHADING.
  * @retval SPUDRESULT_GPU_INVALID_SHADER_STAGE `desc->stage` is not a single
  *         known shader stage.
  * @retval SPUDRESULT_GPU_SHADER_COMPILATION_FAILED The SPIR-V could not be
