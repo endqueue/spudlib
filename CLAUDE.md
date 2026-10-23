@@ -983,7 +983,13 @@ compiled.
     acts as a stretch on an HWND swap chain (DXGI_SCALING's docs). No
     ONE_TO_ONE on a `WS_EX_LAYOUTRTL` window, where `DXGI_SCALING_NONE`
     aligns the right edges; the style is read at the query and at creation.
-    Written on macOS; not compiled.
+    Written on macOS; compiled and run on Windows 11 on 2026-10-23 (Debug,
+    debug layer on, Intel Iris Xe and NVIDIA RTX A2000): both surfaces
+    report one-to-one and stretch, and HelloTriangle in a 900x900 window
+    over 1280x720 back buffers showed one-to-one pixel for pixel from the
+    top left, cropped on the right (the strip below black), and stretch
+    filling the window; aspect-fit refused. No debug layer message. The
+    `WS_EX_LAYOUTRTL` case has not run.
   - Vulkan: ONE_TO_ONE always. With `VK_KHR_swapchain_maintenance1` (or
     the EXT original; the instance enables `VK_KHR_get_surface_capabilities2`
     and `VK_KHR`/`VK_EXT_surface_maintenance1` where the loader has them,
@@ -995,9 +1001,29 @@ compiled.
     the caller's size within `[minScaledImageExtent, maxScaledImageExtent]`;
     an unscaled one keeps `currentExtent` where the surface fixes it. No
     feature bit: what it offers is per surface and per present mode, and the
-    query answers that. Type-checked on macOS against the Vulkan 1.4.341
-    headers (the Windows SDK the build pins), with a stub Wayland header;
-    never run.
+    query answers that. No ASPECT_FIT on a Win32 surface (below). Type-checked
+    on macOS against the Vulkan 1.4.341 headers (the Windows SDK the build
+    pins), with a stub Wayland header; compiled and run on Windows 11 on
+    2026-10-23 (Debug, validation on, synchronization validation too for the
+    samples). The Intel Iris Xe has no swapchain_maintenance1 extension:
+    one-to-one only, back buffers at the window's size (900x900 for a
+    1280x720 request), nothing scaled. The NVIDIA RTX A2000 has
+    `VK_KHR_swapchain_maintenance1`, and its surface offers all three
+    scalings with every gravity for FIFO, MAILBOX and IMMEDIATE (scaled
+    range 1x1 up). HelloTriangle there showed one-to-one as D3D12 does
+    (identical capture) and stretch filling the window, both over 1280x720
+    back buffers. The run found two bugs, both fixed:
+    - The device's copy of the instance (`_instance`, from before adapters)
+      was never filled in, so the scaling query called a null
+      `vkGetPhysicalDeviceSurfaceCapabilities2KHR` and crashed on any device
+      with the extension. The adapter now keeps the call (copied from the
+      instance when it records the extension) and the device reads it
+      there; the stale field is gone.
+    - The A2000's driver offers `ASPECT_RATIO_STRETCH` with centred gravity
+      on a Win32 surface and shows a stretch (its capture identical to
+      stretch's), as DXGI does with `DXGI_SCALING_ASPECT_RATIO_STRETCH` on a
+      window. ASPECT_FIT is not offered on a Win32 surface any more, which
+      matches D3D12. Linux (Wayland's free extent, X11) has not run.
   - Metal: all three, as `contentsGravity` (`kCAGravityTopLeft`, or
     `kCAGravityBottomLeft` on a layer whose `contentsAreFlipped`, read at
     creation; `kCAGravityResize`; `kCAGravityResizeAspect`), set with
@@ -1010,9 +1036,12 @@ compiled.
     top-left and cropped, stretched, and letterboxed.
   Every caller in the workspace names one: a caller's renderer that scales
   with draws of its own names ONE_TO_ONE, and so does every sample (their
-  windows can't be resized). The D3D12
-  and Vulkan halves need a Windows run (and Vulkan a Linux one, Wayland's
-  free extent included).
+  windows can't be resized). `spudgpu_objects_test`'s checks before the
+  surface is read pass on Windows on both backends (adapter 0, the Iris Xe,
+  only: the test takes the first adapter, and no real swap chain is made
+  there). No test reaches the extension's path, which is how the crash
+  above went unseen: only a real surface on the A2000 did. Vulkan still
+  needs a Linux run, Wayland's free extent included.
 - SpudFiles was reworked on 2026-10-22 (`SPUDFILES_TODO.md`): an instance
   with the caller's allocator; UTF-8 paths (Windows converts each to UTF-16
   and calls only the W functions); access, creation and share mode chosen by

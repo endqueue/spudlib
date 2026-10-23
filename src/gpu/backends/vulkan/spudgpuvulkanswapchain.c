@@ -71,7 +71,7 @@ static bool spudgpuvulkan___get_available_present_modes_internal(
 
 // What [surface] offers for scaling a swap chain of [presentMode]
 // (VK_KHR_surface_maintenance1). Only for a device with
-// _swapchain_maintenance1, whose instance has the call loaded.
+// _swapchain_maintenance1, whose adapter has the call loaded.
 static SPUDRESULT spudgpuvulkan___scaling_capabilities_internal(
 	const spudgpu_device_vulkan *device,
 	VkSurfaceKHR surface,
@@ -89,7 +89,7 @@ static SPUDRESULT spudgpuvulkan___scaling_capabilities_internal(
 	VkSurfaceCapabilities2KHR capabilities = {0};
 	capabilities.sType = VK_STRUCTURE_TYPE_SURFACE_CAPABILITIES_2_KHR;
 	capabilities.pNext = pOutput;
-	if (device->_instance._vkGetPhysicalDeviceSurfaceCapabilities2KHR(device->_physical_device_vk, &info, &capabilities) != VK_SUCCESS)
+	if (device->_adapter->_vkGetPhysicalDeviceSurfaceCapabilities2KHR(device->_physical_device_vk, &info, &capabilities) != VK_SUCCESS)
 		return SPUDRESULT_API_SPECIFIC_FAILURE;
 	return SPUD_SUCCESS;
 }
@@ -104,15 +104,20 @@ static bool spudgpuvulkan___one_to_one_offered_internal(const VkSurfacePresentSc
 
 // The SPUDGPU_PRESENT_SCALING bits besides ONE_TO_ONE that [capabilities]
 // keep the header's rule for. STRETCH takes no gravity; ASPECT_FIT is
-// centred on both axes.
+// centred on both axes, and never on a Win32 surface: there the NVIDIA
+// driver offers ASPECT_RATIO_STRETCH with centred gravity and shows a
+// stretch (RTX A2000, 2026-10-23), as DXGI_SCALING_ASPECT_RATIO_STRETCH
+// does on a window's swap chain, the reason D3D12 doesn't offer it either.
 static uint32_t spudgpuvulkan___scalings_offered_internal(const VkSurfacePresentScalingCapabilitiesKHR *capabilities) {
 	uint32_t scalings = 0;
 	if (capabilities->supportedPresentScaling & VK_PRESENT_SCALING_STRETCH_BIT_KHR)
 		scalings |= SPUDGPU_PRESENT_SCALING_STRETCH;
+#if !defined(SPUDLIB_PLATFORM_WIN32)
 	if ((capabilities->supportedPresentScaling & VK_PRESENT_SCALING_ASPECT_RATIO_STRETCH_BIT_KHR) &&
 	    (capabilities->supportedPresentGravityX & VK_PRESENT_GRAVITY_CENTERED_BIT_KHR) &&
 	    (capabilities->supportedPresentGravityY & VK_PRESENT_GRAVITY_CENTERED_BIT_KHR))
 		scalings |= SPUDGPU_PRESENT_SCALING_ASPECT_FIT;
+#endif
 	return scalings;
 }
 
