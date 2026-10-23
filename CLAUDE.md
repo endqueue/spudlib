@@ -1098,19 +1098,19 @@ read).
   once already is the zero-cost path there). Needs reconciling two different points in
   the object hierarchy: Vulkan's immutable samplers live on the descriptor-set-layout
   binding, D3D12's static samplers live on the pipeline/root-signature.
-- `SPUDGPU_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER` doesn't work on Metal.
-  Vulkan/D3D12 implement it; Metal's `spudgpumetaldescriptors.m` only ever
-  wrote the texture half into the argument buffer (see that file's header
-  comment), and cross-compiling a GLSL `sampler2D` confirms this isn't just
-  an unfinished write path: under SpudGPU's per-descriptor-set-argument-
-  buffer scheme, SPIRV-Cross's synthesized sampler member for a combined
-  sampler overlaps the texture's own binding slot, which SPIRV-Cross only
-  permits via "full mutable aliasing of argument buffer descriptors" on
-  Metal 3+ (`spirv_msl.cpp`). `spudgpusamples/Samples/HelloTexture` hit this
-  and works around it exactly the way `SpudGPUDynamicIndexing`'s bindless
-  design already had to — a separate `SAMPLED_IMAGE` + `SAMPLER` pair instead
-  of one combined descriptor. Fixing this for real means either targeting
-  Metal 3+ only for this one descriptor type, or restructuring the Metal
-  backend's argument-buffer layout so a combined descriptor's image and
-  sampler occupy distinct member slots instead of sharing the caller's single
-  binding number.
+- `SPUDGPU_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER` works on Metal since
+  2026-10-22. Before, Metal's `spudgpumetaldescriptors.m` wrote only the
+  texture half into the argument buffer, and under SpudGPU's
+  per-descriptor-set argument buffers SPIRV-Cross's sampler member for a
+  combined sampler took the texture's own id, so a shader with one didn't
+  compile (SPIRV-Cross allows that overlap only with Metal 3's mutable
+  aliasing). Now the argument buffer layout gives the two halves distinct
+  members: the texture keeps the binding's number, and the sampler sits at
+  `SPUDGPU_METAL_COMBINED_SAMPLER_INDEX_BASE` (1024) past it, by a remap of
+  each combined sampler at cross-compilation (`spudgpumetalshader.m`), a
+  second argument in the layout's encoder and a second write
+  (`spudgpumetaldescriptors.m`). A layout with a combined binding refuses a
+  binding at or past 1024. Run on Metal by `../apricottests`'
+  `test_combined_image_samplers`; `spudgpusamples/Samples/HelloTexture`
+  still uses the separate `SAMPLED_IMAGE` + `SAMPLER` pair it was written
+  with.

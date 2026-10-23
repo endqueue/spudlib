@@ -49,6 +49,18 @@
 #define SPUDGPU_METAL_DESCRIPTOR_SET_BUFFER_INDEX_BASE \
 	(SPUDGPU_METAL_PUSH_CONSTANTS_BUFFER_INDEX - SPUDGPU_MAX_DESCRIPTOR_SET_LAYOUTS)
 
+// Where the sampler half of a SPUDGPU_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER
+// sits in its set's argument buffer: a combined binding B of N elements has
+// its textures at [[id(B)]] to [[id(B + N - 1)]], as every binding has its
+// elements at its own number, and its samplers at [[id(BASE + B)]] on. A
+// combined descriptor is two members of a Metal argument buffer, and they
+// can't share one id short of Metal 3's aliasing; so the sampler goes where
+// no binding is, by a remap of each combined sampler at cross-compilation
+// (spudgpumetalshader.m), a second argument in the layout's encoder and a
+// second write (spudgpumetaldescriptors.m). A layout with a combined
+// binding refuses any binding at or past BASE.
+#define SPUDGPU_METAL_COMBINED_SAMPLER_INDEX_BASE 1024u
+
 typedef struct spudgpu_instance_t {
 	spud_object_head head;
 	// Metal has no top-level instance/factory object (unlike VkInstance or
@@ -309,6 +321,10 @@ typedef struct spudgpu_command_list_t {
 	// Push-constant scratch block - see SPUDGPU_METAL_PUSH_CONSTANTS_SIZE.
 	uint8_t _push_constants_scratch[SPUDGPU_METAL_PUSH_CONSTANTS_SIZE];
 	uint32_t _push_constants_extent; // High-water mark of bytes ever written.
+	// The SPUDGPU_SHADER_STAGE bits of the ranges pushed for since the last
+	// draw, which that draw sends the block to
+	// (spudgpumetal___internal_send_push_constants).
+	uint32_t _push_constants_pending_stages;
 
 	// The same for spudgpu_cmd_push_constants_compute, kept apart so a
 	// compute push never rewrites what the render encoder was last sent.

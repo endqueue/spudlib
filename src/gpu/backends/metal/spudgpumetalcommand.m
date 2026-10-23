@@ -274,6 +274,8 @@ void spudgpu_begin_command_list(spudgpu_command_list cmd) {
 	       "spudgpu_begin_command_list: a list of this allocator is already open; end it first");
 	cmd_list_metal->_parent_allocator->_open_list = cmd;
 #endif
+	// A recording starts with nothing pushed, as a Vulkan command buffer does.
+	cmd_list_metal->_push_constants_pending_stages = 0;
 	spudgpumetal___internal_acquire_command_buffer(cmd_list_metal);
 }
 
@@ -519,6 +521,37 @@ static bool spudgpumetal___internal_resolve_index_type(uint32_t stride, MTLIndex
 	return false;
 }
 
+// The push constant block, to the stages spudgpu_cmd_push_constants has
+// written for since the last draw: what Vulkan's and D3D12's command
+// state hold until a draw reads it. Sent at the draw, not at the push, so a
+// render encoder never carries bytes no draw of it used (Metal's
+// validation, with warnings fatal, stops at such an encoder's end); and a
+// block pushed before the encoder opened reaches its first draw, as it
+// would on Vulkan. Called by every draw after its encoder check.
+static void spudgpumetal___internal_send_push_constants(spudgpu_command_list_metal *cmd_list_metal) {
+	const uint32_t stages = cmd_list_metal->_push_constants_pending_stages;
+	if (!stages)
+		return;
+	cmd_list_metal->_push_constants_pending_stages = 0;
+	if (stages & SPUDGPU_SHADER_STAGE_VERTEX) {
+		[cmd_list_metal->_active_render_encoder setVertexBytes:cmd_list_metal->_push_constants_scratch
+		                                                 length:cmd_list_metal->_push_constants_extent
+		                                                atIndex:SPUDGPU_METAL_PUSH_CONSTANTS_BUFFER_INDEX];
+	}
+	if (stages & SPUDGPU_SHADER_STAGE_FRAGMENT) {
+		[cmd_list_metal->_active_render_encoder setFragmentBytes:cmd_list_metal->_push_constants_scratch
+		                                                   length:cmd_list_metal->_push_constants_extent
+		                                                  atIndex:SPUDGPU_METAL_PUSH_CONSTANTS_BUFFER_INDEX];
+	}
+#if SPUDGPU_EXT_MESH_SHADING
+	if (stages & SPUDGPU_SHADER_STAGE_MESH) {
+		[cmd_list_metal->_active_render_encoder setMeshBytes:cmd_list_metal->_push_constants_scratch
+		                                               length:cmd_list_metal->_push_constants_extent
+		                                              atIndex:SPUDGPU_METAL_PUSH_CONSTANTS_BUFFER_INDEX];
+	}
+#endif
+}
+
 void spudgpu_cmd_draw(
     spudgpu_command_list cmd,
     uint32_t vertex_count,
@@ -529,6 +562,7 @@ void spudgpu_cmd_draw(
 	spudgpu_command_list_metal *cmd_list_metal = (spudgpu_command_list_metal *)cmd;
 	if (!cmd_list_metal->_active_render_encoder)
 		return;
+	spudgpumetal___internal_send_push_constants(cmd_list_metal);
 	spudgpu_shader_pipeline_metal *pipeline_metal = (spudgpu_shader_pipeline_metal *)cmd_list_metal->_bound_pipeline;
 	if (!pipeline_metal)
 		return;
@@ -550,6 +584,7 @@ void spudgpu_cmd_draw_indexed(
 	spudgpu_command_list_metal *cmd_list_metal = (spudgpu_command_list_metal *)cmd;
 	if (!cmd_list_metal->_active_render_encoder)
 		return;
+	spudgpumetal___internal_send_push_constants(cmd_list_metal);
 	spudgpu_shader_pipeline_metal *pipeline_metal = (spudgpu_shader_pipeline_metal *)cmd_list_metal->_bound_pipeline;
 	spudgpu_buffer_view_metal *index_view         = cmd_list_metal->_bound_index_buffer_view;
 	if (!pipeline_metal || !index_view)
@@ -588,6 +623,7 @@ void spudgpu_cmd_draw_instanced(
 	spudgpu_command_list_metal *cmd_list_metal = (spudgpu_command_list_metal *)cmd;
 	if (!cmd_list_metal->_active_render_encoder)
 		return;
+	spudgpumetal___internal_send_push_constants(cmd_list_metal);
 	spudgpu_shader_pipeline_metal *pipeline_metal = (spudgpu_shader_pipeline_metal *)cmd_list_metal->_bound_pipeline;
 	if (!pipeline_metal)
 		return;
@@ -613,6 +649,7 @@ void spudgpu_cmd_draw_indexed_instanced(
 	spudgpu_command_list_metal *cmd_list_metal = (spudgpu_command_list_metal *)cmd;
 	if (!cmd_list_metal->_active_render_encoder)
 		return;
+	spudgpumetal___internal_send_push_constants(cmd_list_metal);
 	spudgpu_shader_pipeline_metal *pipeline_metal = (spudgpu_shader_pipeline_metal *)cmd_list_metal->_bound_pipeline;
 	spudgpu_buffer_view_metal *index_view         = cmd_list_metal->_bound_index_buffer_view;
 	if (!pipeline_metal || !index_view)
@@ -766,6 +803,7 @@ void spudgpu_cmd_dispatch_mesh(
 	    (spudgpu_shader_pipeline_metal *)cmd_list_metal->_bound_pipeline;
 	if (!cmd_list_metal->_active_render_encoder || !pipeline_metal || !pipeline_metal->_is_mesh_pipeline)
 		return;
+	spudgpumetal___internal_send_push_constants(cmd_list_metal);
 
 	// See spudgpu_shader_pipeline_metal::_mesh_local_size_x/y/z in
 	// spudgpumetal.h - same "no equivalent of reading this out of the bound
@@ -830,6 +868,7 @@ void spudgpu_cmd_draw_indirect(
 		return;
 	if (!cmd_list_metal->_active_render_encoder)
 		return;
+	spudgpumetal___internal_send_push_constants(cmd_list_metal);
 	spudgpu_shader_pipeline_metal *pipeline_metal = (spudgpu_shader_pipeline_metal *)cmd_list_metal->_bound_pipeline;
 	if (!pipeline_metal)
 		return;
@@ -868,6 +907,7 @@ void spudgpu_cmd_draw_indexed_indirect(
 		return;
 	if (!cmd_list_metal->_active_render_encoder)
 		return;
+	spudgpumetal___internal_send_push_constants(cmd_list_metal);
 	spudgpu_shader_pipeline_metal *pipeline_metal = (spudgpu_shader_pipeline_metal *)cmd_list_metal->_bound_pipeline;
 	spudgpu_buffer_view_metal *index_view       = cmd_list_metal->_bound_index_buffer_view;
 	if (!pipeline_metal || !index_view)
@@ -911,51 +951,24 @@ void spudgpu_cmd_push_constants(
 
 	// Metal has no persistent push-constant-block state to patch a
 	// sub-range of - see SPUDGPU_METAL_PUSH_CONSTANTS_SIZE - so this always
-	// writes into (and resends) the command list's own scratch copy of the
-	// whole block.
+	// writes into the command list's own scratch copy of the whole block,
+	// which the next draw sends.
 	memcpy(cmd_list_metal->_push_constants_scratch + offset, data, size);
 	uint32_t new_extent = offset + size;
 	if (new_extent > cmd_list_metal->_push_constants_extent)
 		cmd_list_metal->_push_constants_extent = new_extent;
 
-	if (!cmd_list_metal->_active_render_encoder)
-		return;
-
 	// Metal has no per-call stage selection the way Vulkan's stage_flags
 	// does - -setVertexBytes:/-setFragmentBytes: are separate calls - so
 	// collect which stages any range overlapping [offset, offset+size)
-	// actually declares (same overlap test the Vulkan backend uses) and
-	// push to each of those.
-	bool vertex_stage = false, fragment_stage = false, mesh_stage = false;
+	// actually declares (same overlap test the Vulkan backend uses); the
+	// next draw sends the block to each of those.
 	uint32_t range_count = pipeline_metal->_desc.push_constant_range_count;
 	for (uint32_t i = 0; i < range_count; i++) {
 		const spudgpu_push_constant_range_desc *r = &pipeline_metal->_desc.push_constant_ranges[i];
-		if (r->offset < offset + size && r->offset + r->size > offset) {
-			if (r->stage_flags & SPUDGPU_SHADER_STAGE_VERTEX)
-				vertex_stage = true;
-			if (r->stage_flags & SPUDGPU_SHADER_STAGE_FRAGMENT)
-				fragment_stage = true;
-			if (r->stage_flags & SPUDGPU_SHADER_STAGE_MESH)
-				mesh_stage = true;
-		}
-	}
-	if (!vertex_stage && !fragment_stage && !mesh_stage)
-		return;
-
-	if (vertex_stage) {
-		[cmd_list_metal->_active_render_encoder setVertexBytes:cmd_list_metal->_push_constants_scratch
-		                                                 length:cmd_list_metal->_push_constants_extent
-		                                                atIndex:SPUDGPU_METAL_PUSH_CONSTANTS_BUFFER_INDEX];
-	}
-	if (fragment_stage) {
-		[cmd_list_metal->_active_render_encoder setFragmentBytes:cmd_list_metal->_push_constants_scratch
-		                                                   length:cmd_list_metal->_push_constants_extent
-		                                                  atIndex:SPUDGPU_METAL_PUSH_CONSTANTS_BUFFER_INDEX];
-	}
-	if (mesh_stage) {
-		[cmd_list_metal->_active_render_encoder setMeshBytes:cmd_list_metal->_push_constants_scratch
-		                                               length:cmd_list_metal->_push_constants_extent
-		                                              atIndex:SPUDGPU_METAL_PUSH_CONSTANTS_BUFFER_INDEX];
+		if (r->offset < offset + size && r->offset + r->size > offset)
+			cmd_list_metal->_push_constants_pending_stages |=
+			    r->stage_flags & (SPUDGPU_SHADER_STAGE_VERTEX | SPUDGPU_SHADER_STAGE_FRAGMENT | SPUDGPU_SHADER_STAGE_MESH);
 	}
 }
 

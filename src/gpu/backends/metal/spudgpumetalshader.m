@@ -127,6 +127,33 @@ static SPUDRESULT spudgpumetal___internal_cross_compile_spirv_to_msl(
 		spvc_compiler_msl_add_resource_binding_2(compiler, &binding);
 	}
 
+	// A combined image sampler is two members of its set's argument buffer,
+	// which can't share the binding's id: its texture keeps the binding's
+	// number, as every resource does here, and its sampler goes to
+	// SPUDGPU_METAL_COMBINED_SAMPLER_INDEX_BASE past it, where the layout's
+	// encoder puts it (spudgpumetaldescriptors.m).
+	{
+		spvc_resources resources = NULL;
+		const spvc_reflected_resource *sampled_images = NULL;
+		size_t sampled_image_count = 0;
+		if (spvc_compiler_create_shader_resources(compiler, &resources) == SPVC_SUCCESS &&
+		    spvc_resources_get_resource_list_for_type(resources, SPVC_RESOURCE_TYPE_SAMPLED_IMAGE, &sampled_images, &sampled_image_count) ==
+		        SPVC_SUCCESS) {
+			for (size_t i = 0; i < sampled_image_count; i++) {
+				const unsigned set     = spvc_compiler_get_decoration(compiler, sampled_images[i].id, SpvDecorationDescriptorSet);
+				const unsigned binding = spvc_compiler_get_decoration(compiler, sampled_images[i].id, SpvDecorationBinding);
+				spvc_msl_resource_binding_2 combined;
+				spvc_msl_resource_binding_init_2(&combined);
+				combined.stage       = execution_model;
+				combined.desc_set    = set;
+				combined.binding     = binding;
+				combined.msl_texture = binding;
+				combined.msl_sampler = SPUDGPU_METAL_COMBINED_SAMPLER_INDEX_BASE + binding;
+				spvc_compiler_msl_add_resource_binding_2(compiler, &combined);
+			}
+		}
+	}
+
 	// Without this, SPIRV-Cross auto-assigns the push-constant block's own
 	// buffer index from its normal free-slot pool, which only happens to
 	// avoid colliding with the pins above when every one of

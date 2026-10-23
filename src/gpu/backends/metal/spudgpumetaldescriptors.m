@@ -6,10 +6,9 @@
 // each SPIR-V descriptor set's whole argument buffer to a fixed MSL buffer
 // index in spudgpumetalshader.m (SPUDGPU_METAL_DESCRIPTOR_SET_BUFFER_INDEX_BASE),
 // and this file builds/writes/binds the actual MTLArgumentEncoder/MTLBuffer
-// pair per set. The sampler half of SPUDGPU_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER
-// is intentionally still not written (see the SAMPLER case below) - SpudGPU's
-// bindless design pairs bindless textures with a plain SPUDGPU_DESCRIPTOR_TYPE_SAMPLER
-// bound the ordinary way instead, which spudgpu_create_sampler (this file) does support.
+// pair per set. A SPUDGPU_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER is two
+// arguments: its texture at its binding, its sampler at
+// SPUDGPU_METAL_COMBINED_SAMPLER_INDEX_BASE past it (spudgpumetal.h).
 //
 
 #if SPUDGPU_COMPILE_METAL_API
@@ -167,6 +166,19 @@ SPUDRESULT spudgpu_create_descriptor_set_layout(
 	{
 		NSMutableArray<MTLArgumentDescriptor *> *argument_descs =
 		    [NSMutableArray arrayWithCapacity:desc->binding_count];
+		// A combined binding's samplers go past every binding's elements.
+		bool has_combined = false;
+		for (uint32_t i = 0; i < desc->binding_count; i++)
+			if (desc->bindings[i].descriptor_type == SPUDGPU_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
+				has_combined = true;
+		for (uint32_t i = 0; i < desc->binding_count && has_combined; i++) {
+			const spudgpu_descriptor_binding_desc *b = &desc->bindings[i];
+			const uint32_t count                     = b->count > 1 ? b->count : 1;
+			if (b->binding >= SPUDGPU_METAL_COMBINED_SAMPLER_INDEX_BASE || count > SPUDGPU_METAL_COMBINED_SAMPLER_INDEX_BASE - b->binding) {
+				sr = SPUDRESULT_GPU_CANNOT_RESOLVE_API_SPECIFIC_DESCRIPTOR_TYPE;
+				goto failedattempt;
+			}
+		}
 		for (uint32_t i = 0; i < desc->binding_count; i++) {
 			const spudgpu_descriptor_binding_desc *b = &desc->bindings[i];
 
@@ -192,6 +204,19 @@ SPUDRESULT spudgpu_create_descriptor_set_layout(
 				argument_desc.textureType = MTLTextureType2D;
 			}
 			[argument_descs addObject:argument_desc];
+		}
+		// The combined bindings' samplers, after every other argument: their
+		// ids are past every binding's, and the arguments go in id order.
+		for (uint32_t i = 0; i < desc->binding_count; i++) {
+			const spudgpu_descriptor_binding_desc *b = &desc->bindings[i];
+			if (b->descriptor_type != SPUDGPU_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
+				continue;
+			MTLArgumentDescriptor *sampler_desc = [MTLArgumentDescriptor argumentDescriptor];
+			sampler_desc.index                  = SPUDGPU_METAL_COMBINED_SAMPLER_INDEX_BASE + b->binding;
+			sampler_desc.arrayLength            = (b->count > 1) ? b->count : 0;
+			sampler_desc.dataType               = MTLDataTypeSampler;
+			sampler_desc.access                 = MTLBindingAccessReadOnly;
+			[argument_descs addObject:sampler_desc];
 		}
 
 		layout_metal->_argument_encoder_mtl =
@@ -450,8 +475,12 @@ void spudgpu_update_descriptor_sets(
 			tracked_usage    = (w->descriptor_type == SPUDGPU_DESCRIPTOR_TYPE_STORAGE_IMAGE)
 			                       ? (MTLResourceUsageRead | MTLResourceUsageWrite)
 			                       : MTLResourceUsageRead;
-			// COMBINED_IMAGE_SAMPLER's paired sampler is intentionally not
-			// written - see this file's header comment.
+			// A combined descriptor's sampler is its second argument.
+			if (w->descriptor_type == SPUDGPU_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER && w->sampler) {
+				spudgpu_sampler_metal *sampler_metal = (spudgpu_sampler_metal *)w->sampler;
+				[encoder setSamplerState:sampler_metal->_sampler_state_mtl
+				                 atIndex:SPUDGPU_METAL_COMBINED_SAMPLER_INDEX_BASE + argument_index];
+			}
 			break;
 		}
 		case SPUDGPU_DESCRIPTOR_TYPE_SAMPLER: {
