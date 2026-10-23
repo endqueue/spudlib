@@ -3,8 +3,9 @@
 Written on 2026-10-20. Four pieces of work that bring the parts of spudlib
 written before its current rules up to them, and give it what C APIs that
 stay stable for decades have and it lacks. Each is meant for a session of
-its own, in the order below. Items 1 and 2 are done (2026-10-20); 3 has two parts done (version,
-result names) and 4 has not started. Item 3 was added the same day, from a comparison with Vulkan,
+its own, in the order below. Items 1 and 2 are done (2026-10-20); 3 has three parts done (version,
+result names, the allocator, SpudFiles included since item 4) and SpudMemory's
+arena out, with the policy still to do, and 4 is done (2026-10-22). Item 3 was added the same day, from a comparison with Vulkan,
 Win32, POSIX, SQLite, zlib, libcurl and Lua; it goes before SpudFiles so
 that the new `spudfiles.h` is written to its rules.
 
@@ -12,11 +13,6 @@ What "done" means here is measured by the workspace's `check.sh`: when items
 1, 2 and 4 are finished, `check.baseline` has no `mutable-globals|spudlib` or
 `struct-bases|spudlib` entries left, and nothing under `bindings/`. Item 3
 adds to `spudcore.h` and removes no entry.
-
-**Pending from item 1:** `febed1c` is pushed, but the callers' dependency
-locks still name `29a8b01`, so `./check.sh`'s `dep-locks` fails.
-`./check.sh --update-locks` writes no lock while spudlib has uncommitted
-changes: commit and push the SpudInput dispatch and item 2 first, then run it.
 
 Every item ends the same way:
 
@@ -119,11 +115,11 @@ Long-lived C APIs have these and spudlib does not:
   (`vk_enum_string_helper.h`) and `curl_easy_strerror`. spudlib already had
   it as `spudresult_str()` (`spudcore.h`), which keeps its name; it was
   missing 11 results (SpudGPU's six heap and placement results, SpudFiles'
-  1003-1007), which read as "SPUDRESULT_UNKNOWN". All 151 have a case now,
+  1003-1007), which read as "SPUDRESULT_UNKNOWN". Every result has a case (157 as of 2026-10-22),
   and the switch has no `default`, so clang's `-Wswitch` (on by default)
   and GCC's (in `-Wall`) report a result added without one. MSVC's C4062
   is off by default, so a Windows-only change is not caught.
-- **The caller's allocator: done (2026-10-21), but for SpudFiles.**
+- **The caller's allocator: done (2026-10-21; SpudFiles 2026-10-22).**
   `VkAllocationCallbacks`, `SQLITE_CONFIG_MALLOC`, `lua_Alloc`, zlib's
   `zalloc`/`zfree`. `spudcore.h`'s "The caller's allocator" group has
   `SPUD_ALLOCATOR` (frozen: `user_data`, `allocate(size, alignment)`,
@@ -144,16 +140,23 @@ Long-lived C APIs have these and spudlib does not:
   - Every allocation of every backend goes through it, freed with its own
     size and alignment. `tests/spudtest_allocator.h` checks that in
     `spudinput_test` and `spudnet_test`.
-  - Left: SpudFiles, until item 4 gives it an instance (its `sfs_file`
-    head holds `spud_allocator_system()`); the D3D12 backend's
+  - Left: the D3D12 backend's
     `std::vector`/`std::string`; memory the platforms and drivers allocate
     themselves (SpudGPU passes Vulkan no `VkAllocationCallbacks`).
   - Which threads call it is in each module's header: a SpudAudio stream's
     callback thread never does, its device watch does.
-  - SpudMemory's arena is still to move out of SpudLib (it decides
-    alignment, growth and zeroing, and its alignment macro, destroy and
-    create are broken), leaving SpudMemory the virtual-memory calls, with a
-    POSIX backend for Linux and Apple.
+  - SpudMemory's arena is out of SpudLib: done (2026-10-22). It decided
+    alignment, growth and zeroing, and its alignment macro, destroy
+    (`free` on mapped memory) and create (no check of the reservation; a
+    zero commit size divided by zero later) were broken. Nothing but
+    a caller's log line used it, so it went rather than moving to another
+    repository. SpudMemory is `smem_get_page_size`, `smem_reserve`,
+    `smem_commit`, `smem_decommit` and `smem_release`, each returning a
+    `SPUDRESULT`, with a POSIX backend for Linux and Apple
+    (`src/memory/backends/posix/`) beside Windows'.
+    `tests/spudmemory_test` passes on macOS, plain and under ASan and
+    TSan; the Windows backend is syntax-checked with mingw-w64, and the
+    POSIX one has not been compiled on Linux.
 - **A stated stability and threading policy.** `CLAUDE.md` says a released
   layout never changes, but nothing says what "released" is: there are no
   tags or versions, and spudlib is STATIC only, pinned by commit in each
@@ -168,7 +171,9 @@ Long-lived C APIs have these and spudlib does not:
 **Breaks:** nothing, if the allocator is optional and chained or added with
 the struct bases.
 
-## 4. Rework SpudFiles
+## 4. Rework SpudFiles: done (2026-10-22)
+
+The proposal was agreed and built; `SPUDFILES_TODO.md` has the record.
 
 The largest of the four, and the one to design before writing: begin the
 session with a proposal for the new `spudfiles.h`, and write code only once it

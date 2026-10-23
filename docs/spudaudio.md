@@ -1,7 +1,7 @@
 # SpudAudio
 
 Thin audio endpoint I/O: WASAPI (Windows), ALSA (Linux; PipeWire planned), CoreAudio
-(macOS, planned). The public API and its per-backend mappings are documented in
+(macOS); a stub on iOS and watchOS. The public API and its per-backend mappings are documented in
 `include/spudaudio.h`; this file holds design notes that don't belong in the header.
 
 ## Future intent: positional (spatialized) audio
@@ -106,7 +106,7 @@ them. Nothing below should stay a built-in default.
 
 Verification still owed, separate from the above:
 
-- [ ] The CoreAudio conversion path has not been compiled or run.
+- [ ] The CoreAudio conversion path is compiled on macOS and has not been run.
 - [ ] `SPUDAUDIO_SAMPLE_FORMAT_S24_32_LSB` may be refused: `AudioConverter` only
   promises non-packed integers that are high-aligned. If it is, the stream fails with
   `SPUDRESULT_SAUD_FORMAT_NOT_SUPPORTED`.

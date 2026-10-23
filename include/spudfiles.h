@@ -1,198 +1,483 @@
-//
-// Created by Nathan on 5/9/2026.
-// SFS = SpudFiles
-//
-
 #ifndef SPUDLIB_SPUDFILES_H
 #define SPUDLIB_SPUDFILES_H
 
+/**
+ * @file spudfiles.h
+ * @brief SpudFiles: files and paths, as the platform's file system has them.
+ *
+ * Opening, reading and writing at an offset, sizing, flushing and mapping a
+ * file; what is at a path, replacing and removing a file, and making a
+ * directory. One call each, translated: POSIX on Linux and every Apple
+ * system, the Win32 W functions on Windows.
+ *
+ * Rules that hold on every backend:
+ *
+ * - Every path is UTF-8, null-terminated, as the platform takes it
+ *   (relative to the process's working directory, or absolute). The Windows
+ *   backend converts each to UTF-16. Nothing is normalised, joined or split:
+ *   a path is the caller's.
+ * - A NULL or empty path is refused with SPUDRESULT_SFS_NULL_PATH.
+ * - There is no cursor: every read and write names its offset, so two
+ *   threads may read one file at once. Writing to one file from two threads
+ *   at once, or to a range another is reading, is the caller's to order.
+ * - New files and directories get the platform's default permissions, with
+ *   the process's umask applied on POSIX (0666 and 0777 before it).
+ * - What a failure was is one of the results below; the platform's own
+ *   number is not kept (not yet).
+ *
+ * Every object of an instance is made through the instance's allocator. A
+ * file, a mapping and the instance may each be used from any thread, as
+ * long as one isn't destroyed while another thread uses it.
+ */
+
 #include "spudcore.h"
-#include "stdbool.h"
-#include "stdint.h"
+
+#include <stdbool.h>
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif // __cplusplus
 
-typedef struct spudblob_t *spudblob;
+/** Opaque handle to a SpudFiles instance: the allocator its objects use. */
+typedef struct sfs_instance_t *sfs_instance;
+/** Opaque handle to an open file. */
 typedef struct sfs_file_t *sfs_file;
-typedef struct sfs_directory_t *sfs_directory;
+/** Opaque handle to a read-only mapping of part of a file. */
 typedef struct sfs_mapping_t *sfs_mapping;
 
-typedef enum SFS_EFILE_ACCESS_MODE {        // EFileAccessMode
-	SFS_EFILE_ACCESS_MODE_READ,             // Read,
-	SFS_EFILE_ACCESS_MODE_OVERWRITE,        // Overwrite
-	SFS_EFILE_ACCESS_MODE_APPEND,           // Append
-	SFS_EFILE_ACCESS_MODE_READ_UPDATE,      // ReadUpdate
-	SFS_EFILE_ACCESS_MODE_OVERWRITE_UPDATE, // OverwriteUpdate
-	SFS_EFILE_ACCESS_MODE_APPEND_UPDATE     // AppendUpdate
-} SFS_EFILE_ACCESS_MODE;
+/* ---- Instance ---- */
 
-typedef struct SFS_FILE_OPEN_ATTRIBUTES { // FileOpenAttribs
-	const char *str_file_path;
-	SFS_EFILE_ACCESS_MODE access_mode;
-} SFS_FILE_OPEN_ATTRIBUTES;
+/**
+ * @brief What the caller decides when creating an instance. No field has a
+ * default.
+ */
+typedef struct sfs_instance_desc {
+	/** `type` is SPUD_STRUCT_TYPE_FILES_INSTANCE_DESC; `next` is NULL (nothing
+	 * is chained onto this struct yet). Set by the caller. See
+	 * SPUD_STRUCT_BASE. */
+	SPUD_STRUCT_BASE base;
+	/** Where the memory of the instance and of every file and mapping made
+	 * from it comes from. Copied; its functions and `user_data` must outlive
+	 * the instance and everything made from it. Required. */
+	const SPUD_ALLOCATOR *allocator;
+} sfs_instance_desc;
 
-typedef uint32_t SFS_FILE_DIALOG_FLAGS;
+/**
+ * @brief Creates an instance.
+ *
+ * @param[in]  desc         What the caller decides.
+ * @param[out] out_instance Receives the instance; NULL on failure.
+ *
+ * @retval SPUD_SUCCESS The instance was made.
+ * @retval SPUDRESULT_NULL_DESC `desc` is NULL.
+ * @retval SPUDRESULT_STRUCT_WRONG_TYPE `desc->base.type` is not
+ *         SPUD_STRUCT_TYPE_FILES_INSTANCE_DESC.
+ * @retval SPUDRESULT_STRUCT_UNKNOWN_IN_CHAIN `desc->base.next` is not NULL.
+ * @retval SPUDRESULT_NULL_OUTPUT_PARAMETER `out_instance` is NULL.
+ * @retval SPUDRESULT_NULL_ALLOCATOR `desc->allocator` is NULL.
+ * @retval SPUDRESULT_INVALID_ALLOCATOR `desc->allocator` lacks a function.
+ * @retval SPUDRESULT_OUT_OF_MEMORY The instance could not be allocated.
+ */
+SPUDRESULT sfs_instance_create(
+    const sfs_instance_desc *desc,
+    sfs_instance *out_instance);
+
+/**
+ * @brief Destroys an instance. Every file and mapping made from it must be
+ * closed and released first.
+ *
+ * @param[in] instance The instance to destroy. NULL does nothing.
+ */
+void sfs_instance_destroy(sfs_instance instance);
+
+/* ---- Opening ---- */
+
+/** @brief What a file is opened for. */
+typedef enum SFS_ACCESS {
+	/** Not a choice: refused, so a zeroed desc hasn't chosen. */
+	SFS_ACCESS_NONE       = 0,
+	SFS_ACCESS_READ       = 1, /**< Read and map only. */
+	SFS_ACCESS_WRITE      = 2, /**< Write and size only. */
+	SFS_ACCESS_READ_WRITE = 3, /**< Both. */
+} SFS_ACCESS;
+
+/** @brief What opening does with the file there, or with no file there:
+ * CreateFileW's dispositions, and POSIX's O_CREAT, O_EXCL and O_TRUNC. */
+typedef enum SFS_CREATE {
+	/** Not a choice: refused. */
+	SFS_CREATE_NONE           = 0,
+	/** Opens the file there; SPUDRESULT_SFS_NOT_FOUND if there is none. */
+	SFS_CREATE_OPEN_EXISTING  = 1,
+	/** Creates a new, empty file; SPUDRESULT_SFS_ALREADY_EXISTS if anything
+	 * is there already. One caller of two racing for the name wins. */
+	SFS_CREATE_NEW            = 2,
+	/** Opens the file there, or creates an empty one. */
+	SFS_CREATE_OPEN_OR_CREATE = 3,
+	/** Creates an empty file, or empties the one there. Needs write access. */
+	SFS_CREATE_TRUNCATE       = 4,
+} SFS_CREATE;
+
+/**
+ * @brief What others may do with a file while this handle has it open, as
+ * a set of bits.
+ *
+ * Windows enforces it (FILE_SHARE_*): an open, a rename over the file or a
+ * remove that it forbids is refused with SPUDRESULT_SFS_IN_USE, this
+ * process's and others'. POSIX has no share modes and enforces nothing. So
+ * the rule on every backend: a caller may be refused what another holder's
+ * share mode forbids, and must not rely on being refused.
+ */
+typedef uint32_t SFS_SHARE;
+/** @brief Bits of SFS_SHARE. */
 enum {
-	SFS_FILE_DIALOG_FLAG_NONE = 0x000,
-
-	/// Prevents the system from adding a link to the selected file in the file
-	/// system directory that contains the user's most recently used documents.
-	SFS_FILE_DIALOG_FLAG_DONT_ADD_TO_RECENT = 0x001,
-
-	/// Only existing files can be opened
-	SFS_FILE_DIALOG_FLAG_FILE_MUST_EXIST = 0x002,
-
-	/// Restores the current directory to its original value if the user changed
-	/// the directory while searching for files.
-	SFS_FILE_DIALOG_FLAG_NO_CHANGE_DIR = 0x004,
-
-	/// Causes the Save As dialog box to show a message box if the selected file
-	/// already exists.
-	SFS_FILE_DIALOG_FLAG_OVERWRITE_PROMPT = 0x008
+	SFS_SHARE_NONE   = 0x0, /**< Nobody else may open it. */
+	SFS_SHARE_READ   = 0x1, /**< Others may open it for reading. */
+	SFS_SHARE_WRITE  = 0x2, /**< Others may open it for writing. */
+	SFS_SHARE_DELETE = 0x4, /**< Others may remove it, or rename over it. */
 };
 
-typedef uint32_t SFS_FILE_DIALOG_TYPE;
-enum { SFS_FILE_DIALOG_TYPE_OPEN, SFS_FILE_DIALOG_TYPE_SAVE };
+/** @brief What the caller decides when opening a file. No field has a
+ * default. */
+typedef struct sfs_open_desc {
+	/** `type` is SPUD_STRUCT_TYPE_FILES_OPEN_DESC; `next` is NULL (nothing is
+	 * chained onto this struct yet). Set by the caller. See
+	 * SPUD_STRUCT_BASE. */
+	SPUD_STRUCT_BASE base;
+	/** The file. A directory, or anything but a file, is refused with
+	 * SPUDRESULT_SFS_NOT_A_FILE. */
+	const char *path;
+	SFS_ACCESS access; /**< What it is opened for. */
+	SFS_CREATE create; /**< What happens with the file there, or with none. */
+	SFS_SHARE share;   /**< What others may do while it is open. */
+	/** Name for debugging, or NULL. Copied; see spud_debug_name_set(). */
+	const char *debug_name;
+} sfs_open_desc;
 
-typedef struct SFS_FIND_FILE_DATA { // FindFileData
-	const char *name;
-	bool is_directory;
-} SFS_FIND_FILE_DATA;
+/**
+ * @brief Opens a file.
+ *
+ * @param[in]  instance The instance the file is made with.
+ * @param[in]  desc     What the caller decides.
+ * @param[out] out_file Receives the file; NULL on failure.
+ *
+ * @retval SPUD_SUCCESS The file is open.
+ * @retval SPUDRESULT_SFS_INVALID_INSTANCE `instance` is NULL.
+ * @retval SPUDRESULT_NULL_DESC `desc` is NULL.
+ * @retval SPUDRESULT_STRUCT_WRONG_TYPE `desc->base.type` is not
+ *         SPUD_STRUCT_TYPE_FILES_OPEN_DESC.
+ * @retval SPUDRESULT_STRUCT_UNKNOWN_IN_CHAIN `desc->base.next` is not NULL.
+ * @retval SPUDRESULT_NULL_OUTPUT_PARAMETER `out_file` is NULL.
+ * @retval SPUDRESULT_SFS_NULL_PATH `desc->path` is NULL or empty.
+ * @retval SPUDRESULT_DESC_INVALID_PARAMETERS `desc->access` or
+ *         `desc->create` is not one of its values, `desc->share` has a bit
+ *         that isn't, or `desc->create` is SFS_CREATE_TRUNCATE without write
+ *         access.
+ * @retval SPUDRESULT_SFS_NOT_FOUND No file is there (SFS_CREATE_OPEN_EXISTING),
+ *         or a directory on the way to it isn't.
+ * @retval SPUDRESULT_SFS_ALREADY_EXISTS Something is there (SFS_CREATE_NEW).
+ * @retval SPUDRESULT_SFS_NOT_A_FILE A directory, or another kind of entry, is
+ *         there.
+ * @retval SPUDRESULT_SFS_ACCESS_DENIED The platform won't open it for this
+ *         access.
+ * @retval SPUDRESULT_SFS_IN_USE Windows: another handle's share mode
+ *         forbids it.
+ * @retval SPUDRESULT_OUT_OF_MEMORY The file could not be allocated.
+ * @retval SPUDRESULT_API_SPECIFIC_FAILURE The platform refused for another
+ *         reason.
+ */
+SPUDRESULT sfs_file_open(
+    sfs_instance instance,
+    const sfs_open_desc *desc,
+    sfs_file *out_file);
 
-typedef struct SFS_FILE_DIALOG_ATTRIBUTES { // FileDialogAttribs
-	SFS_FILE_DIALOG_TYPE type;
-	SFS_FILE_DIALOG_FLAGS flags;
-	const char *title;
-	const char *filter;
-} SFS_FILE_DIALOG_ATTRIBUTES;
+/**
+ * @brief Closes a file. Mappings of it stay valid.
+ *
+ * @param[in] file The file to close. NULL does nothing.
+ */
+void sfs_file_close(sfs_file file);
 
-SFS_FILE_DIALOG_ATTRIBUTES
-sfs_default_file_dialog_attributes(SFS_FILE_DIALOG_TYPE type);
+/* ---- I/O at an offset ---- */
 
-typedef enum SFS_FILE_POS_ORIGIN { // FilePosOrigin
-	SFS_FILE_POS_ORIGIN_START,     // Start
-	SFS_FILE_POS_ORIGIN_CURRENT,   // Curr
-	SFS_FILE_POS_ORIGIN_END        // End
-} SFS_FILE_POS_ORIGIN;
+/**
+ * @brief Reads from a file at an offset: pread, or ReadFile at an
+ * OVERLAPPED offset.
+ *
+ * @param[in]  file     The file, opened with read access.
+ * @param[in]  offset   Where to start, in bytes from the file's start.
+ * @param[out] buffer   Receives what was read.
+ * @param[in]  size     How many bytes to read.
+ * @param[out] out_read Receives how many were read: `size`, unless the
+ *                      file ends first, then what there was (0 at or past
+ *                      its end).
+ *
+ * @retval SPUD_SUCCESS `*out_read` bytes were read.
+ * @retval SPUDRESULT_SFS_INVALID_FILE `file` is NULL.
+ * @retval SPUDRESULT_NULL_OUTPUT_PARAMETER `buffer` or `out_read` is NULL.
+ * @retval SPUDRESULT_SFS_NOT_READABLE `file` wasn't opened for reading.
+ * @retval SPUDRESULT_API_SPECIFIC_FAILURE The platform's read failed.
+ */
+SPUDRESULT sfs_file_read_at(
+    sfs_file file,
+    uint64_t offset,
+    void *buffer,
+    uint64_t size,
+    uint64_t *out_read);
 
-#define SFS_UNIX_SLASH '/'
-#define SFS_WINDOWS_SLASH '\\'
-#if SPUDLIB_PLATFORM_WIN32
-#define SFS_SLASH SFS_WINDOWS_SLASH
-#else
-#define SFS_SLASH SFS_UNIX_SLASH
-#endif
+/**
+ * @brief Writes to a file at an offset: pwrite, or WriteFile at an
+ * OVERLAPPED offset. Writing past the end grows the file; the bytes between
+ * its old end and `offset` read zero. Every byte is written, or the call
+ * fails.
+ *
+ * @param[in] file   The file, opened with write access.
+ * @param[in] offset Where to start, in bytes from the file's start.
+ * @param[in] data   What to write.
+ * @param[in] size   How many bytes. 0 writes nothing and succeeds.
+ *
+ * @retval SPUD_SUCCESS Every byte was written.
+ * @retval SPUDRESULT_SFS_INVALID_FILE `file` is NULL.
+ * @retval SPUDRESULT_NULL_DESC `data` is NULL and `size` isn't 0.
+ * @retval SPUDRESULT_SFS_NOT_WRITABLE `file` wasn't opened for writing.
+ * @retval SPUDRESULT_API_SPECIFIC_FAILURE The platform's write failed (a
+ *         full disk among them).
+ */
+SPUDRESULT sfs_file_write_at(
+    sfs_file file,
+    uint64_t offset,
+    const void *data,
+    uint64_t size);
 
-// SPUDRESULT sfs_file_read(sfs_file file, spudblob data);
-SPUDRESULT sfs_file_read(sfs_file file, void *data, uint64_t size);
-SPUDRESULT sfs_file_write(sfs_file file, const void *data, uint64_t size);
-SPUDRESULT sfs_file_get_size(sfs_file file, uint64_t *out_size);
-SPUDRESULT sfs_file_get_pos(sfs_file file, uint64_t *out_pos);
-SPUDRESULT
-sfs_file_set_pos(sfs_file file, uint64_t offset, SFS_FILE_POS_ORIGIN origin);
+/**
+ * @brief Reads a file's size.
+ *
+ * @param[in]  file     The file.
+ * @param[out] out_size Receives its size in bytes.
+ *
+ * @retval SPUD_SUCCESS `*out_size` was written.
+ * @retval SPUDRESULT_SFS_INVALID_FILE `file` is NULL.
+ * @retval SPUDRESULT_NULL_OUTPUT_PARAMETER `out_size` is NULL.
+ * @retval SPUDRESULT_API_SPECIFIC_FAILURE The platform couldn't say.
+ */
+SPUDRESULT sfs_file_get_size(
+    sfs_file file,
+    uint64_t *out_size);
 
-// How far sfs_file_flush() and sfs_file_replace() push data before
-// returning.
+/**
+ * @brief Sets a file's size: ftruncate, or SetFileInformationByHandle's
+ * end of file. Growing it adds bytes that read zero.
+ *
+ * @param[in] file The file, opened with write access.
+ * @param[in] size Its new size in bytes.
+ *
+ * @retval SPUD_SUCCESS The file is `size` bytes.
+ * @retval SPUDRESULT_SFS_INVALID_FILE `file` is NULL.
+ * @retval SPUDRESULT_SFS_NOT_WRITABLE `file` wasn't opened for writing.
+ * @retval SPUDRESULT_API_SPECIFIC_FAILURE The platform refused.
+ */
+SPUDRESULT sfs_file_set_size(
+    sfs_file file,
+    uint64_t size);
+
+/** @brief How far sfs_file_flush() and sfs_path_replace() push data before
+ * returning. */
 typedef enum SFS_FLUSH_LEVEL {
-	// Nothing is waited for (sfs_file_replace only).
+	/** Nothing is waited for (sfs_path_replace() only). */
 	SFS_FLUSH_LEVEL_NONE,
-	// Handed to the drive: fsync on Linux and Apple, FlushFileBuffers on
-	// Windows. On Apple, drives may still hold it in a volatile cache.
+	/** Handed to the drive: fsync on Linux and Apple, FlushFileBuffers on
+	 * Windows. On Apple, drives may still hold it in a volatile cache. */
 	SFS_FLUSH_LEVEL_DEVICE,
-	// On the storage media itself, past any drive cache: fcntl(F_FULLFSYNC)
-	// on Apple; the same calls as DEVICE on Linux and Windows, which already
-	// flush the drive cache there. Apple file systems that don't support
-	// F_FULLFSYNC (some network and FUSE volumes) fail with
-	// SPUDRESULT_SFS_FLUSH_LEVEL_NOT_SUPPORTED - fall back to DEVICE if that's
-	// acceptable.
+	/** On the storage media itself, past any drive cache: fcntl(F_FULLFSYNC)
+	 * on Apple; the same calls as DEVICE on Linux and Windows, which already
+	 * flush the drive cache there. Apple file systems that don't support
+	 * F_FULLFSYNC (some network and FUSE volumes) fail with
+	 * SPUDRESULT_SFS_FLUSH_LEVEL_NOT_SUPPORTED - fall back to DEVICE if
+	 * that's acceptable. */
 	SFS_FLUSH_LEVEL_MEDIA,
 } SFS_FLUSH_LEVEL;
 
-// Blocks until [file]'s written data and metadata reach [level] (DEVICE or
-// MEDIA).
-SPUDRESULT sfs_file_flush(sfs_file file, SFS_FLUSH_LEVEL level);
+/**
+ * @brief Blocks until a file's written data and metadata reach a level.
+ *
+ * @param[in] file  The file, opened with write access.
+ * @param[in] level SFS_FLUSH_LEVEL_DEVICE or SFS_FLUSH_LEVEL_MEDIA.
+ *
+ * @retval SPUD_SUCCESS The data reached `level`.
+ * @retval SPUDRESULT_SFS_INVALID_FILE `file` is NULL.
+ * @retval SPUDRESULT_DESC_INVALID_PARAMETERS `level` is neither.
+ * @retval SPUDRESULT_SFS_NOT_WRITABLE `file` wasn't opened for writing.
+ * @retval SPUDRESULT_SFS_FLUSH_LEVEL_NOT_SUPPORTED See SFS_FLUSH_LEVEL_MEDIA.
+ * @retval SPUDRESULT_API_SPECIFIC_FAILURE The platform's flush failed.
+ */
+SPUDRESULT sfs_file_flush(
+    sfs_file file,
+    SFS_FLUSH_LEVEL level);
 
-// Atomically replaces [target_path] with [source_path]: anyone opening
-// [target_path] sees its old contents or the new ones, never a mix, and
-// [source_path] no longer exists afterwards. [target_path] needn't exist.
-// Both must be on the same volume (SPUDRESULT_SFS_DIFFERENT_VOLUME) - write
-// the source beside the target. Only the name is replaced: flush the source
-// with sfs_file_flush() first, or a crash can leave the target named but
-// empty.
-// [level] is how far the rename itself is pushed before returning: an
-// fsync (F_FULLFSYNC for MEDIA on Apple) of the target's directory on
-// Linux and Apple, MOVEFILE_WRITE_THROUGH on Windows. With NONE the rename
-// is still atomic, but a power loss shortly after can undo it - the old
-// target reappearing. If the rename succeeds but that flush fails, the
-// target already names the new contents and the result is the flush's.
-// On Windows the replace fails with SPUDRESULT_SFS_IN_USE while the target
-// is open without FILE_SHARE_DELETE (sfs_file_open never shares delete) or
-// mapped (sfs_file_map), by this process or another - Windows reports that
-// as access denied, so a target that's simply read-only gets the same
-// result. POSIX allows it, and existing handles and mappings keep seeing
-// the old contents.
-SPUDRESULT sfs_file_replace(
-    const char *source_path, const char *target_path, SFS_FLUSH_LEVEL level);
+/* ---- Mapping ---- */
 
-// Removes the file at [file_path]: unlink on Linux and Apple, DeleteFileW on
-// Windows. SPUDRESULT_SFS_INVALID_FILE if there's no file there (or it's a
-// directory); on Windows, SPUDRESULT_SFS_IN_USE while it's open or mapped.
-SPUDRESULT sfs_file_remove(const char *file_path);
-
-// Maps [size] bytes of [file] from [offset] into memory, read-only. Pages
-// are read from disk as they're first touched and can be dropped again
-// under memory pressure. Any offset works (the alignment the platform
-// needs is handled here). [file] must have been opened with read access
-// (SPUDRESULT_SFS_NOT_READABLE), and the range must lie inside the file
-// (SPUDRESULT_INDEX_OUT_OF_RANGE; SPUDRESULT_ZERO_SIZE for size 0).
-// The mapping holds what it needs on its own: [file] may be released
-// before it. Shrinking the file while it's mapped makes touching the cut
-// pages fault (SIGBUS / EXCEPTION_IN_PAGE_ERROR) - don't map files
-// something else may truncate.
+/**
+ * @brief Maps part of a file into memory, read-only. Pages are read from
+ * disk as they're first touched and can be dropped again under memory
+ * pressure. Any offset works: the alignment the platform needs is handled
+ * here. The mapping holds what it needs on its own, so the file may be
+ * closed first. Shrinking the file while it's mapped makes touching the
+ * cut pages fault (SIGBUS / EXCEPTION_IN_PAGE_ERROR): don't map a file
+ * something else may truncate.
+ *
+ * @param[in]  file        The file, opened with read access.
+ * @param[in]  offset      The first byte to map.
+ * @param[in]  size        How many bytes; the range lies inside the file.
+ * @param[out] out_mapping Receives the mapping; NULL on failure.
+ *
+ * @retval SPUD_SUCCESS The range is mapped.
+ * @retval SPUDRESULT_NULL_OUTPUT_PARAMETER `out_mapping` is NULL.
+ * @retval SPUDRESULT_SFS_INVALID_FILE `file` is NULL.
+ * @retval SPUDRESULT_ZERO_SIZE `size` is 0.
+ * @retval SPUDRESULT_SFS_NOT_READABLE `file` wasn't opened for reading.
+ * @retval SPUDRESULT_INDEX_OUT_OF_RANGE The range goes past the file's end.
+ * @retval SPUDRESULT_OUT_OF_MEMORY No address space or memory for it.
+ * @retval SPUDRESULT_API_SPECIFIC_FAILURE The platform refused.
+ */
 SPUDRESULT sfs_file_map(
-    sfs_file file, uint64_t offset, uint64_t size, sfs_mapping *out_mapping);
-// The first mapped byte - the file's byte at the mapping's [offset].
-// NULL for a NULL mapping.
+    sfs_file file,
+    uint64_t offset,
+    uint64_t size,
+    sfs_mapping *out_mapping);
+
+/** @brief The first mapped byte: the file's byte at the mapping's offset.
+ * NULL for a NULL mapping. */
 const void *sfs_mapping_get_data(sfs_mapping mapping);
+/** @brief How many bytes are mapped. 0 for a NULL mapping. */
 uint64_t sfs_mapping_get_size(sfs_mapping mapping);
-SPUDRESULT sfs_mapping_release(sfs_mapping mapping);
+/** @brief Unmaps a mapping. NULL does nothing. */
+void sfs_mapping_release(sfs_mapping mapping);
 
-SPUDRESULT sfs_create_directory(const char *path);
+/* ---- Paths ---- */
 
-SPUDRESULT
-sfs_file_open(SFS_FILE_OPEN_ATTRIBUTES open_attribs, sfs_file *out_file);
-SPUDRESULT sfs_file_release(sfs_file file);
-bool sfs_file_exists(const char *file_path);
-bool sfs_directory_exists(const char *dir_path);
-SPUDRESULT sfs_set_working_directory(const char *dir);
-const char *sfs_get_working_directory();
-bool sfs_is_slash(char c);
-bool sfs_correct_slashes(char **in_out_path, char slash);
-bool sfs_get_path_components(
-    const char *path, const char **out_directory, const char **out_filename);
-bool sfs_is_absolute(const char *path);
-bool sfs_split_path(
-    const char *in_path,
-    bool simplify,
-    const char **out_paths,
-    uint32_t *out_path_count);
-bool sfs_build_path_from_components(const char **in_components, char slash);\
-const char *sfs_simplify_path(const char *path, char slash);
-const char *sfs_get_relative_path(
-    const char *path_from,
-    bool is_from_directory,
-    const char *path_to,
-    bool is_to_directory,
-    char slash);
-const char *sfs_file_dialog_multi_path(
-    const char *path1,
-    const char *path2,
-    uint32_t prefix1_length,
-    uint32_t prefix2_length);
-const char *sfs_file_dialog(SFS_FILE_DIALOG_ATTRIBUTES attributes);
-const char *sfs_open_folder_dialog(const char *title);
+/** @brief What is at a path. */
+typedef enum SFS_PATH_KIND {
+	SFS_PATH_KIND_FILE      = 1, /**< A file. */
+	SFS_PATH_KIND_DIRECTORY = 2, /**< A directory. */
+	SFS_PATH_KIND_OTHER     = 3, /**< A device, socket, pipe or the like. */
+} SFS_PATH_KIND;
+
+/** @brief What sfs_path_get_info() reports. A symbolic link is followed:
+ * this is what it leads to. */
+typedef struct SFS_PATH_INFO {
+	/** `type` is SPUD_STRUCT_TYPE_FILES_PATH_INFO; `next` is NULL (nothing
+	 * is chained onto this struct yet). The caller sets the type; SpudFiles
+	 * fills in the rest. See SPUD_STRUCT_BASE. */
+	SPUD_STRUCT_BASE_OUT base;
+	SFS_PATH_KIND kind;  /**< What it is. */
+	uint64_t size;       /**< Its size in bytes, for a file; 0 otherwise. */
+	/** When its contents last changed, in nanoseconds since 1970-01-01 UTC,
+	 * to the resolution the file system keeps. */
+	int64_t modified_ns;
+} SFS_PATH_INFO;
+
+/**
+ * @brief Reports what is at a path: stat, or GetFileAttributesExW.
+ *
+ * @param[in]  instance The instance.
+ * @param[in]  path     The path.
+ * @param[out] out_info Receives what is there.
+ *
+ * @retval SPUD_SUCCESS Something is there; `*out_info` says what.
+ * @retval SPUDRESULT_SFS_INVALID_INSTANCE `instance` is NULL.
+ * @retval SPUDRESULT_SFS_NULL_PATH `path` is NULL or empty.
+ * @retval SPUDRESULT_NULL_OUTPUT_PARAMETER `out_info` is NULL.
+ * @retval SPUDRESULT_STRUCT_WRONG_TYPE `out_info->base.type` is not
+ *         SPUD_STRUCT_TYPE_FILES_PATH_INFO.
+ * @retval SPUDRESULT_STRUCT_UNKNOWN_IN_CHAIN `out_info->base.next` is not NULL.
+ * @retval SPUDRESULT_SFS_NOT_FOUND Nothing is there. This is an answer, not
+ *         a failure.
+ * @retval SPUDRESULT_SFS_ACCESS_DENIED A directory on the way can't be read.
+ * @retval SPUDRESULT_API_SPECIFIC_FAILURE The platform couldn't say.
+ */
+SPUDRESULT sfs_path_get_info(
+    sfs_instance instance,
+    const char *path,
+    SFS_PATH_INFO *out_info);
+
+/**
+ * @brief Atomically replaces `target` with `source`: anyone opening `target`
+ * sees its old contents or the new ones, never a mix, and `source` no longer
+ * exists afterwards. `target` needn't exist.
+ *
+ * Both must be on the same volume (SPUDRESULT_SFS_DIFFERENT_VOLUME): write
+ * the source beside the target. Only the name is replaced: flush the source
+ * with sfs_file_flush() first, or a crash can leave the target named but
+ * empty. `level` is how far the rename itself is pushed before returning:
+ * an fsync (F_FULLFSYNC for MEDIA on Apple) of the target's directory on
+ * Linux and Apple, MOVEFILE_WRITE_THROUGH on Windows. With NONE the rename
+ * is still atomic, but a power loss shortly after can undo it. If the rename
+ * succeeds but that flush fails, the target already names the new contents
+ * and the result is the flush's. On Windows the replace fails with
+ * SPUDRESULT_SFS_IN_USE while the target is open without SFS_SHARE_DELETE,
+ * or mapped, by this process or another, or read-only. POSIX allows it, and
+ * existing handles and mappings keep seeing the old contents.
+ *
+ * @param[in] instance The instance.
+ * @param[in] source   The file that takes the target's name.
+ * @param[in] target   The name it takes.
+ * @param[in] level    How far the rename is pushed.
+ *
+ * @retval SPUD_SUCCESS `target` names what `source` did.
+ * @retval SPUDRESULT_SFS_INVALID_INSTANCE `instance` is NULL.
+ * @retval SPUDRESULT_SFS_NULL_PATH `source` or `target` is NULL or empty.
+ * @retval SPUDRESULT_DESC_INVALID_PARAMETERS `level` isn't an SFS_FLUSH_LEVEL.
+ * @retval SPUDRESULT_SFS_NOT_FOUND There is no `source`.
+ * @retval SPUDRESULT_SFS_DIFFERENT_VOLUME They're on different volumes.
+ * @retval SPUDRESULT_SFS_IN_USE Windows: see above.
+ * @retval SPUDRESULT_SFS_FLUSH_LEVEL_NOT_SUPPORTED See SFS_FLUSH_LEVEL_MEDIA.
+ * @retval SPUDRESULT_API_SPECIFIC_FAILURE The platform refused.
+ */
+SPUDRESULT sfs_path_replace(
+    sfs_instance instance,
+    const char *source,
+    const char *target,
+    SFS_FLUSH_LEVEL level);
+
+/**
+ * @brief Removes a file: unlink, or DeleteFileW.
+ *
+ * @param[in] instance The instance.
+ * @param[in] path     The file.
+ *
+ * @retval SPUD_SUCCESS It is gone.
+ * @retval SPUDRESULT_SFS_INVALID_INSTANCE `instance` is NULL.
+ * @retval SPUDRESULT_SFS_NULL_PATH `path` is NULL or empty.
+ * @retval SPUDRESULT_SFS_NOT_FOUND Nothing is there.
+ * @retval SPUDRESULT_SFS_NOT_A_FILE A directory is there.
+ * @retval SPUDRESULT_SFS_IN_USE Windows: it is open without
+ *         SFS_SHARE_DELETE, mapped or read-only.
+ * @retval SPUDRESULT_SFS_ACCESS_DENIED POSIX: its directory can't be written.
+ * @retval SPUDRESULT_API_SPECIFIC_FAILURE The platform refused.
+ */
+SPUDRESULT sfs_path_remove(
+    sfs_instance instance,
+    const char *path);
+
+/**
+ * @brief Makes one directory: mkdir, or CreateDirectoryW. Its parent must
+ * exist; making the directories on the way is the caller's.
+ *
+ * @param[in] instance The instance.
+ * @param[in] path     The directory to make.
+ *
+ * @retval SPUD_SUCCESS It was made.
+ * @retval SPUDRESULT_SFS_INVALID_INSTANCE `instance` is NULL.
+ * @retval SPUDRESULT_SFS_NULL_PATH `path` is NULL or empty.
+ * @retval SPUDRESULT_SFS_NOT_FOUND Its parent isn't there.
+ * @retval SPUDRESULT_SFS_ALREADY_EXISTS Something is there already (a
+ *         directory or anything else; sfs_path_get_info() says which).
+ * @retval SPUDRESULT_SFS_ACCESS_DENIED Its parent can't be written.
+ * @retval SPUDRESULT_API_SPECIFIC_FAILURE The platform refused.
+ */
+SPUDRESULT sfs_directory_create(
+    sfs_instance instance,
+    const char *path);
 
 #ifdef __cplusplus
 }

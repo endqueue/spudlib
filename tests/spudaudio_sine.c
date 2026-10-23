@@ -522,6 +522,7 @@ int main(
 		print_format(&desc.format);
 		printf(", period %u, buffer %u -> ", desc.period_frames, desc.buffer_frames);
 		memset(&config, 0, sizeof(config));
+		config.base.type = SPUD_STRUCT_TYPE_AUDIO_STREAM_CONFIG;
 		r = spudaudio_probe_stream(&desc, &config);
 		printf("%s\n", spudresult_str(r));
 		if (r == SPUD_SUCCESS) {

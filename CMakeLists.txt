@@ -74,7 +74,9 @@ if(NOT TARGET spudlib)
         src/input/spudinputshared.h
         src/spudcore.c
         src/spudmemory.c
+        src/memory/spudmemoryshared.h
         src/spudfiles.c
+        src/files/spudfilesshared.h
         src/spudperf.c
         src/spudnet.c
         src/net/spudnethttp.c
@@ -96,10 +98,10 @@ if(NOT TARGET spudlib)
     endif()
     if(UNIX AND NOT APPLE)
         list(APPEND SPUDLIB_SOURCES
-            src/files/backends/linux/spudfileslinux.c
+            src/files/backends/posix/spudfilesposix.c
             src/net/backends/posix/spudnetsockets.c
             src/net/backends/linux/spudnetcurl.c
-            src/memory/backends/linux/spudmemorylinux.c
+            src/memory/backends/posix/spudmemoryposix.c
         )
     endif()
     if(APPLE)
@@ -107,7 +109,8 @@ if(NOT TARGET spudlib)
         # every graphics backend. Must enable OBJC before add_library() below.
         enable_language(OBJC)
         list(APPEND SPUDLIB_SOURCES
-            src/files/backends/apple/spudfilesapple.c
+            src/files/backends/posix/spudfilesposix.c
+            src/memory/backends/posix/spudmemoryposix.c
             src/net/backends/posix/spudnetsockets.c
             src/net/backends/apple/spudneturlsession.m
         )
@@ -567,6 +570,26 @@ if(NOT TARGET spudlib)
         add_test(NAME spudgpu_device_test COMMAND spudgpu_device_test)
         set_tests_properties(spudgpu_device_test PROPERTIES SKIP_RETURN_CODE 77)
 
+        # SpudGPU calls nothing else in the workspace makes (formats by name,
+        # a CPU-signalled fence, semaphores, buffer, view and heap descs, a
+        # pool reset). Needs a GPU, no window; 77, skipped, with no adapter.
+        add_executable(spudgpu_objects_test tests/spudgpu_objects_test.c)
+        target_link_libraries(spudgpu_objects_test PRIVATE spudlib)
+        add_test(NAME spudgpu_objects_test COMMAND spudgpu_objects_test)
+        set_tests_properties(spudgpu_objects_test PROPERTIES SKIP_RETURN_CODE 77)
+
+        # SpudFiles' file calls, in a temporary directory. Needs nothing
+        # else, so a ctest; exits 77, skipped, with no temporary directory.
+        add_executable(spudfiles_test tests/spudfiles_test.c)
+        target_link_libraries(spudfiles_test PRIVATE spudlib)
+        add_test(NAME spudfiles_test COMMAND spudfiles_test)
+        set_tests_properties(spudfiles_test PROPERTIES SKIP_RETURN_CODE 77)
+
+        # SpudMemory's virtual memory calls. Needs nothing, so a ctest.
+        add_executable(spudmemory_test tests/spudmemory_test.c)
+        target_link_libraries(spudmemory_test PRIVATE spudlib)
+        add_test(NAME spudmemory_test COMMAND spudmemory_test)
+
         add_executable(spudperf_test tests/spudperf_test.c)
         target_link_libraries(spudperf_test PRIVATE spudlib)
         add_test(NAME spudperf_test COMMAND spudperf_test)
@@ -581,6 +604,13 @@ if(NOT TARGET spudlib)
             target_link_libraries(spudinput_test PRIVATE "-framework CoreFoundation")
         endif()
         add_test(NAME spudinput_test COMMAND spudinput_test)
+
+        # SpudAudio's calls, with nothing started and nothing heard: passes
+        # with no device, so a ctest. spudaudio_sine below is the one that
+        # plays.
+        add_executable(spudaudio_test tests/spudaudio_test.c)
+        target_link_libraries(spudaudio_test PRIVATE spudlib)
+        add_test(NAME spudaudio_test COMMAND spudaudio_test)
 
         add_executable(spudaudio_sine tests/spudaudio_sine.c)
         target_link_libraries(spudaudio_sine PRIVATE spudlib)

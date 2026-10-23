@@ -25,17 +25,18 @@ Every module reports errors through the shared `SPUDRESULT` enum
 | Module | Header | Prefix | Backends |
 |---|---|---|---|
 | SpudGPU | `spudgpu.h` | `spudgpu_` | Vulkan, D3D12, Metal |
-| SpudFiles | `spudfiles.h` | `sfs_` | Windows only |
-| SpudMemory | `spudmemory.h` | `smem_` | Windows, Linux |
-| SpudNet | `spudnet.h` | `spudnet_` | Windows, Linux |
+| SpudFiles | `spudfiles.h` | `sfs_` | Windows, Linux, macOS |
+| SpudMemory | `spudmemory.h` | `smem_` | Windows, POSIX (Linux + Apple, one file) |
+| SpudNet | `spudnet.h` | `spudnet_` | TCP sockets: Winsock2, BSD sockets (Linux + Apple, one file). HTTP + WebSocket: WinHTTP, libcurl, NSURLSession |
+| SpudAudio | `spudaudio.h` | `spudaudio_` / `SPUDRESULT_SAUD_*` | WASAPI (Windows), ALSA (Linux), CoreAudio (macOS); an argument-checking stub where no API is compiled in (iOS, watchOS) |
+| SpudInput | `spudinput.h` | `spudinput_` / `SPUDRESULT_SPUDINPUT_*` | GameController (macOS, iOS, iPadOS), evdev (Linux), GameInput (Windows). Not written: XInput (Windows); with no API built in, no instance can be made |
 | SpudCore | `spudcore.h` | `spud_` / `SPUDRESULT` | platform-agnostic |
-| SpudPerf | `spudperf.h` | `spudperf_` | Windows, Linux |
+| SpudPerf | `spudperf.h` | `spudperf_` | Windows, Linux, Apple |
 
-SpudGPU is the largest module by far (92 functions across 20 opaque handles).
+SpudGPU is the largest module by far (133 functions across 24 opaque handles).
 The rest are small, focused translation shims by design — e.g. SpudNet moves
 bytes, it doesn't do message framing or host authority; SpudMemory is
-reserve/commit/decommit plus an arena allocator, not a general allocator
-library.
+reserve/commit/decommit/release of whole pages, not an allocator.
 
 ## Backend status
 
@@ -58,18 +59,17 @@ cmake --preset <preset-name>
 cmake --build --preset <preset-name>
 ```
 
-> **Note:** `CMakePresets.json` currently has an unresolved merge conflict
-> in the tracked file — resolve that before relying on the presets above.
-
 ## Known gaps
 
-- No automated test suite/CTest target — verification has been manual
-  smoke-testing.
-- Metal backend is incomplete, untested.
+- Eight CTest targets: `spudcore_test`, `spudgpu_device_test`, `spudgpu_objects_test`, `spudfiles_test`,
+  `spudmemory_test`, `spudaudio_test`, `spudperf_test` and `spudinput_test`. The rest of SpudGPU
+  is verified by running the `spudgpusamples` samples; see `CLAUDE.md`'s
+  "Known gaps" for what each test covers and what has run where.
 
 ## Contributing
 
 See [`CLAUDE.md`](CLAUDE.md) for the design rules and conventions this repo
-follows (the zero-policy principle, `SPUDGPU_EXT_*`/`SPUDGPU_LEGACY_*` gating,
+follows (the zero-policy principle, `SPUDGPU_EXT_*` gating, with `SPUDGPU_LEGACY_*`
+designed but not built,
 backend file layout, etc.) before making structural changes. Run
 `.clang-format` before committing.

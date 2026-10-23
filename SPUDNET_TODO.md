@@ -32,7 +32,7 @@ row** (238 before; the new ones are the "instance" part and the wait set's
 wake). Linux and Windows: built and passing on 2026-10-14 (see "State of the
 code").
 
-Why: a library above SpudNet (ApSync) could not make a once-per-process call
+Why: a library above SpudNet (a caller) could not make a once-per-process call
 that has to come before the process's other threads, so the rule travelled up
 through every layer to the host. An instance is each caller's own.
 
@@ -136,11 +136,8 @@ To confirm on a machine:
   <path to spudnet_test> [part]`. The C side builds on all three. The runner
   is a shell script, which on Windows runs from Git Bash with a Windows
   Python 3 and Git's own `openssl`.
-- **Only caller:** ApricotFields' ApSync (TCP, the resolver and the wait set),
-  rewritten on 2026-10-08 as a session, channel and snapshot layer that no
-  longer touches Aprend. It is back in ApricotFields' build and has not been
-  compiled. What it leans on in SpudNet, and what it is waiting for from this
-  list, is in `ApricotFields/APSYNC_TODO.md`.
+- **Callers:** every part of SpudNet (TCP, the resolver, the wait set, HTTP
+  and WebSocket) has a caller outside this repo (2026-10-22).
 
 
 ## First run on macOS (2026-10-08)
@@ -261,13 +258,23 @@ no router, DNS server, firewall or proxy in the way. What that leaves untried:
 
 How each could be covered:
 
-- **Small, and worth doing next:** a second test, opt-in because it needs the
-  internet, that makes one HTTPS request and one `wss://` connection to a
-  public server with a zeroed TLS desc. Real DNS and a real certificate chain
-  in a few lines.
-- **The silent host:** connect, by TCP and by HTTP, to an address that routes
-  and never answers (there are addresses reserved for the purpose). That is
-  the test for the two time-out results.
+- **Done on macOS, 2026-10-22: `spudnet_test`'s `internet` part**, opt-in
+  (run only by name: `tests/run_spudnet_test.sh <exe> internet`), 22
+  checks, passing plain and under ASan and TSan. With zeroed TLS and proxy
+  descs: `example.com` looked up through a DNS server (two addresses);
+  `https://example.com/` (a public authority's chain, through
+  intermediates, against the system's trust store: 200 and its page);
+  badssl.com's expired, self-signed, wrong-host and untrusted-root
+  certificates each refused with `SPUDRESULT_SPUDNET_TLS_FAILED`
+  (NSURLSession's -1202 for all four); `http://github.com/` followed to
+  `https://` (200); `wss://echo.websocket.org/` connected, a text message
+  echoed after the server's greeting, closed with 1000; and a TCP connect
+  and an HTTP GET to 10.255.255.1, which routes and never answers, each
+  ending with `SPUDRESULT_SPUDNET_TIMED_OUT` at the caller's 2 s (2002 and
+  2001 ms). Not run on Windows or Linux.
+- **The silent host, still open:** `SPUDRESULT_SPUDNET_SYSTEM_TIMED_OUT` and
+  `SPUDRESULT_SPUDNET_STACK_TIMED_OUT` need a wait longer than the system's
+  own limit (75 s for a TCP connect on macOS), so they are still unseen.
 - **The real target:** the same calls against the Supabase project.
 - **By hand, once a host app exists to try them in:** a proxy that wants a
   login, the network changing, sleep.
@@ -493,8 +500,8 @@ was done and what it leans on that only a build and a real server can settle.
 ### TCP and the build
 
 - **`reuse_address` is gone.** The BSD-sockets backend sets `SO_REUSEADDR`
-  always; the Winsock one never did and still doesn't. ApSync no longer sets
-  the field. To confirm on a machine: that Windows refuses a
+  always; the Winsock one never did and still doesn't. No caller sets
+  the field now. To confirm on a machine: that Windows refuses a
   particular-address listener on a port a wildcard listener holds (read from
   Microsoft's table, not tried), and that macOS allows it. Not done, a
   separate decision: `SO_EXCLUSIVEADDRUSE` on Windows.
@@ -509,7 +516,7 @@ was done and what it leans on that only a build and a real server can settle.
 
 - A caller that wants a small response body as one block (the JSON case) has
   to loop on `spudnet_http_transfer_recv` itself. That loop belongs above
-  SpudLib, in ApricotFields, and isn't written.
+  SpudLib, in a caller, and isn't written.
 
 ## Response decoding: the caller can decline it, nothing confirmed
 
@@ -580,8 +587,8 @@ any way to read back the certificate a server presented.
 supplies, and `spudnet_resolver_wait` waits for the answer with a time limit and
 an abort on another. SpudNet starts no thread; the header's new "Threads"
 section says so for the whole module. Implemented in both TCP backend files.
-ApSync uses it as meant: a thread that only runs the lookup, and a wait with a
-time limit on the session's own. Not compiled, not run.
+A caller uses it as meant: a thread that only runs the lookup, and a wait with a
+time limit on the caller's own.
 
 - **Run once, destroy once, in either order.** The resolver is held twice from
   creation and freed when both have happened. A resolver that is created and
@@ -649,7 +656,7 @@ compiled, not run.
   time. The header says to ask only while there are bytes that wouldn't send.
 - **`spudnet_wait_set_wake` (2026-10-08)** ends one wait and leaves the set
   usable, which an abort can't: for the thread that waits on a set and is also
-  handed work by other threads. It was added for ApSync, whose thread waits on
+  handed work by other threads. It was added for a caller whose thread waits on
   every connection and has to be told when the caller queues something to send.
   It reuses the wake socket and a flag of its own beside `aborted`. A check for
   it is in `tests/spudnet_test.c` ("Wait set"), and passes on macOS: a wake made
@@ -729,7 +736,7 @@ SpudLib's rule is that it never decides on the caller's behalf. These do:
   so at first, on the argument that an instance handle would be ceremony over
   state that is the platform's and process-wide whatever is passed round. That
   held while SpudNet had one caller. It was reversed later the same day, once
-  ApSync was a second caller inside a library: see "The header is ahead of the
+  a second caller inside a library came: see "The header is ahead of the
   backends: instances" at the top. Still to confirm when Linux first runs: that
   the libcurl in use counts its global init as its documentation says, which
   several instances now rely on.
@@ -762,9 +769,10 @@ SpudLib's rule is that it never decides on the caller's behalf. These do:
 0. Compiled on macOS (2026-10-08), Linux and Windows with MSVC (2026-10-14).
 1. The test program passes on macOS (2026-10-08; see "First run on macOS"),
    Linux and Windows (2026-10-14; see "First run on Windows").
-   Next: off the loopback interface, which is all any run touched: an
-   opt-in test against a public HTTPS and `wss://` server, and one against a
-   host that never answers. See "Not covered by the run".
+   Off the loopback interface: the opt-in `internet` part, a public HTTPS
+   and `wss://` server and a host that never answers, passes on macOS
+   (2026-10-22). Next: the same on Windows and Linux. See "Not covered by
+   the run".
 2. Print each object's `_get_error` from that test program wherever a call
    fails, and check the numbers are the ones the platform documents - the
    assumed `EMSGSIZE` for an oversize WebSocket message on Apple among them.

@@ -3,22 +3,20 @@
 Written on 2026-10-21; the header section agreed and implemented the same
 day, in `spudgpu.h` and all three backends.
 
-**State (2026-10-21):**
+**State (2026-10-22):**
 
 - Metal: built on macOS (Apple M5 Pro), Debug and Release.
   `tests/spudgpu_device_test` (new) passes, plain and under the `-asan` and
   `-tsan` presets; the seven samples the Metal build has ran 120 frames each
-  in a Debug build, with the live-object check on.
-- D3D12: syntax-checked with mingw-w64 GCC against DirectX-Headers 1.616,
-  Debug and Release, every file clean but for mingw's own ABI difference
-  in the `GetDesc`-style getters. Not compiled by MSVC, not run.
-- Vulkan: syntax-checked with mingw-w64 GCC against the Khronos headers, as
-  a Windows build, Debug and Release, clean. Not compiled on Linux, not run.
-- The samples: all nine syntax-checked as a Vulkan build;
-  SpudGPUBundles and SpudGPUDynamicIndexing (not in the Metal build) not
-  otherwise compiled.
-- Every other caller (`../SPUDGPU_DEVICE_MIGRATION.md`) is not converted
-  yet, and does not build against this `spudgpu.h`.
+  in a Debug build, with the live-object check on (2026-10-21).
+- D3D12 and Vulkan: run on Windows on 2026-10-22. Every SpudGPU sample ran
+  on D3D12 (both devices and WARP) and on Vulkan (both devices), under
+  validation. That found two Vulkan bugs, fixed in `c3cf5f7`: an image
+  barrier out of `UNDEFINED` or `PRESENT_SRC` started at the top or bottom
+  of the pipe, not chained to the acquire semaphore's wait; and
+  `drawIndirectFirstInstance` was never enabled, now
+  `SPUDGPU_FEATURE_DRAW_INDIRECT_FIRST_INSTANCE`.
+- Every caller is converted (`../SPUDGPU_DEVICE_MIGRATION.md`, 2026-10-22).
 
 The rest of this file is the design as agreed, kept as the record of why.
 
@@ -741,7 +739,7 @@ SPUDRESULT spudgpu_get_command_queue(
 | `spudgpu_get_depth_bounds_capabilities`, `spudgpu_depth_bounds_capabilities` | `SPUDGPU_FEATURE_DEPTH_BOUNDS_TEST` |
 | `spudgpu_get_graphics_queue` | `spudgpu_get_command_queue(device, SPUDGPU_COMMAND_LIST_TYPE_DIRECT, 0, &queue)` |
 | `spudgpu_get_max_queue_count` | the count the device was created with |
-| `spudgpu_get_vk_physical_device(device)` | `spudgpu_get_vk_physical_device(adapter)`; D3D12 gains `spudgpu_get_dxgi_adapter(adapter)`, Metal `spudgpu_get_metal_device(adapter)` |
+| `spudgpu_get_vk_physical_device(device)` | `spudgpu_get_vk_physical_device(adapter)`; D3D12 gains `spudgpu_get_dxgi_adapter(adapter)`, Metal `spudgpu_get_mtl_adapter_device(adapter)` |
 
 ### Build, GPU, device: EXT macros, feature bits and properties
 
@@ -980,9 +978,8 @@ touches the frame loop of every caller.
 
 ## Open questions
 
-- **`spudgpu_get_graphics_queue`.** Sixteen caller files use it. Removing it
-  is the consistent answer (it is `(DIRECT, 0)`), but it could stay as a
-  one-line wrapper for one release.
+- **`spudgpu_get_graphics_queue`.** Decided: removed. It was
+  `(DIRECT, 0)`; the callers ask `spudgpu_get_command_queue` for that.
 - **A migration shim.** A `spudgpu_enumerate_devices` kept for a while, that
   creates a device on adapter 0 with every supported feature, would let the
   callers move one at a time. Proposed: no shim; change the callers in the

@@ -6,9 +6,9 @@ not a GPU library with utilities bolted on. See `../CLAUDE.md` (the `eqdev` work
 root) for how this repo fits into the workspace; this file covers
 conventions specific to working inside `spudlib` itself. `MATURITY_TODO.md`
 is the plan for bringing the parts written before these rules up to them
-(a version, result names, the caller's allocator (done, but for SpudFiles)
-and a stability policy for every module; a rework of SpudFiles; `bindings/` is removed and
-SpudInput's struct bases are in).
+(a version, result names, the caller's allocator (done) and a stability
+policy for every module; a rework of SpudFiles (done 2026-10-22); `bindings/`
+is removed and SpudInput's struct bases are in).
 
 ## The one rule everything else follows
 
@@ -34,21 +34,21 @@ behalf, never has a default that hides a choice, and holds no global state.
 
 ## Module map
 
-Every module returns the shared `SPUDRESULT` enum (`spudcore.h`, ~90 named error
-codes) rather than inventing its own error convention.
+Every module returns the shared `SPUDRESULT` enum (`spudcore.h`, 157 values with
+`SPUD_SUCCESS`, as of 2026-10-22) rather than inventing its own error convention.
 
 | Module | Header | Prefix | Backends |
 |---|---|---|---|
 | SpudGPU | `spudgpu.h` | `spudgpu_` | Vulkan, D3D12, Metal |
 | SpudFiles | `spudfiles.h` | `sfs_` | Windows, Linux, macOS |
-| SpudMemory | `spudmemory.h` | `smem_` | Windows, Linux |
+| SpudMemory | `spudmemory.h` | `smem_` | Windows, POSIX (Linux + Apple, one file) |
 | SpudNet | `spudnet.h` | `spudnet_` | TCP sockets: Winsock2, BSD sockets (Linux + Apple, one file). HTTP + WebSocket: WinHTTP, libcurl, NSURLSession |
 | SpudAudio | `spudaudio.h` | `spudaudio_` / `SPUDRESULT_SAUD_*` | WASAPI (Windows), ALSA (Linux), CoreAudio (macOS); an argument-checking stub where no API is compiled in (iOS, watchOS) |
 | SpudInput | `spudinput.h` | `spudinput_` / `SPUDRESULT_SPUDINPUT_*` | GameController (macOS, iOS, iPadOS), evdev (Linux), GameInput (Windows). Not written: XInput (Windows); with no API built in, no instance can be made |
 | SpudCore | `spudcore.h` | `spud_` / `SPUDRESULT` | platform-agnostic |
 | SpudPerf | `spudperf.h` | `spudperf_` | Windows, Linux, Apple |
 
-SpudGPU dominates the codebase (99 functions across 21 opaque handles) and is where
+SpudGPU dominates the codebase (133 functions across 24 opaque handles) and is where
 most work happens. The others are small, focused translation shims — don't let their
 API surface grow beyond what they are: SpudNet is "move bytes," not a networking
 framework (message framing, snapshot/delta semantics, host authority are all
@@ -89,7 +89,15 @@ functions of `src/net/spudnetshared.h`; a new rule about a transfer goes in the
 front end, not in three backends. Parts a platform doesn't allow are compiled
 out by `SPUDNET_EXT_TCP` / `SPUDNET_EXT_WEBSOCKET` (both 0 on watchOS) - test
 those, never a platform's name. SpudMemory is
-reserve/commit/decommit + an arena allocator, not a general allocator library.
+the platform's virtual memory a page at a time (reserve, commit, decommit,
+release), not an allocator: the arena it had decided alignment, growth and
+zeroing for its caller and went on 2026-10-22 (`MATURITY_TODO.md`, item 3).
+Nothing is rounded - a size or address that isn't a page multiple is
+refused - and a committed page reads zero on every backend, after a decommit
+too (POSIX decommits by mapping fresh pages over the range, since Apple's
+`MADV_DONTNEED` keeps contents). The checks are in the front end,
+`src/spudmemory.c`, and each backend only implements
+`src/memory/spudmemoryshared.h`.
 SpudAudio is "move PCM frames to and from an endpoint," not an audio engine: no
 mixer, decoder, resampler, voices, spatialisation or volume policy (those are
 the caller's). It never picks a device - the OS defaults
@@ -178,7 +186,12 @@ GameInput and evdev builds were not run.
     `SPUDGPU_EXT_<NAME>` with a `SPUDRESULT_GPU_EXT_<NAME>_NOT_SUPPORTED` in
     `spudcore.h`, returned when the backend compiles the extension in but the
     specific device/driver still doesn't support it — a distinct, later-discovered
-    case from the macro itself being `0`. Ray tracing and
+    case from the macro itself being `0`. Two exceptions:
+    `SPUDRESULT_GPU_EXT_DEPTH_BOUNDS_TEST_NOT_SUPPORTED` exists and is returned
+    nowhere, since a pipeline's `depth_bounds_test_enable` is masked on a device
+    without the feature (the pipeline behaves as if it is false, as `spudgpu.h`
+    states); and `SPUDGPU_EXT_BUNDLES` has no paired result, since every GPU of
+    a backend that implements bundles records them. Ray tracing and
     `SPUDGPU_EXT_DESCRIPTOR_SETS`/`SPUDGPU_EXT_SUBPASS_MERGING` (see the OpenGL note
     below) are the next likely candidates whenever their real API surface gets
     built. An `EXT` has to stay a narrow, self-contained island (a handful of
@@ -192,9 +205,11 @@ GameInput and evdev builds were not run.
     flag alone doesn't do the interesting work here. What still needs the full
     `EXT` treatment is *runtime* hardware/driver support, which genuinely varies even
     though the backend code exists on all three: Vulkan probes
-    `VK_EXT_mesh_shader`'s presence and `VkPhysicalDeviceMeshShaderFeaturesEXT` at
-    device-creation time (`spudgpuvulkancontext.c`, the first optional device
-    extension this backend has ever had to enumerate rather than assume), D3D12
+    `VK_EXT_mesh_shader`'s presence and `VkPhysicalDeviceMeshShaderFeaturesEXT`
+    when the instance lists its adapters (`spudgpuvulkan___read_adapter_facts`,
+    `spudgpuvulkancontext.c`, the first optional device extension this backend
+    has ever had to enumerate rather than assume) and enables it at device
+    creation only for a device created with the feature, D3D12
     checks `D3D12_FEATURE_DATA_D3D12_OPTIONS7::MeshShaderTier`
     (`spudgpud3d12context.cpp`), and only Metal's is unconditionally true (Metal 3
     mesh shading is guaranteed on every Apple Silicon target this backend already
@@ -208,7 +223,8 @@ GameInput and evdev builds were not run.
     backend in this build implements and nothing about any GPU, and every
     one's comment says so. Where support also varies by GPU it pairs with a
     `SPUDGPU_FEATURE_<NAME>` bit, and its `SPUDRESULT_GPU_EXT_<NAME>_NOT_SUPPORTED`
-    means "the device wasn't created with the feature". The bits are always
+    means "the device wasn't created with the feature" (no depth bounds result
+    is returned, and bundles have no bit or result; see above). The bits are always
     defined, never inside an `#if`; a bit whose macro is 0 is never in any
     adapter's supported features. Bindless is `SPUDGPU_EXT_BINDLESS` /
     `SPUDGPU_FEATURE_BINDLESS` / `SPUDRESULT_GPU_EXT_BINDLESS_NOT_SUPPORTED`
@@ -582,10 +598,9 @@ GameInput and evdev builds were not run.
   buffer images and views by the swap chain.
 - What is left: `std::vector` and `std::string` (function locals in
   `spudgpud3d12context.cpp`, `spudgpud3d12command.cpp`, `spudgpud3d12renderpass.cpp`
-  and `spudgpud3d12shader.cpp`, and the bindless free stacks) still allocate
-  through the standard allocator, which reports failure by throwing; and SpudFiles,
-  which has no instance yet, uses the system heap (`spud_allocator_system()` in
-  each `sfs_file`'s head) until `SPUDFILES_TODO.md`'s rework gives it one.
+  and `spudgpud3d12shader.cpp`, the bindless free stacks, and an image's
+  `_subresource_states` in `spudgpud3d12.hpp`) still allocate
+  through the standard allocator, which reports failure by throwing.
 - **A debug name is copied, never kept as the caller's pointer, in every
   build.** `debug_name` fields and the name member of a handle exist in
   Debug and Release alike (since 2026-10-18; before, only under
@@ -683,7 +698,9 @@ which found two Vulkan bugs: an image barrier out of `UNDEFINED` or
 and now starts at its destination stage; and `drawIndirectFirstInstance` was
 never enabled, so an indirect draw's non-zero `first_instance` was outside
 Vulkan's rules. That is `SPUDGPU_FEATURE_DRAW_INDIRECT_FIRST_INSTANCE` now
-(every D3D12 and Metal adapter; the Metal line is written, not compiled).
+(every D3D12 and Metal adapter; the Metal line was compiled on macOS on
+2026-10-22, where spudlib's tests pass over it, plain and under ASan and
+TSan, though no test there reads the bit).
 Rerun, every sample clean in every mode. The same day a caller's fragment
 shader that read only locations 1 and 2 of its vertex shader's outputs
 failed to link on D3D12 (debug layer error 660), which matches the stages
@@ -700,7 +717,7 @@ read).
   `/MDd` debug build; building from source lets it inherit `CMAKE_MSVC_RUNTIME_LIBRARY`
   correctly). Also pulls in Microsoft's vendored `d3dx12.h` (3,400+ lines, not
   authored here — don't "clean up" or reformat it as if it were project code).
-- **Metal** — implemented, all ten backend `.m` files, now that Apple hardware is
+- **Metal** — implemented, all twelve backend `.m` files, now that Apple hardware is
   available to validate against. Swap chain creation/present is verified end-to-end
   on real hardware (Apple M5 Pro) via `spudgpusamples/Samples/HelloTriangle`; the
   natives-header asymmetries above were worked out ahead of the implementation and
@@ -711,8 +728,9 @@ read).
   end-to-end via `spudgpusamples/Samples/HelloTexture`'s texture upload, which
   silently rendered solid black until this landed (these were unimplemented
   placeholders before, per the file comment in `spudgpumetalrenderpass.m`).
-  `spudgpu_cmd_blit_image` remains an unimplemented placeholder — no caller needs it
-  yet. A pipeline's `cull_mode`, `front_face_ccw` and `wireframe` are applied since
+  `spudgpu_cmd_blit_image` implements only a blit that is a copy (same size,
+  orientation and format); a scaling, flipping or converting one is reported and
+  records nothing. A pipeline's `cull_mode`, `front_face_ccw` and `wireframe` are applied since
   2026-10-13 (set on the encoder at `spudgpu_cmd_bind_pipeline`); before that Metal
   dropped all three and drew every triangle filled and unculled, which no caller had
   noticed because none culled. Back-face culling with counter-clockwise fronts is
@@ -815,8 +833,9 @@ read).
   mesh shading (OPTIONS7), the depth bounds test (OPTIONS2), and bindless,
   which needs resource binding tier 3. WARP is listed, as
   `SPUDGPU_ADAPTER_TYPE_SOFTWARE`. Run on an Iris Xe (12_1, tier 3) and an
-  RTX A2000 before the adapter change; the tier-2 path has not run on any
-  device, and nothing of the adapter change has run on D3D12.
+  RTX A2000 before the adapter change, and every `spudgpusamples` sample on
+  both and on WARP after it (2026-10-22); the tier-2 path has not run on any
+  device.
 - D3D12's shader-visible descriptors are in two heaps per device
   (`spudgpu_device_d3d12::_csv_heap`, `_sampler_heap`), and every pool and
   the bindless state take a range of them (`spudgpud3d12descriptors.cpp`).
@@ -829,7 +848,8 @@ read).
   refused with `SPUDRESULT_GPU_OUT_OF_DESCRIPTORS` (Vulkan and Metal keep a
   count, D3D12 the heaps, whose free ranges may be fragmented, which the
   header allows everywhere). Run on D3D12 (NVIDIA RTX A2000) by the samples
-  and `aprend_gpu_tests` before the budget, debug layer clean.
+  and `aprend_gpu_tests` before the budget, debug layer clean, and by every
+  sample after it (2026-10-22, both devices and WARP).
 - A D3D12 `TEXTURE2D` view has no array slice, so until 2026-10-16 every
   `SPUDGPU_IMAGE_VIEW_TYPE_2D` view on D3D12 saw layer 0 whatever its
   `base_array_layer` (render target, depth, shader resource and storage
@@ -841,7 +861,7 @@ read).
   past the first) gets a `TEXTURE2DARRAY` view of one slice, which D3D12
   leaves undefined; the drivers here read it right. A caller that samples
   one layer of an array texture declares an array texture and passes a
-  one-layer 2D array view, as Aprend's downsample shader does since the
+  one-layer 2D array view, as a caller's downsample shader does since the
   same day; then the view and the shader agree on every backend. A run
   of `aprend_gpu_tests` with GPU-based validation on (a temporary
   `SetEnableGPUBasedValidation(TRUE)`, both devices, 2026-10-16) reported
@@ -911,22 +931,30 @@ read).
     and Metal only. It now begins a pass of a depth attachment alone;
     written on macOS, then run on D3D12 on 2026-10-17 by `apricottests`'
     `test_lit_mesh_shadow` (Intel Iris Xe and NVIDIA RTX A2000, debug
-    layer clean). Trellis_Avalonia built and ran over it on D3D12 and
-    Vulkan the same day (reported), but Trellis renders no depth-only
+    layer clean). A caller's host built and ran over it on D3D12 and
+    Vulkan the same day (reported), but that caller renders no depth-only
     pass, so that run doesn't exercise it.
   - Metal's `spudgpu_create_swap_chain` rejects `buffer_count != 1` and
     `SPUDGPU_PRESENT_MODE_MAILBOX`, and its pipeline rejects geometry and
     tessellation modules.
-- SpudFiles' macOS backend (`spudfilesapple.c`) is plain C: file I/O is the same
-  POSIX code as Linux, and dialogs run `/usr/bin/osascript` (`choose file` /
-  `choose file name` / `choose folder`) rather than AppKit, so the save dialog
-  always prompts before overwriting regardless of `SFS_FILE_DIALOG_FLAG_OVERWRITE_PROMPT`.
+- SpudFiles was reworked on 2026-10-22 (`SPUDFILES_TODO.md`): an instance
+  with the caller's allocator; UTF-8 paths (Windows converts each to UTF-16
+  and calls only the W functions); access, creation and share mode chosen by
+  the caller; reads and writes at an offset, with no cursor; what is at a
+  path from `sfs_path_get_info`; one directory level per
+  `sfs_directory_create`. The dialogs, path-string functions and working
+  directory are gone, and with them every static buffer. Every check is in
+  the front end (`src/spudfiles.c`); the backends implement
+  `src/files/spudfilesshared.h`: one POSIX file for Linux and Apple
+  (`F_FULLFSYNC` where it exists) and Windows. Built and run on macOS;
+  the Windows backend is syntax-checked with mingw-w64 and the Linux build
+  hasn't been compiled. The platform's own error number isn't kept yet.
 - SpudNet was written on 2026-10-07 and its header reworked, and every backend
   rewritten to it, on 2026-10-08: streaming HTTP transfers, TLS and proxy
   descs, error detail, a resolver, a wait set. The Apple side compiles clean
   with the `macos-metal` preset and passes `tests/spudnet_test` (run it with
   `tests/run_spudnet_test.sh build-macos-metal/Debug/spudnet_test`; it needs Python 3
-  and `openssl`; 318 checks since 2026-10-21, with the struct-base and allocator parts). Linux (libcurl + BSD sockets) built with the
+  and `openssl`; 343 checks since 2026-10-22 (and an opt-in `internet` part, 22 more, run only by name: real DNS, public certificate chains good and bad, a real `wss://` echo server and a host that never answers; passing on macOS plain, ASan and TSan), with the struct-base and allocator parts and a `records` part: a listener's accept aborted from another thread, empty error records, the local IPv4 addresses and debug names read back). Linux (libcurl + BSD sockets) built with the
   `linux-vulkan` preset and passed it on 2026-10-14. Windows (WinHTTP +
   Winsock2) built with MSVC under the `windows-d3d12` preset and passed all
   261 checks on 2026-10-14, Windows 11 (`tests/run_spudnet_test.sh
@@ -940,9 +968,8 @@ read).
   `server_stat` now asks over its own TCP connection. That sharing is
   WinHTTP's own: it doesn't break the one-transfer-per-client rule, but a
   new client is not a new connection there. `SPUDNET_TODO.md` lists what each
-  part assumes and what the macOS run settled. Only TCP and the resolver have
-  a caller outside this repo so far; HTTP and WebSocket are exercised by
-  `tests/spudnet_test` alone. On Linux, WebSocket needs libcurl 8.11+ (older ones
+  part assumes and what the macOS run settled. Every part of SpudNet (TCP, the
+  resolver, HTTP and WebSocket) now has a caller outside this repo. On Linux, WebSocket needs libcurl 8.11+ (older ones
   return `SPUDRESULT_SPUDNET_UNSUPPORTED`; HTTP works regardless). iOS: the
   `iossimulator-metal` preset builds the tests as plain simulator executables,
   and `SPUDNET_TEST_LAUNCHER="xcrun simctl spawn booted"
@@ -952,7 +979,7 @@ read).
   all 261 checks three runs in a row in an iPhone 17 Pro simulator (iOS 26.5),
   its `websocket` part 46 of them; `spudperf_test` and `spudinput_test` pass
   there too. A device can't run a bare executable, so on a device SpudNet has
-  only been built (trellislib's xcframework), not run.
+  only been built (a caller's iOS build), not run.
 - SpudInput was written on 2026-10-13: the header, the front end and the
   GameController backend (`src/input/backends/apple/spudinputgamecontroller.m`).
   It builds with the `macos-metal` preset and `tests/spudinput_test` passes
@@ -968,7 +995,8 @@ read).
   be approximate on GameController: a touch exactly at a surface's middle
   reads as no touch; a motion sample's time is its arrival, not its capture;
   the motion frame and the sign of acceleration are from documentation and
-  unchecked. iOS has not been built.
+  unchecked. It builds for iOS, and `spudinput_test` passes in the simulator
+  (2026-10-14); no gamepad has been read there.
 - SpudInput's GameInput backend (`src/input/backends/windows/spudinputgameinput.c`)
   was written on 2026-10-14, on the Windows SDK's GameInput (`GameInput.h`,
   `gameinput.lib`; no NuGet package). Devices are learnt from a device
@@ -1010,23 +1038,52 @@ read).
   (left) as `BTN_X`, which the kernel defines as `BTN_NORTH`, and Y (top) as
   `BTN_WEST`; SpudInput passes the kernel's code on, as it has no table of
   devices.
-- Four CTest targets exist: `spudcore_test` (the version as the header,
+- Eight CTest targets exist: `spudcore_test` (the version as the header,
   CMake and the library each have it, and result names), `spudgpu_device_test`
   (adapters and devices: listing, adapter properties with chained limits,
   every create-device check, queues by kind, the descriptor budget, one
   device per adapter, a device made again after one is destroyed; it needs a
   GPU and no window, and exits 77, skipped, with no adapter; passes on Metal,
-  plain, ASan and TSan, 2026-10-21), `spudinput_test`
+  plain, ASan and TSan, 2026-10-21), `spudgpu_objects_test` (the SpudGPU
+  calls nothing else in the workspace made until 2026-10-22: a format by
+  name, a fence signalled from the CPU and waited on, a semaphore, a buffer's
+  desc and GPU address, a buffer view's and a heap's desc, a descriptor pool
+  reset and allocated from again; also a GPU and no window, 77 without one;
+  passes on Metal plain, ASan, TSan and under Metal validation, 2026-10-22;
+  still never called anywhere: `spudgpu_create_surface_from_callback`, the
+  storage-buffer and storage-image bindless calls,
+  `spudgpu_cmd_bind_bindless_resources_compute` and
+  `spudgpu_get_compute_pipeline_desc`), `spudmemory_test` (every argument
+  check, zero pages on commit and after a decommit, a second commit keeping
+  contents, a reservation larger than memory), `spudfiles_test` (every SpudFiles
+  call and check in a temporary directory: each access and creation choice,
+  reads and writes at an offset with a short read at the end, sizing,
+  flushing, a mapping at an unaligned offset outliving its file, path info,
+  replace, remove, one-level directories, a non-ASCII name, two threads
+  reading one file; counting allocator), both added 2026-10-22 and passing on
+  macOS plain, ASan and TSan, syntax-checked for Windows with mingw-w64,
+  `spudaudio_test` (every call but `spudaudio_stream_start` and a real
+  `spudaudio_set_device_sample_rate`, so nothing is heard and no device is
+  changed: argument checks, both directions' devices and properties, timing
+  caps, a probe of the default output's own format followed to acceptance,
+  a stream created stopped, read and destroyed, the device-event callback
+  set and cleared, all through a counting allocator; passes with no device;
+  added 2026-10-22, macOS plain, ASan and TSan, syntax-checked for WASAPI),
+  `spudinput_test`
   (above) and `spudperf_test` (the monotonic clocks,
-  `spudperf_sleep_until_monotonic_ns` and `spudperf_sleep_until_monotonic_ms`),
+  `spudperf_sleep_until_monotonic_ns` and `spudperf_sleep_until_monotonic_ms`,
+  and since 2026-10-22 the CPU counter and `spudperf_get_ram_usage`),
   which needs nothing but the machine. It has run on macOS; the Windows and
   Linux halves of the nanosecond sleep, which the millisecond one waits
   through, are written and have not been compiled. `tests/` also holds two hardware tests, built behind
   `SPUDLIB_BUILD_TESTS` but deliberately not registered with ctest because each
-  needs something real: `spudaudio_sine` (an audio device and someone listening)
+  needs something real: `spudaudio_sine` (an audio device and someone listening;
+  until 2026-10-22 its probe loop zeroed the config's base each round, so
+  every probe was refused as `SPUDRESULT_STRUCT_WRONG_TYPE` and it never
+  reached a stream; fixed, not run since)
   and `spudnet_test` (a local server, started by `tests/run_spudnet_test.sh`).
-  SpudFiles and SpudMemory have no committed tests. SpudGPU's only one is
-  `spudgpu_device_test`, which draws nothing; the rest of SpudGPU is
+  SpudGPU's are `spudgpu_device_test` and `spudgpu_objects_test`, which
+  draw nothing; the rest of SpudGPU is
   verified by running the `spudgpusamples` samples.
 - No static/immutable sampler support. `spudgpu_sampler` (added alongside
   `SpudGPUDynamicIndexing`) only covers the dynamic, descriptor-bound case — a real
@@ -1034,8 +1091,7 @@ read).
   D3D12, an argument-buffer `MTLSamplerState` on Metal. D3D12's *static* samplers
   (baked into the root signature at pipeline-creation time, zero descriptor-heap cost)
   and Vulkan's *immutable* samplers (`VkDescriptorSetLayoutBinding::pImmutableSamplers`,
-  already stubbed at `spudgpuvulkandescriptors.c`'s `pImmutableSamplers = NULL; //
-  Dynamic samplers only for now`) are a real, better-fitting mechanism for the common
+  set to `NULL` in `spudgpuvulkandescriptors.c`) are a real, better-fitting mechanism for the common
   case of a small fixed set of samplers that never change for the life of a pipeline —
   worth adding as a genuinely separate concept alongside `spudgpu_sampler`, not a
   replacement for it (Metal has no equivalent distinction — a regular sampler bound

@@ -1,421 +1,279 @@
-
 #include "spudfiles.h"
+#include "files/spudfilesshared.h"
+#include "spudallocator.h"
+#include "spudstructbase.h"
+
+#include <stdbool.h>
 #include <stdint.h>
-#include <stdlib.h>
-#include <string.h>
 
-#ifdef __cplusplus
-extern "C" {
-#endif // __cplusplus
+/* ---- Instance ---- */
 
-SFS_FILE_DIALOG_ATTRIBUTES
-sfs_default_file_dialog_attributes(SFS_FILE_DIALOG_TYPE type) {
-	SFS_FILE_DIALOG_ATTRIBUTES result = {0};
-	result.type                       = SFS_FILE_DIALOG_TYPE_OPEN;
-	result.flags                      = SFS_FILE_DIALOG_FLAG_NONE;
-	result.title                      = NULL;
-	result.filter                     = NULL;
-	switch (type) {
-	case SFS_FILE_DIALOG_TYPE_OPEN:
-		result.flags = SFS_FILE_DIALOG_FLAG_DONT_ADD_TO_RECENT |
-		               SFS_FILE_DIALOG_FLAG_FILE_MUST_EXIST |
-		               SFS_FILE_DIALOG_FLAG_NO_CHANGE_DIR;
-		break;
+SPUDRESULT sfs_instance_create(
+    const sfs_instance_desc *desc,
+    sfs_instance *out_instance) {
+	if (!desc)
+		return SPUDRESULT_NULL_DESC;
+	const SPUDRESULT base_result = spud_struct_check(&desc->base, SPUD_STRUCT_TYPE_FILES_INSTANCE_DESC);
+	if (base_result != SPUD_SUCCESS)
+		return base_result;
+	if (!out_instance)
+		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
+	*out_instance                      = NULL;
+	const SPUDRESULT allocator_result  = spud_allocator_check(desc->allocator);
+	if (allocator_result != SPUD_SUCCESS)
+		return allocator_result;
 
-	case SFS_FILE_DIALOG_TYPE_SAVE:
-		result.flags = SFS_FILE_DIALOG_FLAG_DONT_ADD_TO_RECENT |
-		               SFS_FILE_DIALOG_FLAG_OVERWRITE_PROMPT |
-		               SFS_FILE_DIALOG_FLAG_NO_CHANGE_DIR;
-		break;
-	}
-	return result;
+	sfs_instance instance = SPUD_NEW_ZEROED(desc->allocator, struct sfs_instance_t);
+	if (!instance)
+		return SPUDRESULT_OUT_OF_MEMORY;
+	instance->allocator = *desc->allocator;
+	*out_instance       = instance;
+	return SPUD_SUCCESS;
 }
 
-bool sfs_is_slash(char c) { return c == '/' || c == '\\'; }
-
-bool sfs_correct_slashes(char **in_out_path, char slash) {
-	if (!in_out_path || !*in_out_path)
-		return false;
-	if (slash == '\0')
-		slash = SFS_SLASH;
-	char other = (slash == '/') ? '\\' : '/';
-	for (char *p = *in_out_path; *p; p++) {
-		if (*p == other)
-			*p = slash;
-	}
-	return true;
+void sfs_instance_destroy(sfs_instance instance) {
+	if (!instance)
+		return;
+	const SPUD_ALLOCATOR allocator = instance->allocator;
+	SPUD_DELETE(&allocator, struct sfs_instance_t, instance);
 }
 
-bool sfs_is_absolute(const char *path) {
-	if (!path || !path[0])
-		return false;
-	// Unix absolute path
-	if (path[0] == '/')
-		return true;
-	// UNC path: \\server\share
-	if (path[0] == '\\' && path[1] == '\\')
-		return true;
-	// Windows drive-absolute: C:\ or C:/
-	if (path[1] == ':' && sfs_is_slash(path[2]))
-		return true;
-	return false;
+/* ---- Opening ---- */
+
+static bool sfs_path_given(const char *path) { return path && path[0]; }
+
+SPUDRESULT sfs_file_open(
+    sfs_instance instance,
+    const sfs_open_desc *desc,
+    sfs_file *out_file) {
+	if (!instance)
+		return SPUDRESULT_SFS_INVALID_INSTANCE;
+	if (!desc)
+		return SPUDRESULT_NULL_DESC;
+	const SPUDRESULT base_result = spud_struct_check(&desc->base, SPUD_STRUCT_TYPE_FILES_OPEN_DESC);
+	if (base_result != SPUD_SUCCESS)
+		return base_result;
+	if (!out_file)
+		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
+	*out_file = NULL;
+	if (!sfs_path_given(desc->path))
+		return SPUDRESULT_SFS_NULL_PATH;
+	if (desc->access != SFS_ACCESS_READ && desc->access != SFS_ACCESS_WRITE && desc->access != SFS_ACCESS_READ_WRITE)
+		return SPUDRESULT_DESC_INVALID_PARAMETERS;
+	if (desc->create < SFS_CREATE_OPEN_EXISTING || desc->create > SFS_CREATE_TRUNCATE)
+		return SPUDRESULT_DESC_INVALID_PARAMETERS;
+	if (desc->share & ~(SFS_SHARE)(SFS_SHARE_READ | SFS_SHARE_WRITE | SFS_SHARE_DELETE))
+		return SPUDRESULT_DESC_INVALID_PARAMETERS;
+	if (desc->create == SFS_CREATE_TRUNCATE && desc->access == SFS_ACCESS_READ)
+		return SPUDRESULT_DESC_INVALID_PARAMETERS;
+
+	sfs_file file = SPUD_NEW_ZEROED(&instance->allocator, struct sfs_file_t);
+	if (!file)
+		return SPUDRESULT_OUT_OF_MEMORY;
+	file->head.allocator = instance->allocator;
+	file->instance       = instance;
+	file->access         = desc->access;
+
+	const SPUDRESULT result = sfs_backend_open(instance, desc, &file->native);
+	if (result != SPUD_SUCCESS) {
+		const SPUD_ALLOCATOR allocator = file->head.allocator;
+		SPUD_DELETE(&allocator, struct sfs_file_t, file);
+		return result;
+	}
+	if (spud_debug_name_set(file, desc->debug_name) != SPUD_SUCCESS) {
+		sfs_file_close(file);
+		return SPUDRESULT_OUT_OF_MEMORY;
+	}
+	*out_file = file;
+	return SPUD_SUCCESS;
 }
 
-bool sfs_get_path_components(
-    const char *path, const char **out_directory, const char **out_filename) {
-	static char dir_buf[4096];
-	static char file_buf[512];
-
-	if (!path)
-		return false;
-
-	const char *last_slash = NULL;
-	for (const char *p = path; *p; p++) {
-		if (sfs_is_slash(*p))
-			last_slash = p;
-	}
-
-	if (last_slash == NULL) {
-		if (out_directory) {
-			dir_buf[0]     = '\0';
-			*out_directory = dir_buf;
-		}
-		if (out_filename) {
-			strncpy(file_buf, path, sizeof(file_buf) - 1);
-			file_buf[sizeof(file_buf) - 1] = '\0';
-			*out_filename                  = file_buf;
-		}
-	} else {
-		if (out_directory) {
-			size_t len = (size_t)(last_slash - path);
-			if (len == 0)
-				len = 1;
-			if (len >= sizeof(dir_buf))
-				len = sizeof(dir_buf) - 1;
-			strncpy(dir_buf, path, len);
-			dir_buf[len]   = '\0';
-			*out_directory = dir_buf;
-		}
-		if (out_filename) {
-			strncpy(file_buf, last_slash + 1, sizeof(file_buf) - 1);
-			file_buf[sizeof(file_buf) - 1] = '\0';
-			*out_filename                  = file_buf;
-		}
-	}
-	return true;
+void sfs_file_close(sfs_file file) {
+	if (!file)
+		return;
+	sfs_backend_close(file->native);
+	const SPUD_ALLOCATOR allocator = file->head.allocator;
+	spud_string_free(&allocator, file->head.debug_name);
+	SPUD_DELETE(&allocator, struct sfs_file_t, file);
 }
 
-// Extracts the path prefix (drive letter "C:" or leading slashes for UNC/unix).
-// Returns the length of the prefix and copies it into out_prefix
-// (null-terminated).
-static uint32_t
-extract_path_prefix(const char *path, char *out_prefix, uint32_t prefix_cap) {
-	if (!path || prefix_cap == 0)
-		return 0;
-	out_prefix[0] = '\0';
-	// Windows drive: "C:"
-	if (path[1] == ':') {
-		if (prefix_cap < 3)
-			return 0;
-		out_prefix[0] = path[0];
-		out_prefix[1] = path[1];
-		out_prefix[2] = '\0';
-		return 2;
-	}
-	// UNC: "\\"
-	if (path[0] == '\\' && path[1] == '\\') {
-		// copy up through the share name: \\server\share
-		uint32_t i           = 2;
-		uint32_t slash_count = 0;
-		while (path[i] && slash_count < 2) {
-			if (sfs_is_slash(path[i]))
-				slash_count++;
-			i++;
-		}
-		if (i >= prefix_cap)
-			i = prefix_cap - 1;
-		strncpy(out_prefix, path, i);
-		out_prefix[i] = '\0';
-		return i;
-	}
-	return 0;
+/* ---- I/O at an offset ---- */
+
+static bool sfs_readable(sfs_file file) { return file->access == SFS_ACCESS_READ || file->access == SFS_ACCESS_READ_WRITE; }
+static bool sfs_writable(sfs_file file) { return file->access == SFS_ACCESS_WRITE || file->access == SFS_ACCESS_READ_WRITE; }
+
+SPUDRESULT sfs_file_read_at(
+    sfs_file file,
+    uint64_t offset,
+    void *buffer,
+    uint64_t size,
+    uint64_t *out_read) {
+	if (!file)
+		return SPUDRESULT_SFS_INVALID_FILE;
+	if (!buffer || !out_read)
+		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
+	*out_read = 0;
+	if (!sfs_readable(file))
+		return SPUDRESULT_SFS_NOT_READABLE;
+	if (size == 0)
+		return SPUD_SUCCESS;
+	return sfs_backend_read_at(file->native, offset, buffer, size, out_read);
 }
 
-const char *sfs_simplify_path(const char *path, char slash) {
-	static char result[4096];
-	static char work[4096];
-	// component stack stored as offsets into result
-	static uint32_t stack[256];
-	uint32_t stack_top = 0;
-
-	if (!path)
-		return "";
-	if (slash == '\0')
-		slash = SFS_SLASH;
-
-	char prefix[64]     = {0};
-	uint32_t prefix_len = extract_path_prefix(path, prefix, sizeof(prefix));
-
-	strncpy(work, path + prefix_len, sizeof(work) - 1);
-	work[sizeof(work) - 1] = '\0';
-
-	// tokenize into components
-	uint32_t result_len = 0;
-	// write prefix first
-	strncpy(result, prefix, sizeof(result) - 1);
-	result_len = prefix_len;
-
-	char *p = work;
-	while (*p) {
-		while (*p && sfs_is_slash(*p))
-			p++;
-		if (!*p)
-			break;
-
-		char *start = p;
-		while (*p && !sfs_is_slash(*p))
-			p++;
-		uint32_t comp_len = (uint32_t)(p - start);
-
-		if (comp_len == 1 && start[0] == '.') {
-			// skip "."
-		} else if (comp_len == 2 && start[0] == '.' && start[1] == '.') {
-			// pop last component if possible
-			if (stack_top > 0) {
-				stack_top--;
-				result_len         = stack[stack_top];
-				result[result_len] = '\0';
-			}
-		} else {
-			// push component
-			if (result_len > prefix_len) {
-				if (result_len + 1 < sizeof(result)) {
-					result[result_len++] = slash;
-				}
-			}
-			stack[stack_top++] = result_len;
-			if (result_len + comp_len < sizeof(result)) {
-				memcpy(result + result_len, start, comp_len);
-				result_len += comp_len;
-				result[result_len] = '\0';
-			}
-		}
-	}
-
-	if (result_len == 0) {
-		result[0] = '.';
-		result[1] = '\0';
-	}
-
-	return result;
+SPUDRESULT sfs_file_write_at(
+    sfs_file file,
+    uint64_t offset,
+    const void *data,
+    uint64_t size) {
+	if (!file)
+		return SPUDRESULT_SFS_INVALID_FILE;
+	if (!data && size != 0)
+		return SPUDRESULT_NULL_DESC;
+	if (!sfs_writable(file))
+		return SPUDRESULT_SFS_NOT_WRITABLE;
+	if (size == 0)
+		return SPUD_SUCCESS;
+	return sfs_backend_write_at(file->native, offset, data, size);
 }
 
-bool sfs_split_path(
-    const char *in_path,
-    bool simplify,
-    const char **out_paths,
-    uint32_t *out_path_count) {
-	static char path_buf[4096];
-
-	if (!in_path || !out_path_count)
-		return false;
-
-	const char *src =
-	    simplify ? sfs_simplify_path(in_path, SFS_SLASH) : in_path;
-	strncpy(path_buf, src, sizeof(path_buf) - 1);
-	path_buf[sizeof(path_buf) - 1] = '\0';
-
-	uint32_t count    = 0;
-	uint32_t capacity = *out_path_count;
-	char *p           = path_buf;
-
-	while (*p) {
-		while (*p && sfs_is_slash(*p))
-			p++;
-		if (!*p)
-			break;
-
-		char *start = p;
-		while (*p && !sfs_is_slash(*p))
-			p++;
-		if (*p)
-			*p++ = '\0';
-
-		if (out_paths && count < capacity) {
-			out_paths[count] = start;
-		}
-		count++;
-	}
-
-	*out_path_count = count;
-	return true;
+SPUDRESULT sfs_file_get_size(
+    sfs_file file,
+    uint64_t *out_size) {
+	if (!file)
+		return SPUDRESULT_SFS_INVALID_FILE;
+	if (!out_size)
+		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
+	return sfs_backend_get_size(file->native, out_size);
 }
 
-// Takes a null-terminated array where in_components[0] is a writable output
-// buffer large enough to hold the joined result, and in_components[1..] are the
-// path components to join. Returns true on success.
-bool sfs_build_path_from_components(const char **in_components, char slash) {
-	if (!in_components || !in_components[0])
-		return false;
-	if (slash == '\0')
-		slash = SFS_SLASH;
-
-	char *out        = (char *)in_components[0];
-	uint32_t out_pos = 0;
-
-	for (uint32_t i = 1; in_components[i]; i++) {
-		uint32_t comp_len = (uint32_t)strlen(in_components[i]);
-		if (out_pos > 0)
-			out[out_pos++] = slash;
-		memcpy(out + out_pos, in_components[i], comp_len);
-		out_pos += comp_len;
-	}
-	out[out_pos] = '\0';
-	return true;
+SPUDRESULT sfs_file_set_size(
+    sfs_file file,
+    uint64_t size) {
+	if (!file)
+		return SPUDRESULT_SFS_INVALID_FILE;
+	if (!sfs_writable(file))
+		return SPUDRESULT_SFS_NOT_WRITABLE;
+	return sfs_backend_set_size(file->native, size);
 }
 
-const char *sfs_get_relative_path(
-    const char *path_from,
-    bool is_from_directory,
-    const char *path_to,
-    bool is_to_directory,
-    char slash) {
-	static char result[4096];
-	static char comps_from_buf[4096];
-	static char comps_to_buf[4096];
-	static const char *comps_from[256];
-	static const char *comps_to[256];
-
-	if (!path_from || !path_to)
-		return "";
-	if (slash == '\0')
-		slash = SFS_SLASH;
-
-	// Simplify both paths first
-	const char *simplified_from = sfs_simplify_path(path_from, slash);
-	strncpy(comps_from_buf, simplified_from, sizeof(comps_from_buf) - 1);
-	comps_from_buf[sizeof(comps_from_buf) - 1] = '\0';
-
-	const char *simplified_to = sfs_simplify_path(path_to, slash);
-	strncpy(comps_to_buf, simplified_to, sizeof(comps_to_buf) - 1);
-	comps_to_buf[sizeof(comps_to_buf) - 1] = '\0';
-
-	// Split into components
-	uint32_t from_count = 256;
-	uint32_t to_count   = 256;
-
-	// Use local arrays to avoid clobbering static state in sfs_split_path
-	{
-		char *p    = comps_from_buf;
-		from_count = 0;
-		while (*p) {
-			while (*p && sfs_is_slash(*p))
-				p++;
-			if (!*p)
-				break;
-			comps_from[from_count++] = p;
-			while (*p && !sfs_is_slash(*p))
-				p++;
-			if (*p)
-				*p++ = '\0';
-		}
-	}
-	{
-		char *p  = comps_to_buf;
-		to_count = 0;
-		while (*p) {
-			while (*p && sfs_is_slash(*p))
-				p++;
-			if (!*p)
-				break;
-			comps_to[to_count++] = p;
-			while (*p && !sfs_is_slash(*p))
-				p++;
-			if (*p)
-				*p++ = '\0';
-		}
-	}
-
-	// If path_from is a file, the last component is the filename — ignore it
-	uint32_t from_dir_count =
-	    is_from_directory ? from_count : (from_count > 0 ? from_count - 1 : 0);
-
-	// Find common prefix length
-	uint32_t common = 0;
-	uint32_t min    = from_dir_count < to_count ? from_dir_count : to_count;
-	while (common < min && strcmp(comps_from[common], comps_to[common]) == 0) {
-		common++;
-	}
-
-	uint32_t result_len = 0;
-	result[0]           = '\0';
-
-	// Emit ".." for each remaining component in from after the common prefix
-	for (uint32_t i = common; i < from_dir_count; i++) {
-		if (result_len > 0)
-			result[result_len++] = slash;
-		result[result_len++] = '.';
-		result[result_len++] = '.';
-		result[result_len]   = '\0';
-	}
-
-	// Emit remaining components in to after the common prefix
-	uint32_t to_end = is_to_directory ? to_count : to_count;
-	for (uint32_t i = common; i < to_end; i++) {
-		if (result_len > 0)
-			result[result_len++] = slash;
-		uint32_t comp_len = (uint32_t)strlen(comps_to[i]);
-		memcpy(result + result_len, comps_to[i], comp_len);
-		result_len += comp_len;
-		result[result_len] = '\0';
-	}
-
-	if (result_len == 0) {
-		result[0] = '.';
-		result[1] = '\0';
-	}
-
-	return result;
+SPUDRESULT sfs_file_flush(
+    sfs_file file,
+    SFS_FLUSH_LEVEL level) {
+	if (!file)
+		return SPUDRESULT_SFS_INVALID_FILE;
+	if (level != SFS_FLUSH_LEVEL_DEVICE && level != SFS_FLUSH_LEVEL_MEDIA)
+		return SPUDRESULT_DESC_INVALID_PARAMETERS;
+	if (!sfs_writable(file))
+		return SPUDRESULT_SFS_NOT_WRITABLE;
+	return sfs_backend_flush(file->native, level);
 }
 
-// Combines path1 (up to prefix1_length chars) with path2 (skipping
-// prefix2_length chars). Used when a multi-select file dialog returns a
-// directory + individual filenames.
-const char *sfs_file_dialog_multi_path(
-    const char *path1,
-    const char *path2,
-    uint32_t prefix1_length,
-    uint32_t prefix2_length) {
-	static char result[4096];
+/* ---- Mapping ---- */
 
-	if (!path1 || !path2)
-		return "";
+SPUDRESULT sfs_file_map(
+    sfs_file file,
+    uint64_t offset,
+    uint64_t size,
+    sfs_mapping *out_mapping) {
+	if (!out_mapping)
+		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
+	*out_mapping = NULL;
+	if (!file)
+		return SPUDRESULT_SFS_INVALID_FILE;
+	if (size == 0)
+		return SPUDRESULT_ZERO_SIZE;
+	if (!sfs_readable(file))
+		return SPUDRESULT_SFS_NOT_READABLE;
+	uint64_t file_size      = 0;
+	const SPUDRESULT sized  = sfs_backend_get_size(file->native, &file_size);
+	if (sized != SPUD_SUCCESS)
+		return sized;
+	if (offset > file_size || size > file_size - offset)
+		return SPUDRESULT_INDEX_OUT_OF_RANGE;
 
-	uint32_t len1 =
-	    prefix1_length > 0 ? prefix1_length : (uint32_t)strlen(path1);
-	const char *tail = path2 + prefix2_length;
-
-	if (len1 >= sizeof(result))
-		len1 = sizeof(result) - 1;
-	memcpy(result, path1, len1);
-	result[len1] = '\0';
-
-	if (*tail) {
-		uint32_t pos = len1;
-		if (pos > 0 && !sfs_is_slash(result[pos - 1])) {
-			if (pos + 1 < sizeof(result))
-				result[pos++] = SFS_SLASH;
-		}
-		uint32_t tail_len = (uint32_t)strlen(tail);
-		if (pos + tail_len >= sizeof(result))
-			tail_len = sizeof(result) - pos - 1;
-		memcpy(result + pos, tail, tail_len);
-		result[pos + tail_len] = '\0';
+	sfs_mapping mapping = SPUD_NEW_ZEROED(&file->head.allocator, struct sfs_mapping_t);
+	if (!mapping)
+		return SPUDRESULT_OUT_OF_MEMORY;
+	mapping->head.allocator = file->head.allocator;
+	uint64_t lead           = 0;
+	const SPUDRESULT result = sfs_backend_map(file->native, offset, size, &mapping->base, &mapping->base_size, &lead);
+	if (result != SPUD_SUCCESS) {
+		const SPUD_ALLOCATOR allocator = mapping->head.allocator;
+		SPUD_DELETE(&allocator, struct sfs_mapping_t, mapping);
+		return result;
 	}
-
-	return result;
+	mapping->data = (const uint8_t *)mapping->base + lead;
+	mapping->size = size;
+	*out_mapping  = mapping;
+	return SPUD_SUCCESS;
 }
 
-#ifdef __cplusplus
+const void *sfs_mapping_get_data(sfs_mapping mapping) { return mapping ? mapping->data : NULL; }
+
+uint64_t sfs_mapping_get_size(sfs_mapping mapping) { return mapping ? mapping->size : 0; }
+
+void sfs_mapping_release(sfs_mapping mapping) {
+	if (!mapping)
+		return;
+	sfs_backend_unmap(mapping->base, mapping->base_size);
+	const SPUD_ALLOCATOR allocator = mapping->head.allocator;
+	spud_string_free(&allocator, mapping->head.debug_name);
+	SPUD_DELETE(&allocator, struct sfs_mapping_t, mapping);
 }
-#endif // __cplusplus
+
+/* ---- Paths ---- */
+
+SPUDRESULT sfs_path_get_info(
+    sfs_instance instance,
+    const char *path,
+    SFS_PATH_INFO *out_info) {
+	if (!instance)
+		return SPUDRESULT_SFS_INVALID_INSTANCE;
+	if (!sfs_path_given(path))
+		return SPUDRESULT_SFS_NULL_PATH;
+	if (!out_info)
+		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
+	const SPUDRESULT base_result = spud_struct_out_check(&out_info->base, SPUD_STRUCT_TYPE_FILES_PATH_INFO);
+	if (base_result != SPUD_SUCCESS)
+		return base_result;
+	out_info->kind        = (SFS_PATH_KIND)0;
+	out_info->size        = 0;
+	out_info->modified_ns = 0;
+	return sfs_backend_path_get_info(instance, path, out_info);
+}
+
+SPUDRESULT sfs_path_replace(
+    sfs_instance instance,
+    const char *source,
+    const char *target,
+    SFS_FLUSH_LEVEL level) {
+	if (!instance)
+		return SPUDRESULT_SFS_INVALID_INSTANCE;
+	if (!sfs_path_given(source))
+		return SPUDRESULT_SFS_NULL_PATH;
+	if (!sfs_path_given(target))
+		return SPUDRESULT_SFS_NULL_PATH;
+	if (level != SFS_FLUSH_LEVEL_NONE && level != SFS_FLUSH_LEVEL_DEVICE && level != SFS_FLUSH_LEVEL_MEDIA)
+		return SPUDRESULT_DESC_INVALID_PARAMETERS;
+	return sfs_backend_path_replace(instance, source, target, level);
+}
+
+SPUDRESULT sfs_path_remove(
+    sfs_instance instance,
+    const char *path) {
+	if (!instance)
+		return SPUDRESULT_SFS_INVALID_INSTANCE;
+	if (!sfs_path_given(path))
+		return SPUDRESULT_SFS_NULL_PATH;
+	return sfs_backend_path_remove(instance, path);
+}
+
+SPUDRESULT sfs_directory_create(
+    sfs_instance instance,
+    const char *path) {
+	if (!instance)
+		return SPUDRESULT_SFS_INVALID_INSTANCE;
+	if (!sfs_path_given(path))
+		return SPUDRESULT_SFS_NULL_PATH;
+	return sfs_backend_directory_create(instance, path);
+}

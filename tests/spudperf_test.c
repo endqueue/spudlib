@@ -14,6 +14,8 @@
 
 #include <inttypes.h>
 #include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
 
 static int failures = 0;
 
@@ -144,12 +146,64 @@ static void test_millisecond_waits(void) {
 	printf("spudperf_test: %d waits 4 ms apart took %" PRIu64 " ms\n", (int)STEPS, total);
 }
 
+/* The CPU's counter only goes up, and moves over a busy loop. */
+static void test_clock_cycles(void) {
+	uint64_t previous   = spudperf_catch_current_clock_cycle();
+	const uint64_t first = previous;
+	int went_back       = 0;
+	volatile uint64_t sink = 0;
+	for (int i = 0; i < 100000; ++i) {
+		sink += (uint64_t)i;
+		const uint64_t now = spudperf_catch_current_clock_cycle();
+		if (now < previous)
+			went_back = 1;
+		previous = now;
+	}
+	CHECK(went_back == 0);
+	CHECK(previous > first);
+}
+
+/* Memory in use is reported, the peak is never below it, and a large block
+ * written whole raises both. Each output may be NULL. */
+static void test_ram_usage(void) {
+	uint64_t current = 0;
+	uint64_t peak    = 0;
+	spudperf_get_ram_usage(&current, &peak);
+	CHECK(current > 0);
+	CHECK(peak >= current);
+	spudperf_get_ram_usage(NULL, NULL);
+	uint64_t only = 0;
+	spudperf_get_ram_usage(&only, NULL);
+	CHECK(only > 0);
+	only = 0;
+	spudperf_get_ram_usage(NULL, &only);
+	CHECK(only >= current / 2);
+
+	const size_t size = 64u << 20;
+	unsigned char *block = (unsigned char *)malloc(size);
+	CHECK(block != NULL);
+	if (!block)
+		return;
+	memset(block, 1, size);
+	uint64_t after      = 0;
+	uint64_t peak_after = 0;
+	spudperf_get_ram_usage(&after, &peak_after);
+	CHECK(after >= current + size / 2);
+	CHECK(peak_after >= after);
+	CHECK(peak_after >= peak);
+	printf("spudperf_test: %llu MiB in use, %llu MiB with a 64 MiB block written\n", (unsigned long long)(current >> 20),
+	    (unsigned long long)(after >> 20));
+	free(block);
+}
+
 int main(void) {
 	test_clock_does_not_go_back();
 	test_waits_until_the_time();
 	test_past_times_return_at_once();
 	test_points_in_time_do_not_drift();
 	test_millisecond_waits();
+	test_clock_cycles();
+	test_ram_usage();
 
 	if (failures) {
 		fprintf(stderr, "spudperf_test: %d failure(s)\n", failures);

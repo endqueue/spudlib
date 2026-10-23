@@ -110,7 +110,7 @@ uint32_t spud_get_version(void);
  * spudresult_str().
  *
  * The values are grouped by module: 1-16 are general, 199-354 are SpudGPU
- * (`SPUDRESULT_GPU_*`), 1001-1007 SpudFiles (`SPUDRESULT_SFS_*`), 2001-2026
+ * (`SPUDRESULT_GPU_*`), 1001-1013 SpudFiles (`SPUDRESULT_SFS_*`), 2027-2028
  * SpudMemory (`SPUDRESULT_SMEM_*`), 3001-3033 SpudNet (`SPUDRESULT_SPUDNET_*`),
  * 4001-4012 SpudAudio (`SPUDRESULT_SAUD_*`) and 5001-5005 SpudInput
  * (`SPUDRESULT_SPUDINPUT_*`). A value is never reused for
@@ -275,16 +275,23 @@ typedef enum SPUDRESULT {
 
 	SPUDRESULT_SFS_NULL_PATH = 1001,
 	SPUDRESULT_SFS_INVALID_FILE = 1002,
-	SPUDRESULT_SFS_INVALID_MAPPING = 1003,
+	SPUDRESULT_SFS_INVALID_MAPPING = 1003, /**< Not returned since 2026-10-22, when sfs_mapping_release() became void; not reused. */
 	SPUDRESULT_SFS_NOT_READABLE = 1004, /**< Mapping a file not opened for reading. */
 	SPUDRESULT_SFS_DIFFERENT_VOLUME = 1005, /**< Replace across volumes (EXDEV / ERROR_NOT_SAME_DEVICE). */
 	SPUDRESULT_SFS_IN_USE = 1006, /**< Replace target in use or read-only (Windows). */
 	SPUDRESULT_SFS_FLUSH_LEVEL_NOT_SUPPORTED = 1007, /**< The file system can't flush to the level asked for. */
+	SPUDRESULT_SFS_INVALID_INSTANCE = 1008, /**< A SpudFiles instance is NULL. */
+	SPUDRESULT_SFS_NOT_FOUND = 1009, /**< Nothing is at the path, or a directory on the way to it isn't. */
+	SPUDRESULT_SFS_ALREADY_EXISTS = 1010, /**< Something is at the path already. */
+	SPUDRESULT_SFS_ACCESS_DENIED = 1011, /**< The platform's permissions refuse it. */
+	SPUDRESULT_SFS_NOT_A_FILE = 1012, /**< A directory, or another kind of entry, is where a file is wanted. */
+	SPUDRESULT_SFS_NOT_WRITABLE = 1013, /**< Writing to a file not opened for writing. */
 
-	SPUDRESULT_SMEM_ZERO_CAPACITY = 2001,
-	SPUDRESULT_SMEM_INSUFFICIENT_CAPACITY = 2002,
-	SPUDRESULT_SMEM_PLAT_COMMIT_FAIL = 2003,
-	SPUDRESULT_SMEM_INVALID_ARENA = 2026,
+	/* 2001-2003 and 2026 (ZERO_CAPACITY, INSUFFICIENT_CAPACITY,
+	 * PLAT_COMMIT_FAIL, INVALID_ARENA) went with SpudMemory's arena and are
+	 * not reused. */
+	SPUDRESULT_SMEM_NULL_ADDRESS = 2027, /**< An address passed in is NULL. */
+	SPUDRESULT_SMEM_NOT_PAGE_ALIGNED = 2028, /**< A size or address is not a multiple of the page size. */
 
 	SPUDRESULT_SPUDNET_STARTUP_FAILED        = 3001, /**< spudnet_instance_create(): the platform's networking wouldn't start. */
 	SPUDRESULT_SPUDNET_INVALID_TCP_SOCKET    = 3002,
@@ -489,6 +496,14 @@ typedef enum SPUD_STRUCT_TYPE {
 	SPUD_STRUCT_TYPE_INPUT_INSTANCE_DESC            = 4000,
 	/** SPUDINPUT_GAMEPAD_PROPERTIES (SPUD_STRUCT_BASE_OUT). */
 	SPUD_STRUCT_TYPE_INPUT_GAMEPAD_PROPERTIES       = 4001,
+
+	/* SpudFiles */
+	/** sfs_open_desc (SPUD_STRUCT_BASE). */
+	SPUD_STRUCT_TYPE_FILES_OPEN_DESC                = 5000,
+	/** sfs_instance_desc (SPUD_STRUCT_BASE). */
+	SPUD_STRUCT_TYPE_FILES_INSTANCE_DESC            = 5001,
+	/** SFS_PATH_INFO (SPUD_STRUCT_BASE_OUT). */
+	SPUD_STRUCT_TYPE_FILES_PATH_INFO                = 5002,
 
 	/** Keeps the enum 32 bits wide on every compiler. Never a valid type. */
 	SPUD_STRUCT_TYPE_MAX_ENUM = 0x7FFFFFFF

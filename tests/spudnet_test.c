@@ -532,6 +532,109 @@ static void test_tcp(void) {
 }
 
 // --------------------------------------------------------------------------
+// Records: listener abort and error records, local addresses, debug names
+// --------------------------------------------------------------------------
+
+struct abort_listener_later {
+	uint32_t             delay_ms;
+	spudnet_tcp_listener listener;
+};
+
+static test_thread_result TEST_THREAD_CALL abort_listener_later_run(void *argument) {
+	struct abort_listener_later *later = (struct abort_listener_later *)argument;
+	sleep_ms(later->delay_ms);
+	spudnet_tcp_listener_abort(later->listener);
+	return 0;
+}
+
+static bool error_is_empty(const spudnet_error *error) {
+	return error->result == SPUD_SUCCESS && error->source == SPUDNET_ERROR_SOURCE_NONE && error->code == 0 && error->text[0] == '\0';
+}
+
+static void test_records(void) {
+	part("Listener abort, error records, local addresses, debug names");
+	spudnet_error error;
+
+#if SPUDNET_EXT_TCP
+	spudnet_tcp_listener_desc listen_desc;
+	memset(&listen_desc, 0, sizeof(listen_desc));
+	listen_desc.base.type = SPUD_STRUCT_TYPE_NET_TCP_LISTENER_DESC;
+	listen_desc.address   = "127.0.0.1";
+	listen_desc.port      = 0;
+	listen_desc.backlog   = 8;
+	spudnet_tcp_listener listener = NULL;
+	if (expect(spudnet_tcp_listener_create(g_instance, &listen_desc, &listener, &error), SPUD_SUCCESS, "a listener to abort")) {
+		memset(&error, 0xA5, sizeof(error));
+		spudnet_tcp_listener_get_error(listener, &error);
+		check(error_is_empty(&error), "a listener that hasn't failed has an empty error record");
+
+		struct abort_listener_later later = {200, listener};
+		test_thread thread                = thread_start(abort_listener_later_run, &later);
+		const uint64_t started            = now_ms();
+		spudnet_tcp_socket accepted       = NULL;
+		expect(spudnet_tcp_listener_accept(listener, SPUDNET_WAIT_FOREVER, &accepted), SPUDRESULT_SPUDNET_ABORTED,
+		    "an accept waiting forever, aborted from another thread");
+		const uint64_t took = now_ms() - started;
+		check(took < 5000, "it came back promptly (%llu ms)", (unsigned long long)took);
+		check(accepted == NULL, "and gave no socket");
+		thread_join(thread);
+		expect(spudnet_tcp_listener_accept(listener, SPUDNET_NO_WAIT, &accepted), SPUDRESULT_SPUDNET_ABORTED,
+		    "every accept after the abort is aborted too");
+		spudnet_tcp_listener_destroy(listener);
+	}
+	spudnet_tcp_listener_abort(NULL);
+	memset(&error, 0xA5, sizeof(error));
+	spudnet_tcp_listener_get_error(NULL, &error);
+	check(error_is_empty(&error), "a NULL listener's error record is empty");
+
+	char addresses[8][SPUDNET_MAX_IPV4_STRING_LEN];
+	uint32_t count = 99;
+	expect(spudnet_get_local_ipv4_addresses(NULL, addresses, 8, &count, &error), SPUDRESULT_SPUDNET_INVALID_INSTANCE, "local addresses with no instance");
+	expect(spudnet_get_local_ipv4_addresses(g_instance, NULL, 8, &count, &error), SPUDRESULT_NULL_OUTPUT_PARAMETER, "local addresses with nowhere to put them");
+	expect(spudnet_get_local_ipv4_addresses(g_instance, addresses, 8, NULL, &error), SPUDRESULT_NULL_OUTPUT_PARAMETER, "local addresses with nowhere to count them");
+	if (expect(spudnet_get_local_ipv4_addresses(g_instance, addresses, 8, &count, NULL), SPUD_SUCCESS, "this machine's IPv4 addresses")) {
+		check(count <= 8, "no more than there was room for (%u)", (unsigned)count);
+		bool well_formed = true;
+		for (uint32_t i = 0; i < count && i < 8; ++i) {
+			const size_t length = strnlen(addresses[i], SPUDNET_MAX_IPV4_STRING_LEN);
+			if (length == 0 || length == SPUDNET_MAX_IPV4_STRING_LEN || !strchr(addresses[i], '.'))
+				well_formed = false;
+			else
+				note("local address %s", addresses[i]);
+		}
+		check(well_formed, "each a terminated dotted address");
+	}
+	count = 99;
+	expect(spudnet_get_local_ipv4_addresses(g_instance, addresses, 0, &count, NULL), SPUD_SUCCESS, "local addresses with room for none");
+	check(count == 0, "write none (%u)", (unsigned)count);
+#endif
+
+	spudnet_wait_set set = NULL;
+	if (expect(spudnet_wait_set_create(g_instance, &set, &error), SPUD_SUCCESS, "a wait set")) {
+		memset(&error, 0xA5, sizeof(error));
+		spudnet_wait_set_get_error(set, &error);
+		check(error_is_empty(&error), "a wait set that hasn't failed has an empty error record");
+		spudnet_wait_set_destroy(set);
+	}
+	memset(&error, 0xA5, sizeof(error));
+	spudnet_wait_set_get_error(NULL, &error);
+	check(error_is_empty(&error), "a NULL wait set's error record is empty");
+
+	// A name is copied: the caller's string can go at once.
+	char name[32];
+	strcpy(name, "records instance");
+	expect(spud_debug_name_set(g_instance, name), SPUD_SUCCESS, "a name for the instance");
+	const char *got = spud_debug_name_get(g_instance);
+	check(got && strcmp(got, "records instance") == 0, "reads back as set");
+	check(got != name, "from SpudNet's own copy");
+	strcpy(name, "changed");
+	check(got && strcmp(spud_debug_name_get(g_instance), "records instance") == 0, "unchanged by the caller's string changing");
+	expect(spud_debug_name_set(g_instance, NULL), SPUD_SUCCESS, "the name removed");
+	check(spud_debug_name_get(g_instance) == NULL, "reads back as none");
+	check(spud_debug_name_get(NULL) == NULL, "a NULL object has no name");
+}
+
+// --------------------------------------------------------------------------
 // Wait set
 // --------------------------------------------------------------------------
 
@@ -2132,6 +2235,204 @@ static void test_websocket(void) {
 // Every based desc (SPUD_STRUCT_BASE, spudcore.h) is refused, before
 // anything else of it is read, when its type isn't the call's or something
 // is chained on: nothing can be chained onto a SpudNet desc yet.
+// --------------------------------------------------------------------------
+// The internet (opt-in: run only as the "internet" part)
+// --------------------------------------------------------------------------
+
+/* GET [url] on a client with a zeroed TLS desc (the system's trust) and
+ * proxy desc (the system's proxy). The body is read whole into [body]
+ * (cut to [capacity]); [out_status] the status. */
+static SPUDRESULT internet_get(const char *url, uint32_t timeout_ms, char *body, size_t capacity, uint32_t *out_status, spudnet_error *out_error) {
+	*out_status = 0;
+	body[0]     = '\0';
+	memset(out_error, 0, sizeof(*out_error));
+	spudnet_http_client_desc client_desc;
+	memset(&client_desc, 0, sizeof(client_desc));
+	client_desc.base.type    = SPUD_STRUCT_TYPE_NET_HTTP_CLIENT_DESC;
+	spudnet_http_client client = NULL;
+	SPUDRESULT result        = spudnet_http_client_create(g_instance, &client_desc, &client);
+	if (SPUDFAIL(result))
+		return result;
+	spudnet_http_transfer transfer = NULL;
+	result                         = spudnet_http_transfer_create(client, &transfer);
+	if (!SPUDFAIL(result)) {
+		spudnet_http_transfer_desc desc;
+		memset(&desc, 0, sizeof(desc));
+		desc.base.type        = SPUD_STRUCT_TYPE_NET_HTTP_TRANSFER_DESC;
+		desc.method           = "GET";
+		desc.url              = url;
+		desc.follow_redirects = true;
+		desc.timeout_ms       = timeout_ms;
+		result                = spudnet_http_transfer_start(transfer, &desc);
+		if (!SPUDFAIL(result))
+			result = spudnet_http_transfer_receive_response(transfer, timeout_ms);
+		if (!SPUDFAIL(result)) {
+			*out_status = spudnet_http_transfer_get_status(transfer);
+			size_t size = 0;
+			for (;;) {
+				uint64_t received = 0;
+				if (size + 1 >= capacity) {
+					char discard[4096];
+					result = spudnet_http_transfer_recv(transfer, discard, sizeof(discard), timeout_ms, &received);
+				} else {
+					result = spudnet_http_transfer_recv(transfer, body + size, capacity - 1 - size, timeout_ms, &received);
+					size += (size_t)received;
+				}
+				if (SPUDFAIL(result) || received == 0)
+					break;
+			}
+			body[size] = '\0';
+		}
+		if (SPUDFAIL(result))
+			spudnet_http_transfer_get_error(transfer, out_error);
+		spudnet_http_transfer_destroy(transfer);
+	}
+	spudnet_http_client_destroy(client);
+	return result;
+}
+
+static void test_internet(void) {
+	part("The internet: real DNS, certificate chains, a WebSocket server, a host that never answers");
+	static char body[262144];
+	uint32_t status = 0;
+	spudnet_error error;
+
+#if SPUDNET_EXT_TCP
+	// Real name lookup, through a DNS server.
+	{
+		char addresses[16][SPUDNET_MAX_ADDRESS_STRING_LEN];
+		uint32_t count = 0;
+		spudnet_resolver_desc desc;
+		memset(&desc, 0, sizeof(desc));
+		desc.base.type            = SPUD_STRUCT_TYPE_NET_RESOLVER_DESC;
+		desc.host                 = "example.com";
+		desc.family               = SPUDNET_ADDRESS_FAMILY_ANY;
+		spudnet_resolver resolver = NULL;
+		if (expect(spudnet_resolver_create(g_instance, &desc, &resolver), SPUD_SUCCESS, "a resolver for example.com")) {
+			test_thread thread = thread_start(run_resolver, resolver);
+			if (expect(spudnet_resolver_wait(resolver, 15000, addresses, 16, &count), SPUD_SUCCESS, "example.com, looked up by a DNS server")) {
+				check(count >= 1, "it has %u address%s", count, count == 1 ? "" : "es");
+				for (uint32_t i = 0; i < count && i < 16; ++i)
+					note("example.com is %s", addresses[i]);
+			}
+			spudnet_resolver_destroy(resolver);
+			thread_join(thread);
+		}
+	}
+#endif
+
+	// An ordinary https:// site: a certificate from a public authority,
+	// through intermediates, checked against the system's trust store.
+	SPUDRESULT r = internet_get("https://example.com/", 20000, body, sizeof(body), &status, &error);
+	if (expect(r, SPUD_SUCCESS, "https://example.com/ with a zeroed TLS desc")) {
+		check(status == 200, "status %u", (unsigned)status);
+		check(strstr(body, "Example Domain") != NULL, "and its page");
+	} else {
+		note_error("example.com", &error);
+	}
+
+	// Certificates that must be turned away with the system's trust.
+	const char *bad[][2] = {
+		{"https://expired.badssl.com/", "an expired certificate"},
+		{"https://self-signed.badssl.com/", "a self-signed certificate"},
+		{"https://wrong.host.badssl.com/", "a certificate for another host"},
+		{"https://untrusted-root.badssl.com/", "a chain to a root nobody trusts"},
+	};
+	for (size_t i = 0; i < sizeof(bad) / sizeof(bad[0]); ++i) {
+		char what[128];
+		snprintf(what, sizeof(what), "%s is refused", bad[i][1]);
+		r = internet_get(bad[i][0], 20000, body, sizeof(body), &status, &error);
+		expect(r, SPUDRESULT_SPUDNET_TLS_FAILED, what);
+		note_error(bad[i][1], &error);
+	}
+
+	// A redirect, followed: http:// to https://.
+	r = internet_get("http://github.com/", 20000, body, sizeof(body), &status, &error);
+	if (expect(r, SPUD_SUCCESS, "http://github.com/, which redirects to https://")) {
+		check(status == 200, "status %u after the redirect", (unsigned)status);
+	} else {
+		note_error("github.com", &error);
+	}
+
+#if SPUDNET_EXT_WEBSOCKET
+	// A real WebSocket server, over TLS with the system's trust. This one
+	// sends a greeting first, then echoes.
+	{
+		spudnet_websocket_connect_desc desc;
+		memset(&desc, 0, sizeof(desc));
+		desc.base.type          = SPUD_STRUCT_TYPE_NET_WEBSOCKET_CONNECT_DESC;
+		desc.url                = "wss://echo.websocket.org/";
+		desc.timeout_ms         = 20000;
+		desc.max_message_size   = 1 << 20;
+		desc.follow_redirects   = false;
+		spudnet_websocket socket = NULL;
+		uint32_t opening        = 0;
+		if (expect(spudnet_websocket_create(g_instance, &socket), SPUD_SUCCESS, "a WebSocket")) {
+			if (expect(spudnet_websocket_connect(socket, &desc, &opening), SPUD_SUCCESS, "connect to wss://echo.websocket.org/")) {
+				const char *text = "spudnet_test over the internet";
+				expect(spudnet_websocket_send(socket, SPUDNET_WEBSOCKET_MESSAGE_TEXT, text, strlen(text), 20000), SPUD_SUCCESS, "send a text message");
+				bool echoed = false;
+				for (int i = 0; i < 4 && !echoed; ++i) {
+					uint8_t message[4096];
+					size_t size = 0;
+					SPUDNET_WEBSOCKET_MESSAGE type;
+					if (SPUDFAIL(websocket_read_message(socket, message, sizeof(message) - 1, &size, &type, 20000)))
+						break;
+					message[size] = '\0';
+					echoed        = type == SPUDNET_WEBSOCKET_MESSAGE_TEXT && strcmp((const char *)message, text) == 0;
+					if (!echoed)
+						note("the server said: %.80s", (const char *)message);
+				}
+				check(echoed, "and get it back");
+				expect(spudnet_websocket_close(socket, 1000, "done"), SPUD_SUCCESS, "close with 1000");
+			} else {
+				spudnet_websocket_get_error(socket, SPUDNET_ERROR_SIDE_RECEIVING, &error);
+				note_error("echo.websocket.org", &error);
+			}
+			spudnet_websocket_destroy(socket);
+		}
+	}
+#endif
+
+#if SPUDNET_EXT_TCP
+	// A host that swallows packets: a private address nothing answers on.
+	// The caller's time limit is what ends the wait.
+	{
+		spudnet_tcp_socket socket = NULL;
+		if (expect(spudnet_tcp_socket_create(g_instance, &socket), SPUD_SUCCESS, "a socket for a silent host")) {
+			spudnet_tcp_socket_connect_desc desc;
+			memset(&desc, 0, sizeof(desc));
+			desc.base.type       = SPUD_STRUCT_TYPE_NET_TCP_SOCKET_CONNECT_DESC;
+			desc.address         = "10.255.255.1";
+			desc.port            = 80;
+			desc.timeout_ms      = 2000;
+			const uint64_t start = now_ms();
+			r                    = spudnet_tcp_socket_connect(socket, &desc);
+			const uint64_t took  = now_ms() - start;
+			if (r == SPUDRESULT_SPUDNET_CONNECT_FAILED) {
+				note("10.255.255.1 is refused or unreachable from here (%llu ms), not silent; the time limit isn't tried", (unsigned long long)took);
+			} else {
+				expect(r, SPUDRESULT_SPUDNET_TIMED_OUT, "TCP connect to a silent host, 2 s allowed");
+				check(took >= 1800 && took < 4000, "it waited about as long as allowed (%llu ms)", (unsigned long long)took);
+			}
+			spudnet_tcp_socket_destroy(socket);
+		}
+	}
+#endif
+	{
+		const uint64_t start = now_ms();
+		r                    = internet_get("http://10.255.255.1/", 2000, body, sizeof(body), &status, &error);
+		const uint64_t took  = now_ms() - start;
+		if (r == SPUDRESULT_SPUDNET_CONNECT_FAILED) {
+			note("HTTP to 10.255.255.1 is refused or unreachable from here (%llu ms)", (unsigned long long)took);
+		} else {
+			expect(r, SPUDRESULT_SPUDNET_TIMED_OUT, "HTTP to a silent host, 2 s allowed");
+			check(took >= 1800 && took < 4000, "it waited about as long as allowed (%llu ms)", (unsigned long long)took);
+		}
+		note_error("silent host over HTTP", &error);
+	}
+}
+
 static void test_struct_bases(void) {
 	part("Struct bases");
 
@@ -2233,8 +2534,12 @@ int main(int argc, char **argv) {
 #define RUN(name, function) \
 	if (!only || strcmp(only, name) == 0) \
 		function()
+	// Needs the internet, so only when asked for by name.
+	if (only && strcmp(only, "internet") == 0)
+		test_internet();
 	RUN("instance", test_instance);
 	RUN("bases", test_struct_bases);
+	RUN("records", test_records);
 #if SPUDNET_EXT_TCP
 	RUN("tcp", test_tcp);
 	RUN("wait", test_wait_set);

@@ -1,96 +1,66 @@
-
 #include "spudmemory.h"
-#include "spudcore.h"
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
+#include "memory/spudmemoryshared.h"
 
-typedef struct smem_arena_t {
-	uint64_t reserve_size;
-	uint64_t commit_size;
-	uint64_t pos;
-	uint64_t commit_pos; // Size
-} smem_arena_t;
+#include <stdbool.h>
+#include <stdint.h>
 
-SPUDRESULT smem_arena_create(
-    uint64_t reserve_size,
-    uint64_t commit_size,
-    smem_arena *out_arena) {
-	if (!out_arena)
-		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
-	if (reserve_size == 0 && commit_size == 0)
-		return SPUDRESULT_ZERO_SIZE;
-	uint32_t page_size    = smem_plat_get_pagesize();
-	reserve_size          = SMEM_ALIGN_UP_POW2(reserve_size, page_size);
-	commit_size           = SMEM_ALIGN_UP_POW2(commit_size, page_size);
-	smem_arena_t *pResult = (smem_arena_t *)smem_plat_reserve(reserve_size);
-	if (!smem_plat_commit(pResult, commit_size)) {
-		return SPUDRESULT_SMEM_PLAT_COMMIT_FAIL;
-	}
-	pResult->reserve_size = reserve_size;
-	pResult->commit_size  = commit_size;
-	pResult->pos          = SMEM_ARENA_BASE_POS;
-	pResult->commit_pos   = commit_size;
-	*out_arena            = pResult;
-	return SPUD_SUCCESS;
-}
-void smem_arena_destroy(smem_arena arena) { free(arena); }
+/* Whether [value] is a multiple of the page size, which is a power of two. */
+static bool smem_page_multiple(uint64_t value) { return (value & ((uint64_t)smem_backend_page_size() - 1)) == 0; }
 
-uint64_t smem_arena_get_reserve_size(smem_arena arena) { return arena ? arena->reserve_size : 0; }
-uint64_t smem_arena_get_commit_size(smem_arena arena) { return arena ? arena->commit_size : 0; }
+uint32_t smem_get_page_size(void) { return smem_backend_page_size(); }
 
-SPUDRESULT smem_arena_push(
-    smem_arena arena,
+SPUDRESULT smem_reserve(
     uint64_t size,
-    bool non_zero,
-    void **out_ptr) {
-	if (!arena)
-		return SPUDRESULT_SMEM_INVALID_ARENA;
-	if (!out_ptr)
+    void **out_address) {
+	if (out_address)
+		*out_address = NULL;
+	if (size == 0)
+		return SPUDRESULT_ZERO_SIZE;
+	if (!smem_page_multiple(size))
+		return SPUDRESULT_SMEM_NOT_PAGE_ALIGNED;
+	if (!out_address)
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
-	if (size == 0)
-		return SPUD_SUCCESS;
-	uint64_t pos_aligned = SMEM_ALIGN_UP_POW2(arena->pos, SMEM_ARENA_ALIGN);
-	uint64_t new_pos     = pos_aligned + size;
-	if (new_pos > arena->reserve_size)
-		return SPUDRESULT_SMEM_INSUFFICIENT_CAPACITY;
-	if (new_pos > arena->commit_pos) {
-		uint64_t new_commit_pos = new_pos;
-		new_commit_pos += arena->commit_size - 1;
-		new_commit_pos -= new_commit_pos % arena->commit_size;
-		new_commit_pos       = new_commit_pos < arena->reserve_size ? new_commit_pos : arena->reserve_size;
-		uint8_t *mem         = (uint8_t *)arena + arena->commit_pos;
-		uint64_t commit_size = new_commit_pos - arena->commit_pos;
-		if (!smem_plat_commit(mem, commit_size)) {
-			return SPUDRESULT_SMEM_PLAT_COMMIT_FAIL;
-		}
-		arena->commit_pos = new_commit_pos;
-	}
-	arena->pos   = new_pos;
-	uint8_t *out = (uint8_t *)arena + pos_aligned;
-	if (!non_zero)
-		memset(out, 0, size);
-	*out_ptr = out;
-	return SPUD_SUCCESS;
+	return smem_backend_reserve(size, out_address);
 }
-SPUDRESULT smem_arena_pop(
-    smem_arena arena,
+
+SPUDRESULT smem_commit(
+    void *address,
     uint64_t size) {
-	if (!arena)
-		return SPUDRESULT_SMEM_INVALID_ARENA;
+	if (!address)
+		return SPUDRESULT_SMEM_NULL_ADDRESS;
+	if (!smem_page_multiple((uint64_t)(uintptr_t)address))
+		return SPUDRESULT_SMEM_NOT_PAGE_ALIGNED;
 	if (size == 0)
-		return SPUD_SUCCESS;
-	uint64_t max_size = arena->pos - SMEM_ARENA_BASE_POS;
-	size              = size < max_size ? size : max_size;
-	arena->pos -= size;
-	return SPUD_SUCCESS;
+		return SPUDRESULT_ZERO_SIZE;
+	if (!smem_page_multiple(size))
+		return SPUDRESULT_SMEM_NOT_PAGE_ALIGNED;
+	return smem_backend_commit(address, size);
 }
-SPUDRESULT smem_arena_pop_to(
-    smem_arena arena,
-    uint64_t pos) {
-	if (!arena)
-		return SPUDRESULT_SMEM_INVALID_ARENA;
-	uint64_t size = pos < arena->pos ? arena->pos - pos : 0;
-	return smem_arena_pop(arena, size);
+
+SPUDRESULT smem_decommit(
+    void *address,
+    uint64_t size) {
+	if (!address)
+		return SPUDRESULT_SMEM_NULL_ADDRESS;
+	if (!smem_page_multiple((uint64_t)(uintptr_t)address))
+		return SPUDRESULT_SMEM_NOT_PAGE_ALIGNED;
+	if (size == 0)
+		return SPUDRESULT_ZERO_SIZE;
+	if (!smem_page_multiple(size))
+		return SPUDRESULT_SMEM_NOT_PAGE_ALIGNED;
+	return smem_backend_decommit(address, size);
 }
-void smem_arena_clear(smem_arena arena) { smem_arena_pop_to(arena, SMEM_ARENA_BASE_POS); }
+
+SPUDRESULT smem_release(
+    void *address,
+    uint64_t size) {
+	if (!address)
+		return SPUDRESULT_SMEM_NULL_ADDRESS;
+	if (!smem_page_multiple((uint64_t)(uintptr_t)address))
+		return SPUDRESULT_SMEM_NOT_PAGE_ALIGNED;
+	if (size == 0)
+		return SPUDRESULT_ZERO_SIZE;
+	if (!smem_page_multiple(size))
+		return SPUDRESULT_SMEM_NOT_PAGE_ALIGNED;
+	return smem_backend_release(address, size);
+}

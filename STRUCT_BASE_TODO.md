@@ -3,8 +3,8 @@
 Planned on 2026-10-18. Steps 1 and 2 of "Order of work" are done (the
 `spudcore.h` pieces, and the three ABI bugs), and step 3 is done for
 SpudGPU, SpudAudio and SpudNet (2026-10-19, "SpudGPU, converted" and the
-sections after it), and for SpudInput (2026-10-20, "SpudInput, converted");
-SpudFiles is next. Every extensible struct in
+sections after it), for SpudInput (2026-10-20, "SpudInput, converted") and
+for SpudFiles (2026-10-22, with its rework). Every module is converted. Every extensible struct in
 spudlib's public headers starts with a `SPUD_STRUCT_BASE`: a type tag and a
 pointer to a chain of further structs. A struct's layout is frozen once it is
 released. A new field never goes into a released struct; it comes as a new
@@ -165,7 +165,15 @@ or held by value elsewhere. Line numbers are as of 2026-10-18.
 
 ### spudgpu.h (converted 2026-10-19, as listed here)
 
+The list changed with the adapters-and-devices change (2026-10-21,
+`SPUDGPU_DEVICE_TODO.md`): `SPUDGPU_DEVICE_PROPERTIES` and the three
+`*_capabilities` structs went, and the instance and device descs, the
+adapter properties and the two limits structs came. Below is the list as
+of 2026-10-22: 22 caller-filled, 4 SpudGPU-filled.
+
 - **`SPUD_STRUCT_BASE` (caller fills):**
+  - `spudgpu_instance_desc`
+  - `spudgpu_device_desc`
   - `spudgpu_submit_desc`
   - `spudgpu_command_allocator_desc`
   - `spudgpu_buffer_desc`
@@ -187,12 +195,13 @@ or held by value elsewhere. Line numbers are as of 2026-10-18.
   - `spudgpu_buffer_barrier`
   - `spudgpu_image_barrier`
 - **`SPUD_STRUCT_BASE_OUT` (spudlib fills):**
-  - `SPUDGPU_DEVICE_PROPERTIES`
+  - `SPUDGPU_ADAPTER_PROPERTIES`
   - `spudgpu_placement_requirements`
-  - `spudgpu_bindless_capabilities`
-  - `spudgpu_mesh_shading_capabilities`
-  - `spudgpu_depth_bounds_capabilities`
+  - `SPUDGPU_BINDLESS_LIMITS`
+  - `SPUDGPU_MESH_SHADING_LIMITS`
 - **Frozen:**
+  - **Array element, held by value in `SPUDGPU_ADAPTER_PROPERTIES`:**
+    `SPUDGPU_QUEUE_POOL`.
   - **Values:** `SPUDGPU_DEPTH_STENCIL_VALUE` and `SPUDGPU_CLEAR_VALUE`
     (both held by value), `SPUDGPU_VIEWPORT`, `SPUDGPU_SCISSOR_RECT`.
   - **Held by value, or array elements:**
@@ -255,9 +264,11 @@ All frozen: `SPUDGPU_D3D12_BUFFER_VIEW`, `SPUDGPU_D3D12_IMAGE_VIEW` and
 
 ### spudfiles.h
 
-- **`SPUD_STRUCT_BASE`:** `SFS_FILE_OPEN_ATTRIBUTES`,
-  `SFS_FILE_DIALOG_ATTRIBUTES`.
-- **`SPUD_STRUCT_BASE_OUT`:** `SFS_FIND_FILE_DATA`.
+Converted 2026-10-22, with the rework (`SPUDFILES_TODO.md`); the structs
+planned here went with the old API.
+
+- **`SPUD_STRUCT_BASE`:** `sfs_instance_desc` (5001), `sfs_open_desc` (5000).
+- **`SPUD_STRUCT_BASE_OUT`:** `SFS_PATH_INFO` (5002).
 
 ## ABI bugs (fixed 2026-10-18)
 
@@ -451,7 +462,7 @@ and evdev builds, which needed no change but have not been compiled.
    each is added with its struct.
 2. **Done.** Fix the three ABI bugs first, in their own change. Each is a fix on its
    own and makes the conversion smaller.
-3. **SpudGPU, SpudAudio, SpudNet and SpudInput done.** Convert one module at a time, header and every backend together:
+3. **Done: SpudGPU, SpudAudio, SpudNet, SpudInput and SpudFiles.** Convert one module at a time, header and every backend together:
    SpudGPU, then SpudAudio, SpudNet, SpudInput, SpudFiles. Bring
    `spudgpusamples`, the tests and every caller along in the same change.
    This is a source break for every caller.

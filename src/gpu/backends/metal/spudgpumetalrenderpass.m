@@ -2,8 +2,9 @@
 // SpudGPU Metal backend - render pass / render pipeline descriptors.
 // spudgpu_cmd_begin_rendering/end_rendering and the buffer/image copy
 // functions below (via MTLBlitCommandEncoder) are implemented against real
-// Apple hardware; spudgpu_cmd_blit_image remains an unimplemented placeholder
-// (no caller needs it yet).
+// Apple hardware. spudgpu_cmd_blit_image implements only a blit that is a
+// copy (same size, orientation and pixel format); a scaling, flipping or
+// format-converting one is reported and records nothing.
 //
 
 #if SPUDGPU_COMPILE_METAL_API

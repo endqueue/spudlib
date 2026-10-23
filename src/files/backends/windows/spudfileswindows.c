@@ -1,552 +1,320 @@
-
 #if SPUDLIB_PLATFORM_WIN32
 
-#include "spudfiles.h"
-#include "../../../spudallocator.h"
-#include <ShObjIdl_core.h>
+#include "../../spudfilesshared.h"
+
 #include <Windows.h>
-#include <shlwapi.h>
 #include <stdint.h>
-#include <stdlib.h>
-#include <string.h>
 
-#if __cplusplus
-extern "C" {
-#endif
-
-struct sfs_file_t {
-	// Its debug name, freed through its allocator: the system heap until
-	// SpudFiles has an instance to take the caller's from (MATURITY_TODO.md).
-	spud_object_head head;
-    HANDLE handle;
-};
-
-// --------------------------------------------------------------------------
-// File open / close
-// --------------------------------------------------------------------------
-
-SPUDRESULT
-sfs_file_open(SFS_FILE_OPEN_ATTRIBUTES open_attribs, sfs_file *out_file) {
-    if (!open_attribs.str_file_path || open_attribs.str_file_path[0] == '\0')
-        return SPUDRESULT_SFS_NULL_PATH;
-    if (!out_file)
-        return SPUDRESULT_NULL_OUTPUT_PARAMETER;
-
-    DWORD access      = 0;
-    DWORD disposition = 0;
-    bool  append      = false;
-
-    switch (open_attribs.access_mode) {
-    case SFS_EFILE_ACCESS_MODE_READ:
-        access      = GENERIC_READ;
-        disposition = OPEN_EXISTING;
-        break;
-    case SFS_EFILE_ACCESS_MODE_OVERWRITE:
-        access      = GENERIC_WRITE;
-        disposition = CREATE_ALWAYS;
-        break;
-    case SFS_EFILE_ACCESS_MODE_APPEND:
-        access      = GENERIC_WRITE;
-        disposition = OPEN_ALWAYS;
-        append      = true;
-        break;
-    case SFS_EFILE_ACCESS_MODE_READ_UPDATE:
-        access      = GENERIC_READ | GENERIC_WRITE;
-        disposition = OPEN_EXISTING;
-        break;
-    case SFS_EFILE_ACCESS_MODE_OVERWRITE_UPDATE:
-        access      = GENERIC_READ | GENERIC_WRITE;
-        disposition = CREATE_ALWAYS;
-        break;
-    case SFS_EFILE_ACCESS_MODE_APPEND_UPDATE:
-        access      = GENERIC_READ | GENERIC_WRITE;
-        disposition = OPEN_ALWAYS;
-        append      = true;
-        break;
-    default:
-        return SPUDRESULT_DESC_INVALID_PARAMETERS;
-    }
-
-    HANDLE h = CreateFileA(
-        open_attribs.str_file_path,
-        access,
-        FILE_SHARE_READ,
-        NULL,
-        disposition,
-        FILE_ATTRIBUTE_NORMAL,
-        NULL);
-
-    if (h == INVALID_HANDLE_VALUE)
-        return SPUDRESULT_GENERAL_FAILURE;
-
-    if (append) {
-        if (SetFilePointer(h, 0, NULL, FILE_END) == INVALID_SET_FILE_POINTER) {
-            CloseHandle(h);
-            return SPUDRESULT_GENERAL_FAILURE;
-        }
-    }
-
-    struct sfs_file_t *f = (struct sfs_file_t *)malloc(sizeof(struct sfs_file_t));
-    if (!f) {
-        CloseHandle(h);
-        return SPUDRESULT_OUT_OF_MEMORY;
-    }
-    f->head.debug_name = NULL;
-    f->head.allocator  = spud_allocator_system();
-    f->handle = h;
-    *out_file = f;
-    return SPUD_SUCCESS;
+/* [utf8] as UTF-16, through [instance]'s allocator; freed with
+ * sfs_windows_free_wide and the count it gives. */
+static SPUDRESULT sfs_windows_wide(sfs_instance instance, const char *utf8, wchar_t **out_wide, int *out_count) {
+	*out_wide       = NULL;
+	*out_count      = 0;
+	const int count = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, utf8, -1, NULL, 0);
+	if (count <= 0)
+		return SPUDRESULT_SFS_NOT_FOUND; // not UTF-8: no file can have that name
+	wchar_t *wide = SPUD_NEW_ARRAY(&instance->allocator, wchar_t, (size_t)count);
+	if (!wide)
+		return SPUDRESULT_OUT_OF_MEMORY;
+	MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, utf8, -1, wide, count);
+	*out_wide  = wide;
+	*out_count = count;
+	return SPUD_SUCCESS;
 }
 
-SPUDRESULT sfs_file_release(sfs_file file) {
-    if (!file) return SPUDRESULT_SFS_INVALID_FILE;
-    CloseHandle(file->handle);
-    spud_string_free(&file->head.allocator, file->head.debug_name);
-    free(file);
-    return SPUD_SUCCESS;
+static void sfs_windows_free_wide(sfs_instance instance, wchar_t *wide, int count) {
+	if (wide)
+		SPUD_DELETE_ARRAY(&instance->allocator, wchar_t, wide, (size_t)count);
 }
 
-// --------------------------------------------------------------------------
-// File I/O
-// --------------------------------------------------------------------------
-
-SPUDRESULT sfs_file_read(sfs_file file, void *data, uint64_t size) {
-    if (!file) return SPUDRESULT_SFS_INVALID_FILE;
-    if (!data)  return SPUDRESULT_NULL_OUTPUT_PARAMETER;
-
-    DWORD    bytes_read = 0;
-    // ReadFile takes a DWORD count; loop for large reads
-    uint64_t remaining  = size;
-    uint8_t *dst        = (uint8_t *)data;
-
-    while (remaining > 0) {
-        DWORD chunk = remaining > 0xFFFFFFFFULL ? 0xFFFFFFFFUL : (DWORD)remaining;
-        if (!ReadFile(file->handle, dst, chunk, &bytes_read, NULL))
-            return SPUDRESULT_GENERAL_FAILURE;
-        if (bytes_read == 0)
-            break; // EOF
-        dst       += bytes_read;
-        remaining -= bytes_read;
-    }
-    return SPUD_SUCCESS;
+static bool sfs_windows_is_directory(const wchar_t *path) {
+	const DWORD attributes = GetFileAttributesW(path);
+	return attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY);
 }
 
-SPUDRESULT sfs_file_write(sfs_file file, const void *data, uint64_t size) {
-    if (!file) return SPUDRESULT_SFS_INVALID_FILE;
-    if (!data)  return SPUDRESULT_NULL_OUTPUT_PARAMETER;
-
-    DWORD          bytes_written = 0;
-    uint64_t       remaining     = size;
-    const uint8_t *src           = (const uint8_t *)data;
-
-    while (remaining > 0) {
-        DWORD chunk = remaining > 0xFFFFFFFFULL ? 0xFFFFFFFFUL : (DWORD)remaining;
-        if (!WriteFile(file->handle, src, chunk, &bytes_written, NULL))
-            return SPUDRESULT_GENERAL_FAILURE;
-        src       += bytes_written;
-        remaining -= bytes_written;
-    }
-    return SPUD_SUCCESS;
+/* The result a GetLastError() value stands for. Whatever has no result of
+ * its own is the platform's failure. */
+static SPUDRESULT sfs_windows_result(DWORD error) {
+	switch (error) {
+	case ERROR_FILE_NOT_FOUND:
+	case ERROR_PATH_NOT_FOUND:
+	case ERROR_INVALID_NAME:
+	case ERROR_BAD_NETPATH:
+		return SPUDRESULT_SFS_NOT_FOUND;
+	case ERROR_FILE_EXISTS:
+	case ERROR_ALREADY_EXISTS:
+		return SPUDRESULT_SFS_ALREADY_EXISTS;
+	case ERROR_ACCESS_DENIED:
+	case ERROR_WRITE_PROTECT:
+		return SPUDRESULT_SFS_ACCESS_DENIED;
+	case ERROR_SHARING_VIOLATION:
+	case ERROR_LOCK_VIOLATION:
+	case ERROR_USER_MAPPED_FILE:
+		return SPUDRESULT_SFS_IN_USE;
+	case ERROR_NOT_SAME_DEVICE:
+		return SPUDRESULT_SFS_DIFFERENT_VOLUME;
+	case ERROR_NOT_ENOUGH_MEMORY:
+	case ERROR_OUTOFMEMORY:
+		return SPUDRESULT_OUT_OF_MEMORY;
+	default:
+		return SPUDRESULT_API_SPECIFIC_FAILURE;
+	}
 }
 
-// --------------------------------------------------------------------------
-// File position / size
-// --------------------------------------------------------------------------
+SPUDRESULT sfs_backend_open(sfs_instance instance, const sfs_open_desc *desc, intptr_t *out_native) {
+	DWORD access = 0;
+	if (desc->access == SFS_ACCESS_READ || desc->access == SFS_ACCESS_READ_WRITE)
+		access |= GENERIC_READ;
+	if (desc->access == SFS_ACCESS_WRITE || desc->access == SFS_ACCESS_READ_WRITE)
+		access |= GENERIC_WRITE;
+	DWORD disposition = 0;
+	switch (desc->create) {
+	case SFS_CREATE_OPEN_EXISTING:
+		disposition = OPEN_EXISTING;
+		break;
+	case SFS_CREATE_NEW:
+		disposition = CREATE_NEW;
+		break;
+	case SFS_CREATE_OPEN_OR_CREATE:
+		disposition = OPEN_ALWAYS;
+		break;
+	case SFS_CREATE_TRUNCATE:
+		disposition = CREATE_ALWAYS;
+		break;
+	default:
+		return SPUDRESULT_DESC_INVALID_PARAMETERS;
+	}
+	DWORD share = 0;
+	if (desc->share & SFS_SHARE_READ)
+		share |= FILE_SHARE_READ;
+	if (desc->share & SFS_SHARE_WRITE)
+		share |= FILE_SHARE_WRITE;
+	if (desc->share & SFS_SHARE_DELETE)
+		share |= FILE_SHARE_DELETE;
 
-SPUDRESULT sfs_file_get_size(sfs_file file, uint64_t *out_size) {
-    if (!file)     return SPUDRESULT_SFS_INVALID_FILE;
-    if (!out_size) return SPUDRESULT_NULL_OUTPUT_PARAMETER;
-
-    LARGE_INTEGER li;
-    if (!GetFileSizeEx(file->handle, &li))
-        return SPUDRESULT_GENERAL_FAILURE;
-
-    *out_size = (uint64_t)li.QuadPart;
-    return SPUD_SUCCESS;
+	wchar_t *path = NULL;
+	int count     = 0;
+	SPUDRESULT result = sfs_windows_wide(instance, desc->path, &path, &count);
+	if (result != SPUD_SUCCESS)
+		return result;
+	HANDLE handle = CreateFileW(path, access, share, NULL, disposition, FILE_ATTRIBUTE_NORMAL, NULL);
+	if (handle == INVALID_HANDLE_VALUE) {
+		const DWORD error = GetLastError();
+		// A directory is refused as access denied.
+		result = error == ERROR_ACCESS_DENIED && sfs_windows_is_directory(path) ? SPUDRESULT_SFS_NOT_A_FILE : sfs_windows_result(error);
+		sfs_windows_free_wide(instance, path, count);
+		return result;
+	}
+	sfs_windows_free_wide(instance, path, count);
+	// A device (CON, a pipe) opens too; a file is what is wanted.
+	if (GetFileType(handle) != FILE_TYPE_DISK) {
+		CloseHandle(handle);
+		return SPUDRESULT_SFS_NOT_A_FILE;
+	}
+	*out_native = (intptr_t)handle;
+	return SPUD_SUCCESS;
 }
 
-SPUDRESULT sfs_file_get_pos(sfs_file file, uint64_t *out_pos) {
-    if (!file)    return SPUDRESULT_SFS_INVALID_FILE;
-    if (!out_pos) return SPUDRESULT_NULL_OUTPUT_PARAMETER;
+void sfs_backend_close(intptr_t native) { CloseHandle((HANDLE)native); }
 
-    LARGE_INTEGER zero = {0};
-    LARGE_INTEGER pos  = {0};
-    if (!SetFilePointerEx(file->handle, zero, &pos, FILE_CURRENT))
-        return SPUDRESULT_GENERAL_FAILURE;
+/* ReadFile and WriteFile take a DWORD count. */
+static const uint64_t SFS_WINDOWS_CHUNK = 1u << 30;
 
-    *out_pos = (uint64_t)pos.QuadPart;
-    return SPUD_SUCCESS;
+SPUDRESULT sfs_backend_read_at(intptr_t native, uint64_t offset, void *buffer, uint64_t size, uint64_t *out_read) {
+	uint8_t *dst   = (uint8_t *)buffer;
+	uint64_t total = 0;
+	while (total < size) {
+		const uint64_t remaining = size - total;
+		const DWORD chunk        = (DWORD)(remaining > SFS_WINDOWS_CHUNK ? SFS_WINDOWS_CHUNK : remaining);
+		const uint64_t at        = offset + total;
+		OVERLAPPED position;
+		ZeroMemory(&position, sizeof(position));
+		position.Offset     = (DWORD)(at & 0xFFFFFFFFu);
+		position.OffsetHigh = (DWORD)(at >> 32);
+		DWORD n             = 0;
+		if (!ReadFile((HANDLE)native, dst + total, chunk, &n, &position)) {
+			if (GetLastError() == ERROR_HANDLE_EOF)
+				break; // at or past the end
+			*out_read = total;
+			return SPUDRESULT_API_SPECIFIC_FAILURE;
+		}
+		if (n == 0)
+			break;
+		total += n;
+	}
+	*out_read = total;
+	return SPUD_SUCCESS;
 }
 
-SPUDRESULT
-sfs_file_set_pos(sfs_file file, uint64_t offset, SFS_FILE_POS_ORIGIN origin) {
-    if (!file) return SPUDRESULT_SFS_INVALID_FILE;
-
-    DWORD move_method;
-    switch (origin) {
-    case SFS_FILE_POS_ORIGIN_START:   move_method = FILE_BEGIN;   break;
-    case SFS_FILE_POS_ORIGIN_CURRENT: move_method = FILE_CURRENT; break;
-    case SFS_FILE_POS_ORIGIN_END:     move_method = FILE_END;     break;
-    default: return SPUDRESULT_DESC_INVALID_PARAMETERS;
-    }
-
-    LARGE_INTEGER li;
-    li.QuadPart = (LONGLONG)offset;
-    if (!SetFilePointerEx(file->handle, li, NULL, move_method))
-        return SPUDRESULT_GENERAL_FAILURE;
-
-    return SPUD_SUCCESS;
+SPUDRESULT sfs_backend_write_at(intptr_t native, uint64_t offset, const void *data, uint64_t size) {
+	const uint8_t *src = (const uint8_t *)data;
+	uint64_t total     = 0;
+	while (total < size) {
+		const uint64_t remaining = size - total;
+		const DWORD chunk        = (DWORD)(remaining > SFS_WINDOWS_CHUNK ? SFS_WINDOWS_CHUNK : remaining);
+		const uint64_t at        = offset + total;
+		OVERLAPPED position;
+		ZeroMemory(&position, sizeof(position));
+		position.Offset     = (DWORD)(at & 0xFFFFFFFFu);
+		position.OffsetHigh = (DWORD)(at >> 32);
+		DWORD n             = 0;
+		if (!WriteFile((HANDLE)native, src + total, chunk, &n, &position) || n == 0)
+			return SPUDRESULT_API_SPECIFIC_FAILURE;
+		total += n;
+	}
+	return SPUD_SUCCESS;
 }
 
-// --------------------------------------------------------------------------
-// Flush / replace / map
-// --------------------------------------------------------------------------
-
-struct sfs_mapping_t {
-    void          *base; // what MapViewOfFile returned - granularity-aligned, before [data]
-    const uint8_t *data;
-    uint64_t       size;
-};
-
-// FlushFileBuffers also flushes the drive's cache, so DEVICE and MEDIA are
-// the same call.
-SPUDRESULT sfs_file_flush(sfs_file file, SFS_FLUSH_LEVEL level) {
-    if (!file) return SPUDRESULT_SFS_INVALID_FILE;
-    if (level != SFS_FLUSH_LEVEL_DEVICE && level != SFS_FLUSH_LEVEL_MEDIA)
-        return SPUDRESULT_DESC_INVALID_PARAMETERS;
-    if (!FlushFileBuffers(file->handle))
-        return SPUDRESULT_GENERAL_FAILURE;
-    return SPUD_SUCCESS;
+SPUDRESULT sfs_backend_get_size(intptr_t native, uint64_t *out_size) {
+	LARGE_INTEGER size;
+	if (!GetFileSizeEx((HANDLE)native, &size))
+		return SPUDRESULT_API_SPECIFIC_FAILURE;
+	*out_size = (uint64_t)size.QuadPart;
+	return SPUD_SUCCESS;
 }
 
-// UTF-8 to a malloc'd UTF-16 string, so paths outside the ANSI code page work.
-static SPUDRESULT sfs_utf8_to_wide(const char *utf8, wchar_t **out_wide) {
-    int count = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, utf8, -1, NULL, 0);
-    if (count <= 0)
-        return SPUDRESULT_DESC_INVALID_PARAMETERS; // not valid UTF-8
-    wchar_t *wide = (wchar_t *)malloc((size_t)count * sizeof(wchar_t));
-    if (!wide)
-        return SPUDRESULT_OUT_OF_MEMORY;
-    MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, utf8, -1, wide, count);
-    *out_wide = wide;
-    return SPUD_SUCCESS;
+SPUDRESULT sfs_backend_set_size(intptr_t native, uint64_t size) {
+	FILE_END_OF_FILE_INFO end;
+	end.EndOfFile.QuadPart = (LONGLONG)size;
+	if (!SetFileInformationByHandle((HANDLE)native, FileEndOfFileInfo, &end, sizeof(end)))
+		return SPUDRESULT_API_SPECIFIC_FAILURE;
+	return SPUD_SUCCESS;
 }
 
-SPUDRESULT sfs_file_replace(const char *source_path, const char *target_path, SFS_FLUSH_LEVEL level) {
-    if (!source_path || source_path[0] == '\0' || !target_path || target_path[0] == '\0')
-        return SPUDRESULT_SFS_NULL_PATH;
-    if (level != SFS_FLUSH_LEVEL_NONE && level != SFS_FLUSH_LEVEL_DEVICE && level != SFS_FLUSH_LEVEL_MEDIA)
-        return SPUDRESULT_DESC_INVALID_PARAMETERS;
-
-    wchar_t   *source = NULL;
-    wchar_t   *target = NULL;
-    SPUDRESULT result = sfs_utf8_to_wide(source_path, &source);
-    if (result == SPUD_SUCCESS)
-        result = sfs_utf8_to_wide(target_path, &target);
-
-    if (result == SPUD_SUCCESS) {
-        DWORD flags = MOVEFILE_REPLACE_EXISTING;
-        if (level != SFS_FLUSH_LEVEL_NONE)
-            flags |= MOVEFILE_WRITE_THROUGH;
-        if (!MoveFileExW(source, target, flags)) {
-            switch (GetLastError()) {
-            case ERROR_NOT_SAME_DEVICE:
-                result = SPUDRESULT_SFS_DIFFERENT_VOLUME;
-                break;
-            // A target that's open without FILE_SHARE_DELETE or mapped is
-            // reported as a sharing violation or as access denied.
-            case ERROR_SHARING_VIOLATION:
-            case ERROR_USER_MAPPED_FILE:
-            case ERROR_ACCESS_DENIED:
-                result = SPUDRESULT_SFS_IN_USE;
-                break;
-            default:
-                result = SPUDRESULT_GENERAL_FAILURE;
-                break;
-            }
-        }
-    }
-    free(source);
-    free(target);
-    return result;
+SPUDRESULT sfs_backend_flush(intptr_t native, SFS_FLUSH_LEVEL level) {
+	// FlushFileBuffers reaches the media on Windows: DEVICE and MEDIA alike.
+	(void)level;
+	return FlushFileBuffers((HANDLE)native) ? SPUD_SUCCESS : SPUDRESULT_API_SPECIFIC_FAILURE;
 }
 
-SPUDRESULT sfs_file_remove(const char *file_path) {
-    if (!file_path || file_path[0] == '\0')
-        return SPUDRESULT_SFS_NULL_PATH;
+SPUDRESULT sfs_backend_map(intptr_t native, uint64_t offset, uint64_t size, void **out_base, uint64_t *out_base_size, uint64_t *out_lead) {
+	// View offsets must be multiples of the allocation granularity (64 KiB),
+	// not just the page size: map from the granule holding [offset].
+	SYSTEM_INFO info;
+	GetSystemInfo(&info);
+	const uint64_t granularity = info.dwAllocationGranularity;
+	const uint64_t aligned     = offset - offset % granularity;
+	const uint64_t lead        = offset - aligned;
+	if (size > (uint64_t)SIZE_MAX - lead)
+		return SPUDRESULT_INDEX_OUT_OF_RANGE; // more than the address space
 
-    wchar_t   *path   = NULL;
-    SPUDRESULT result = sfs_utf8_to_wide(file_path, &path);
-    if (result != SPUD_SUCCESS)
-        return result;
-    if (!DeleteFileW(path)) {
-        switch (GetLastError()) {
-        case ERROR_FILE_NOT_FOUND:
-        case ERROR_PATH_NOT_FOUND:
-            result = SPUDRESULT_SFS_INVALID_FILE;
-            break;
-        // An open or mapped file, a read-only one, or a directory.
-        case ERROR_SHARING_VIOLATION:
-        case ERROR_USER_MAPPED_FILE:
-        case ERROR_ACCESS_DENIED:
-            result = SPUDRESULT_SFS_IN_USE;
-            break;
-        default:
-            result = SPUDRESULT_GENERAL_FAILURE;
-            break;
-        }
-    }
-    free(path);
-    return result;
+	HANDLE section = CreateFileMappingW((HANDLE)native, NULL, PAGE_READONLY, 0, 0, NULL);
+	if (!section)
+		return sfs_windows_result(GetLastError());
+	void *base = MapViewOfFile(section, FILE_MAP_READ, (DWORD)(aligned >> 32), (DWORD)(aligned & 0xFFFFFFFFu), (SIZE_T)(lead + size));
+	// The view keeps the section, and through it the file, alive on its own.
+	const DWORD error = base ? 0 : GetLastError();
+	CloseHandle(section);
+	if (!base)
+		return sfs_windows_result(error);
+	*out_base      = base;
+	*out_base_size = lead + size;
+	*out_lead      = lead;
+	return SPUD_SUCCESS;
 }
 
-SPUDRESULT sfs_file_map(sfs_file file, uint64_t offset, uint64_t size, sfs_mapping *out_mapping) {
-    if (!out_mapping) return SPUDRESULT_NULL_OUTPUT_PARAMETER;
-    *out_mapping = NULL;
-    if (!file)     return SPUDRESULT_SFS_INVALID_FILE;
-    if (size == 0) return SPUDRESULT_ZERO_SIZE;
-
-    LARGE_INTEGER file_size;
-    if (!GetFileSizeEx(file->handle, &file_size))
-        return SPUDRESULT_GENERAL_FAILURE;
-    if (offset > (uint64_t)file_size.QuadPart || size > (uint64_t)file_size.QuadPart - offset)
-        return SPUDRESULT_INDEX_OUT_OF_RANGE;
-
-    // View offsets must be multiples of the allocation granularity (64 KiB),
-    // not just the page size: map from the granule holding [offset].
-    SYSTEM_INFO info;
-    GetSystemInfo(&info);
-    uint64_t granularity = info.dwAllocationGranularity;
-    uint64_t aligned     = offset - offset % granularity;
-    uint64_t lead        = offset - aligned;
-    if (size > (uint64_t)SIZE_MAX - lead)
-        return SPUDRESULT_INDEX_OUT_OF_RANGE; // more than the address space
-
-    HANDLE section = CreateFileMappingW(file->handle, NULL, PAGE_READONLY, 0, 0, NULL);
-    if (!section)
-        return GetLastError() == ERROR_ACCESS_DENIED ? SPUDRESULT_SFS_NOT_READABLE : SPUDRESULT_GENERAL_FAILURE;
-
-    void *base = MapViewOfFile(
-        section, FILE_MAP_READ, (DWORD)(aligned >> 32), (DWORD)(aligned & 0xFFFFFFFFULL), (SIZE_T)(lead + size));
-    // The view keeps the section, and through it the file, alive on its own.
-    CloseHandle(section);
-    if (!base)
-        return GetLastError() == ERROR_NOT_ENOUGH_MEMORY ? SPUDRESULT_OUT_OF_MEMORY : SPUDRESULT_GENERAL_FAILURE;
-
-    struct sfs_mapping_t *m = (struct sfs_mapping_t *)malloc(sizeof(struct sfs_mapping_t));
-    if (!m) {
-        UnmapViewOfFile(base);
-        return SPUDRESULT_OUT_OF_MEMORY;
-    }
-    m->base      = base;
-    m->data      = (const uint8_t *)base + lead;
-    m->size      = size;
-    *out_mapping = m;
-    return SPUD_SUCCESS;
+void sfs_backend_unmap(void *base, uint64_t base_size) {
+	(void)base_size;
+	UnmapViewOfFile(base);
 }
 
-const void *sfs_mapping_get_data(sfs_mapping mapping) {
-    return mapping ? mapping->data : NULL;
+/* Nanoseconds since 1970 from a FILETIME's 100 ns since 1601. */
+static int64_t sfs_windows_unix_ns(FILETIME time) {
+	const uint64_t ticks = ((uint64_t)time.dwHighDateTime << 32) | time.dwLowDateTime;
+	return ((int64_t)ticks - 116444736000000000LL) * 100;
 }
 
-uint64_t sfs_mapping_get_size(sfs_mapping mapping) {
-    return mapping ? mapping->size : 0;
+SPUDRESULT sfs_backend_path_get_info(sfs_instance instance, const char *path, SFS_PATH_INFO *out_info) {
+	wchar_t *wide     = NULL;
+	int count         = 0;
+	SPUDRESULT result = sfs_windows_wide(instance, path, &wide, &count);
+	if (result != SPUD_SUCCESS)
+		return result;
+	// Opened for nothing but its attributes, with backup semantics so that a
+	// directory opens too; a symbolic link is followed, as stat follows it.
+	HANDLE handle = CreateFileW(wide, FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING,
+	                            FILE_FLAG_BACKUP_SEMANTICS, NULL);
+	const DWORD error = handle == INVALID_HANDLE_VALUE ? GetLastError() : 0;
+	sfs_windows_free_wide(instance, wide, count);
+	if (handle == INVALID_HANDLE_VALUE)
+		return sfs_windows_result(error);
+	BY_HANDLE_FILE_INFORMATION information;
+	if (!GetFileInformationByHandle(handle, &information)) {
+		CloseHandle(handle);
+		return SPUDRESULT_API_SPECIFIC_FAILURE;
+	}
+	const DWORD type = GetFileType(handle);
+	CloseHandle(handle);
+	if (information.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+		out_info->kind = SFS_PATH_KIND_DIRECTORY;
+		out_info->size = 0;
+	} else if (type == FILE_TYPE_DISK) {
+		out_info->kind = SFS_PATH_KIND_FILE;
+		out_info->size = ((uint64_t)information.nFileSizeHigh << 32) | information.nFileSizeLow;
+	} else {
+		out_info->kind = SFS_PATH_KIND_OTHER;
+		out_info->size = 0;
+	}
+	out_info->modified_ns = sfs_windows_unix_ns(information.ftLastWriteTime);
+	return SPUD_SUCCESS;
 }
 
-SPUDRESULT sfs_mapping_release(sfs_mapping mapping) {
-    if (!mapping) return SPUDRESULT_SFS_INVALID_MAPPING;
-    UnmapViewOfFile(mapping->base);
-    free(mapping);
-    return SPUD_SUCCESS;
+SPUDRESULT sfs_backend_path_replace(sfs_instance instance, const char *source, const char *target, SFS_FLUSH_LEVEL level) {
+	wchar_t *wide_source = NULL;
+	wchar_t *wide_target = NULL;
+	int source_count     = 0;
+	int target_count     = 0;
+	SPUDRESULT result    = sfs_windows_wide(instance, source, &wide_source, &source_count);
+	if (result == SPUD_SUCCESS)
+		result = sfs_windows_wide(instance, target, &wide_target, &target_count);
+	if (result == SPUD_SUCCESS) {
+		DWORD flags = MOVEFILE_REPLACE_EXISTING;
+		if (level != SFS_FLUSH_LEVEL_NONE)
+			flags |= MOVEFILE_WRITE_THROUGH;
+		if (!MoveFileExW(wide_source, wide_target, flags)) {
+			const DWORD error = GetLastError();
+			// A target open without FILE_SHARE_DELETE, mapped or read-only is
+			// reported as access denied; a directory target the same way.
+			if (error == ERROR_ACCESS_DENIED)
+				result = sfs_windows_is_directory(wide_target) ? SPUDRESULT_SFS_NOT_A_FILE : SPUDRESULT_SFS_IN_USE;
+			else
+				result = sfs_windows_result(error);
+		}
+	}
+	sfs_windows_free_wide(instance, wide_source, source_count);
+	sfs_windows_free_wide(instance, wide_target, target_count);
+	return result;
 }
 
-// --------------------------------------------------------------------------
-// File / directory queries
-// --------------------------------------------------------------------------
-
-bool sfs_file_exists(const char *file_path) {
-    if (!file_path || file_path[0] == '\0') return false;
-    DWORD attribs = GetFileAttributesA(file_path);
-    return attribs != INVALID_FILE_ATTRIBUTES &&
-           !(attribs & FILE_ATTRIBUTE_DIRECTORY);
+SPUDRESULT sfs_backend_path_remove(sfs_instance instance, const char *path) {
+	wchar_t *wide     = NULL;
+	int count         = 0;
+	SPUDRESULT result = sfs_windows_wide(instance, path, &wide, &count);
+	if (result != SPUD_SUCCESS)
+		return result;
+	if (!DeleteFileW(wide)) {
+		const DWORD error = GetLastError();
+		// An open or mapped file, a read-only one, or a directory: access
+		// denied for all of them, told apart by what is there.
+		if (error == ERROR_ACCESS_DENIED)
+			result = sfs_windows_is_directory(wide) ? SPUDRESULT_SFS_NOT_A_FILE : SPUDRESULT_SFS_IN_USE;
+		else
+			result = sfs_windows_result(error);
+	}
+	sfs_windows_free_wide(instance, wide, count);
+	return result;
 }
 
-bool sfs_directory_exists(const char *dir_path) {
-    if (!dir_path || dir_path[0] == '\0') return false;
-    DWORD attribs = GetFileAttributesA(dir_path);
-    return attribs != INVALID_FILE_ATTRIBUTES &&
-           (attribs & FILE_ATTRIBUTE_DIRECTORY);
+SPUDRESULT sfs_backend_directory_create(sfs_instance instance, const char *path) {
+	wchar_t *wide     = NULL;
+	int count         = 0;
+	SPUDRESULT result = sfs_windows_wide(instance, path, &wide, &count);
+	if (result != SPUD_SUCCESS)
+		return result;
+	if (!CreateDirectoryW(wide, NULL))
+		result = sfs_windows_result(GetLastError());
+	sfs_windows_free_wide(instance, wide, count);
+	return result;
 }
-
-SPUDRESULT sfs_set_working_directory(const char *dir) {
-    if (!dir || dir[0] == '\0') return SPUDRESULT_SFS_NULL_PATH;
-    if (!SetCurrentDirectoryA(dir)) return SPUDRESULT_GENERAL_FAILURE;
-    return SPUD_SUCCESS;
-}
-
-const char *sfs_get_working_directory() {
-    static char buf[MAX_PATH];
-    if (!GetCurrentDirectoryA(MAX_PATH, buf)) return NULL;
-    return buf;
-}
-
-// --------------------------------------------------------------------------
-// Directory creation
-// --------------------------------------------------------------------------
-
-SPUDRESULT sfs_create_directory(const char *path) {
-    if (path == NULL || path[0] == '\0')
-        return SPUDRESULT_SFS_NULL_PATH;
-
-    char dir_path[MAX_PATH];
-    strncpy(dir_path, path, MAX_PATH - 1);
-    dir_path[MAX_PATH - 1] = '\0';
-
-    // normalize slashes
-    char *dp = dir_path;
-    sfs_correct_slashes(&dp, SFS_SLASH);
-
-    char *search   = dir_path;
-    char *slash_pos;
-
-    do {
-        slash_pos = strchr(search, SFS_SLASH);
-
-        char parent[MAX_PATH];
-        if (slash_pos != NULL) {
-            uint64_t len = (uint64_t)(slash_pos - dir_path);
-            strncpy(parent, dir_path, len);
-            parent[len] = '\0';
-            search      = slash_pos + 1;
-        } else {
-            strncpy(parent, dir_path, MAX_PATH - 1);
-            parent[MAX_PATH - 1] = '\0';
-        }
-
-        // skip drive letters like "C:"
-        uint64_t plen = strlen(parent);
-        if (plen > 0 && parent[plen - 1] == ':')
-            continue;
-        if (plen == 0)
-            continue;
-
-        if (!PathFileExistsA(parent)) {
-            if (!CreateDirectoryA(parent, NULL)) {
-                DWORD err = GetLastError();
-                if (err != ERROR_ALREADY_EXISTS)
-                    return SPUDRESULT_GENERAL_FAILURE;
-                if ((GetFileAttributesA(parent) & FILE_ATTRIBUTE_DIRECTORY) == 0)
-                    return SPUDRESULT_GENERAL_FAILURE;
-            }
-        }
-    } while (slash_pos != NULL);
-
-    return SPUD_SUCCESS;
-}
-
-// --------------------------------------------------------------------------
-// File dialogs
-// --------------------------------------------------------------------------
-
-static DWORD FileDialogFlagsToOFNFlags(SFS_FILE_DIALOG_FLAGS FileDialogFlags) {
-    DWORD OFNFlags = 0;
-    while (FileDialogFlags != SFS_FILE_DIALOG_FLAG_NONE) {
-        uint32_t Flag = FileDialogFlags & ~(FileDialogFlags - 1);
-        switch (Flag) {
-        case SFS_FILE_DIALOG_FLAG_DONT_ADD_TO_RECENT:
-            OFNFlags |= OFN_DONTADDTORECENT;
-            break;
-        case SFS_FILE_DIALOG_FLAG_FILE_MUST_EXIST:
-            OFNFlags |= OFN_FILEMUSTEXIST;
-            break;
-        case SFS_FILE_DIALOG_FLAG_NO_CHANGE_DIR:
-            OFNFlags |= OFN_NOCHANGEDIR;
-            break;
-        case SFS_FILE_DIALOG_FLAG_OVERWRITE_PROMPT:
-            OFNFlags |= OFN_OVERWRITEPROMPT;
-            break;
-        default:
-            return 0;
-        }
-        FileDialogFlags &= ~Flag;
-    }
-    return OFNFlags;
-}
-
-const char *sfs_file_dialog(SFS_FILE_DIALOG_ATTRIBUTES attributes) {
-    static char buffer[1024];
-
-    OPENFILENAMEA ofn = {0};
-    ofn.lStructSize   = sizeof(ofn);
-    ofn.lpstrFilter   = attributes.filter;
-    ofn.lpstrFile     = buffer;
-    ofn.nMaxFile      = _countof(buffer);
-    ofn.lpstrTitle    = attributes.title;
-    ofn.Flags         = FileDialogFlagsToOFNFlags(attributes.flags);
-
-    buffer[0] = '\0';
-
-    if (attributes.type == SFS_FILE_DIALOG_TYPE_OPEN ? GetOpenFileNameA(&ofn)
-                                                     : GetSaveFileNameA(&ofn)) {
-        return buffer;
-    }
-    return NULL;
-}
-
-const char *sfs_open_folder_dialog(const char *title) {
-#if defined(__MINGW64__) || defined(__MINGW32__)
-    (void)title;
-    return "";
-#else
-    static char result[MAX_PATH * 4];
-
-    if (title == NULL)
-        title = "Select Folder";
-
-    IFileOpenDialog *pDialog = NULL;
-    HRESULT hr = CoCreateInstance(
-        &CLSID_FileOpenDialog, NULL, CLSCTX_ALL, &IID_IFileOpenDialog,
-        (void **)&pDialog);
-    if (FAILED(hr))
-        return "";
-
-    DWORD dwOptions = 0;
-    if (SUCCEEDED(pDialog->lpVtbl->GetOptions(pDialog, &dwOptions)))
-        pDialog->lpVtbl->SetOptions(
-            pDialog, dwOptions | FOS_PICKFOLDERS | FOS_NOCHANGEDIR);
-
-    WCHAR wTitle[512];
-    MultiByteToWideChar(CP_UTF8, 0, title, -1, wTitle, 512);
-    pDialog->lpVtbl->SetTitle(pDialog, wTitle);
-
-    hr = pDialog->lpVtbl->Show(pDialog, NULL);
-    if (FAILED(hr)) {
-        pDialog->lpVtbl->Release(pDialog);
-        return "";
-    }
-
-    IShellItem *pItem = NULL;
-    hr                = pDialog->lpVtbl->GetResult(pDialog, &pItem);
-    pDialog->lpVtbl->Release(pDialog);
-    if (FAILED(hr))
-        return "";
-
-    PWSTR pszFilePath = NULL;
-    hr = pItem->lpVtbl->GetDisplayName(pItem, SIGDN_FILESYSPATH, &pszFilePath);
-    pItem->lpVtbl->Release(pItem);
-    if (FAILED(hr))
-        return "";
-
-    WideCharToMultiByte(
-        CP_UTF8, 0, pszFilePath, -1, result, sizeof(result), NULL, NULL);
-    CoTaskMemFree(pszFilePath);
-
-    return result;
-#endif
-}
-
-#if __cplusplus
-}
-#endif
 
 #endif // SPUDLIB_PLATFORM_WIN32
