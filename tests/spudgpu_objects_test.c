@@ -8,6 +8,15 @@
  * Each with its argument checks. Every block of the instance goes through a
  * counting allocator, checked at the end.
  *
+ * Then, on a second device of the same adapter made with
+ * SPUDGPU_FEATURE_PRESENT where it has it: the present scaling checks of
+ * spudgpu_get_surface_present_scalings and spudgpu_create_swap_chain that
+ * come before a surface is read, given a surface handle that is never
+ * dereferenced. On Metal, where a surface is a CAMetalLayer and needs no
+ * window, also the query's answer, a swap chain of each scaling, the gravity
+ * each sets on the layer (a flipped layer's included) and the scaling read
+ * back from the swap chain's desc.
+ *
  * Not here, because they can't run without a window or on every backend:
  * spudgpu_create_surface_from_callback (a window), and the storage-buffer and
  * storage-image bindless calls and spudgpu_cmd_bind_bindless_resources_compute
@@ -24,6 +33,10 @@
 
 #include <stdio.h>
 #include <string.h>
+
+#if SPUDGPU_COMPILE_METAL_API
+#include "spudgpu_test_metal_layer.h"
+#endif
 
 #define SKIPPED 77
 
@@ -209,6 +222,116 @@ static void test_descriptor_pool_reset(spudgpu_device device) {
 	spudgpu_destroy_descriptor_set_layout(layout);
 }
 
+// A swap chain desc with every field but the scaling set to what any
+// backend takes; the queue is the device's first direct one.
+static spudgpu_swap_chain_desc swap_chain_desc_for(spudgpu_device device, spudgpu_surface surface, SPUDGPU_PRESENT_SCALING scaling) {
+	spudgpu_swap_chain_desc desc;
+	memset(&desc, 0, sizeof(desc));
+	desc.base.type = SPUD_STRUCT_TYPE_GPU_SWAP_CHAIN_DESC;
+	desc.surface   = surface;
+	spudgpu_get_command_queue(device, SPUDGPU_COMMAND_LIST_TYPE_DIRECT, 0, &desc.queue);
+	desc.width           = 64;
+	desc.height          = 64;
+	desc.buffer_count    = 1;
+	desc.format          = SPUDGPU_FORMAT_B8G8R8A8_UNORM;
+	desc.present_mode    = SPUDGPU_PRESENT_MODE_FIFO;
+	desc.present_scaling = scaling;
+	desc.fullscreen_mode = SPUDGPU_FULLSCREEN_MODE_WINDOWED;
+	return desc;
+}
+
+// A device made without SPUDGPU_FEATURE_PRESENT: both calls refuse it, after
+// their argument checks.
+static void test_present_scaling_without_present(spudgpu_device device) {
+	static int not_a_surface;
+	spudgpu_surface surface = (spudgpu_surface)(void *)&not_a_surface;
+	uint32_t scalings       = 0;
+	CHECK(spudgpu_get_surface_present_scalings(device, surface, &scalings) == SPUDRESULT_GPU_FEATURE_NOT_SUPPORTED);
+	spudgpu_swap_chain_desc desc = swap_chain_desc_for(device, surface, SPUDGPU_PRESENT_SCALING_NONE);
+	spudgpu_swap_chain swap_chain = NULL;
+	// The feature is checked before the scaling.
+	CHECK(spudgpu_create_swap_chain(device, &desc, &swap_chain) == SPUDRESULT_GPU_FEATURE_NOT_SUPPORTED);
+	CHECK(swap_chain == NULL);
+}
+
+// [device] has SPUDGPU_FEATURE_PRESENT. Every check here comes before the
+// surface is read, so the surface handle is a pointer to nothing SpudGPU
+// knows, never dereferenced.
+static void test_present_scaling_checks(spudgpu_device device) {
+	static int not_a_surface;
+	spudgpu_surface surface = (spudgpu_surface)(void *)&not_a_surface;
+	uint32_t scalings       = 0xdeadu;
+	CHECK(spudgpu_get_surface_present_scalings(NULL, surface, &scalings) == SPUDRESULT_GPU_INVALID_DEVICE);
+	CHECK(spudgpu_get_surface_present_scalings(device, NULL, &scalings) == SPUDRESULT_GPU_INVALID_SURFACE);
+	CHECK(spudgpu_get_surface_present_scalings(device, surface, NULL) == SPUDRESULT_NULL_OUTPUT_PARAMETER);
+	CHECK(spudgpu_get_surface_present_scalings(device, NULL, NULL) == SPUDRESULT_GPU_INVALID_SURFACE);
+	CHECK(scalings == 0xdeadu);
+
+	spudgpu_swap_chain swap_chain = NULL;
+	spudgpu_swap_chain_desc desc  = swap_chain_desc_for(device, surface, SPUDGPU_PRESENT_SCALING_NONE);
+	CHECK(desc.queue != NULL);
+	CHECK(spudgpu_create_swap_chain(NULL, &desc, &swap_chain) == SPUDRESULT_GPU_INVALID_DEVICE);
+	// A zeroed desc has not chosen.
+	CHECK(spudgpu_create_swap_chain(device, &desc, &swap_chain) == SPUDRESULT_GPU_INVALID_PRESENT_SCALING);
+	// Exactly one value, and only a value the enum has.
+	desc.present_scaling = SPUDGPU_PRESENT_SCALING_ONE_TO_ONE | SPUDGPU_PRESENT_SCALING_STRETCH;
+	CHECK(spudgpu_create_swap_chain(device, &desc, &swap_chain) == SPUDRESULT_GPU_INVALID_PRESENT_SCALING);
+	desc.present_scaling = SPUDGPU_PRESENT_SCALING_ASPECT_FIT << 1;
+	CHECK(spudgpu_create_swap_chain(device, &desc, &swap_chain) == SPUDRESULT_GPU_INVALID_PRESENT_SCALING);
+	desc.present_scaling = 0xffffffffu;
+	CHECK(spudgpu_create_swap_chain(device, &desc, &swap_chain) == SPUDRESULT_GPU_INVALID_PRESENT_SCALING);
+	// The checks before it come first: the output, the surface, the queue.
+	desc.present_scaling = SPUDGPU_PRESENT_SCALING_NONE;
+	CHECK(spudgpu_create_swap_chain(device, &desc, NULL) == SPUDRESULT_NULL_OUTPUT_PARAMETER);
+	desc.surface = NULL;
+	CHECK(spudgpu_create_swap_chain(device, &desc, &swap_chain) == SPUDRESULT_GPU_INVALID_SURFACE);
+	desc.surface = surface;
+	desc.queue   = NULL;
+	CHECK(spudgpu_create_swap_chain(device, &desc, &swap_chain) == SPUDRESULT_GPU_INVALID_COMMAND_QUEUE);
+	CHECK(swap_chain == NULL);
+
+	CHECK(strcmp(spudresult_str(SPUDRESULT_GPU_INVALID_PRESENT_SCALING), "SPUDRESULT_GPU_INVALID_PRESENT_SCALING") == 0);
+	CHECK(strcmp(spudresult_str(SPUDRESULT_GPU_PRESENT_SCALING_NOT_SUPPORTED), "SPUDRESULT_GPU_PRESENT_SCALING_NOT_SUPPORTED") == 0);
+}
+
+#if SPUDGPU_COMPILE_METAL_API
+// A swap chain of [scaling] on a layer, which sets the layer's gravity to
+// [gravity] and reads its scaling back.
+static void check_metal_swap_chain(spudgpu_device device, spudgpu_surface surface, void *layer, SPUDGPU_PRESENT_SCALING scaling, const char *gravity) {
+	spudgpu_test_metal_layer_set_gravity_other(layer);
+	spudgpu_swap_chain_desc desc  = swap_chain_desc_for(device, surface, scaling);
+	spudgpu_swap_chain swap_chain = NULL;
+	CHECK(spudgpu_create_swap_chain(device, &desc, &swap_chain) == SPUD_SUCCESS);
+	CHECK(swap_chain != NULL);
+	CHECK(strcmp(spudgpu_test_metal_layer_gravity(layer), gravity) == 0);
+	spudgpu_swap_chain_desc read;
+	memset(&read, 0, sizeof(read));
+	CHECK(spudgpu_get_swap_chain_desc(swap_chain, &read) == SPUD_SUCCESS);
+	CHECK(read.present_scaling == scaling);
+	spudgpu_destroy_swap_chain(swap_chain);
+}
+
+static void test_present_scaling_metal(spudgpu_instance instance, spudgpu_device device) {
+	for (int flipped = 0; flipped < 2; ++flipped) {
+		void *layer             = spudgpu_test_metal_layer_create(flipped != 0);
+		spudgpu_surface surface = NULL;
+		CHECK(spudgpu_create_surface(instance, layer, NULL, &surface) == SPUD_SUCCESS);
+		if (surface) {
+			uint32_t scalings = 0;
+			CHECK(spudgpu_get_surface_present_scalings(device, surface, &scalings) == SPUD_SUCCESS);
+			CHECK(scalings == (SPUDGPU_PRESENT_SCALING_ONE_TO_ONE | SPUDGPU_PRESENT_SCALING_STRETCH | SPUDGPU_PRESENT_SCALING_ASPECT_FIT));
+			// Top left on screen: a flipped layer's contents put the y axis
+			// the other way up.
+			check_metal_swap_chain(device, surface, layer, SPUDGPU_PRESENT_SCALING_ONE_TO_ONE, flipped ? "bottomLeft" : "topLeft");
+			check_metal_swap_chain(device, surface, layer, SPUDGPU_PRESENT_SCALING_STRETCH, "resize");
+			check_metal_swap_chain(device, surface, layer, SPUDGPU_PRESENT_SCALING_ASPECT_FIT, "resizeAspect");
+			spudgpu_destroy_surface(surface);
+		}
+		spudgpu_test_metal_layer_destroy(layer);
+	}
+}
+#endif
+
 int main(void) {
 	test_format_from_string();
 
@@ -249,7 +372,28 @@ int main(void) {
 		test_buffer_and_view(device);
 		test_heap_desc(device);
 		test_descriptor_pool_reset(device);
+		test_present_scaling_without_present(device);
 		spudgpu_destroy_device(device);
+	}
+
+	SPUDGPU_ADAPTER_PROPERTIES properties;
+	memset(&properties, 0, sizeof(properties));
+	properties.base.type = SPUD_STRUCT_TYPE_GPU_ADAPTER_PROPERTIES;
+	CHECK(spudgpu_get_adapter_properties(adapters[0], &properties) == SPUD_SUCCESS);
+	if (properties.supported_features & SPUDGPU_FEATURE_PRESENT) {
+		device_desc.required_features = SPUDGPU_FEATURE_PRESENT;
+		device_desc.debug_name        = "spudgpu_objects_test present";
+		spudgpu_device present_device = NULL;
+		CHECK(spudgpu_create_device(adapters[0], &device_desc, &present_device) == SPUD_SUCCESS);
+		if (present_device) {
+			test_present_scaling_checks(present_device);
+#if SPUDGPU_COMPILE_METAL_API
+			test_present_scaling_metal(instance, present_device);
+#endif
+			spudgpu_destroy_device(present_device);
+		}
+	} else {
+		printf("spudgpu_objects_test: adapter 0 can't present, present scaling checks skipped\n");
 	}
 	spudgpu_destroy_instance(instance);
 	CHECK(spudtest_allocator_clean(&tracker));

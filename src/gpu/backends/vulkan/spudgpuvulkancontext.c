@@ -195,8 +195,16 @@ static bool spudgpuvulkan__instance_extension_available(const SPUD_ALLOCATOR *al
     return found;
 }
 
-// The instance extensions, into [names] (room for 4), and their count.
-static void spudgpuvulkan__determine_vulkan_extensions(const SPUD_ALLOCATOR *allocator, VkInstanceCreateInfo *pOutput, const char **names) {
+// The instance extensions, into [names] (room for 8), and their count.
+// [*out_surface_maintenance1_khr] and [_ext] say which of those two went in.
+static void spudgpuvulkan__determine_vulkan_extensions(
+    const SPUD_ALLOCATOR *allocator,
+    VkInstanceCreateInfo *pOutput,
+    const char **names,
+    bool *out_surface_maintenance1_khr,
+    bool *out_surface_maintenance1_ext) {
+    *out_surface_maintenance1_khr = false;
+    *out_surface_maintenance1_ext = false;
     if (!pOutput) return;
     uint32_t count = 0;
 #if defined(_WIN32)
@@ -214,6 +222,23 @@ static void spudgpuvulkan__determine_vulkan_extensions(const SPUD_ALLOCATOR *all
     // read by tools, and enabled wherever the loader has them.
     if (spudgpuvulkan__instance_extension_available(allocator, VK_EXT_DEBUG_UTILS_EXTENSION_NAME))
         names[count++] = VK_EXT_DEBUG_UTILS_EXTENSION_NAME;
+    // The surface half of a device's VK_KHR_swapchain_maintenance1 (or its
+    // EXT original, which some drivers still list alone), for present
+    // scaling: both where the loader has them, so that an adapter with
+    // either device extension can enable it. Each needs
+    // VK_KHR_get_surface_capabilities2.
+    if (spudgpuvulkan__instance_extension_available(allocator, VK_KHR_GET_SURFACE_CAPABILITIES_2_EXTENSION_NAME)) {
+        const bool khr = spudgpuvulkan__instance_extension_available(allocator, VK_KHR_SURFACE_MAINTENANCE_1_EXTENSION_NAME);
+        const bool ext = spudgpuvulkan__instance_extension_available(allocator, VK_EXT_SURFACE_MAINTENANCE_1_EXTENSION_NAME);
+        if (khr || ext)
+            names[count++] = VK_KHR_GET_SURFACE_CAPABILITIES_2_EXTENSION_NAME;
+        if (khr)
+            names[count++] = VK_KHR_SURFACE_MAINTENANCE_1_EXTENSION_NAME;
+        if (ext)
+            names[count++] = VK_EXT_SURFACE_MAINTENANCE_1_EXTENSION_NAME;
+        *out_surface_maintenance1_khr = khr;
+        *out_surface_maintenance1_ext = ext;
+    }
     pOutput->enabledExtensionCount   = count;
     pOutput->ppEnabledExtensionNames = count ? names : NULL;
 }
@@ -310,7 +335,10 @@ static bool spudgpuvulkan___read_queue_families(const SPUD_ALLOCATOR *allocator,
 // Fills in what [adapter] is and can do. False when the GPU can't have a
 // device of this backend (below Vulkan 1.3, or no graphics family), which
 // is then not listed. Creates nothing.
-static bool spudgpuvulkan___read_adapter_facts(const SPUD_ALLOCATOR *allocator, spudgpu_adapter_vulkan *adapter) {
+static bool spudgpuvulkan___read_adapter_facts(
+    const SPUD_ALLOCATOR *allocator,
+    const spudgpu_instance_vulkan *instance,
+    spudgpu_adapter_vulkan *adapter) {
     VkPhysicalDevice physicalDevice        = adapter->_physical_device_vk;
     spudgpu___adapter_facts *facts         = &adapter->_facts;
     SPUDGPU_ADAPTER_PROPERTIES *properties = &facts->properties;
@@ -446,8 +474,30 @@ static bool spudgpuvulkan___read_adapter_facts(const SPUD_ALLOCATOR *allocator, 
     // which every kind has wherever spudgpu_create_buffer can make it.
     features |= SPUDGPU_FEATURE_MAPPABLE_HEAPS;
 
-    if (spudgpuvulkan___device_extension_available(allocator, physicalDevice, VK_KHR_SWAPCHAIN_EXTENSION_NAME))
+    if (spudgpuvulkan___device_extension_available(allocator, physicalDevice, VK_KHR_SWAPCHAIN_EXTENSION_NAME)) {
         features |= SPUDGPU_FEATURE_PRESENT;
+        // Present scaling (spudgpu_get_surface_present_scalings): the KHR
+        // extension, or its EXT original, where the instance has the surface
+        // extension it needs and the driver has swapchainMaintenance1. No
+        // feature bit of its own: what it offers is per surface.
+        const char *maintenance1 = NULL;
+        if (instance->_surface_maintenance1_khr &&
+            spudgpuvulkan___device_extension_available(allocator, physicalDevice, VK_KHR_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME))
+            maintenance1 = VK_KHR_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME;
+        else if (instance->_surface_maintenance1_ext &&
+                 spudgpuvulkan___device_extension_available(allocator, physicalDevice, VK_EXT_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME))
+            maintenance1 = VK_EXT_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME;
+        if (maintenance1) {
+            VkPhysicalDeviceSwapchainMaintenance1FeaturesKHR maintenance1Features = {0};
+            maintenance1Features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SWAPCHAIN_MAINTENANCE_1_FEATURES_KHR;
+            VkPhysicalDeviceFeatures2 maintenance1Features2 = {0};
+            maintenance1Features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+            maintenance1Features2.pNext = &maintenance1Features;
+            vkGetPhysicalDeviceFeatures2(physicalDevice, &maintenance1Features2);
+            if (maintenance1Features.swapchainMaintenance1)
+                adapter->_swapchain_maintenance1_extension = maintenance1;
+        }
+    }
 
     // VK_EXT_mesh_shader: the extension being listed doesn't by itself mean
     // the driver has meshShader, so the feature bit is read too.
@@ -529,7 +579,7 @@ static SPUDRESULT spudgpuvulkan___list_adapters(spudgpu_instance_vulkan *instanc
         adapter->head.allocator      = instance->head.allocator;
         adapter->_physical_device_vk = physicalDevices[i];
         atomic_init(&adapter->_in_use, false);
-        if (!spudgpuvulkan___read_adapter_facts(allocator, adapter)) {
+        if (!spudgpuvulkan___read_adapter_facts(allocator, instance, adapter)) {
             SPUD_DELETE(allocator, spudgpu_adapter_vulkan, adapter);
             continue;
         }
@@ -581,8 +631,10 @@ SPUDRESULT spudgpu_create_instance(
     createInfo.pNext = NULL;
     createInfo.flags = 0;
     createInfo.pApplicationInfo = &appInfo;
-    const char *extensionNames[4] = {0};
-    spudgpuvulkan__determine_vulkan_extensions(allocator, &createInfo, extensionNames);
+    const char *extensionNames[8] = {0};
+    bool surfaceMaintenance1Khr = false;
+    bool surfaceMaintenance1Ext = false;
+    spudgpuvulkan__determine_vulkan_extensions(allocator, &createInfo, extensionNames, &surfaceMaintenance1Khr, &surfaceMaintenance1Ext);
 
     createInfo.enabledLayerCount = 0;
     createInfo.ppEnabledLayerNames = NULL;
@@ -616,6 +668,16 @@ SPUDRESULT spudgpu_create_instance(
     if (vkCreateInstance(&createInfo, NULL, &instance->_instance_vk) != VK_SUCCESS) {
         SPUD_DELETE(allocator, spudgpu_instance_vulkan, instance);
         return SPUDRESULT_API_SPECIFIC_FAILURE;
+    }
+    // Before the adapters are listed: they, and every device and surface
+    // made later (each keeps a copy of this struct), read these.
+    if (surfaceMaintenance1Khr || surfaceMaintenance1Ext) {
+        instance->_vkGetPhysicalDeviceSurfaceCapabilities2KHR = (PFN_vkGetPhysicalDeviceSurfaceCapabilities2KHR)
+            vkGetInstanceProcAddr(instance->_instance_vk, "vkGetPhysicalDeviceSurfaceCapabilities2KHR");
+        if (instance->_vkGetPhysicalDeviceSurfaceCapabilities2KHR) {
+            instance->_surface_maintenance1_khr = surfaceMaintenance1Khr;
+            instance->_surface_maintenance1_ext = surfaceMaintenance1Ext;
+        }
     }
     const SPUDRESULT list_sr = spudgpuvulkan___list_adapters(instance);
     if (list_sr != SPUD_SUCCESS) {
@@ -803,10 +865,21 @@ static VkResult spudgpuvulkan___create_logical_device(
     vk13Features.dynamicRendering = VK_TRUE;
     vk13Features.synchronization2 = VK_TRUE;
 
-    const char *deviceExtensions[3];
+    const char *deviceExtensions[4];
     uint32_t deviceExtensionCount = 0;
     if (features & SPUDGPU_FEATURE_PRESENT)
         deviceExtensions[deviceExtensionCount++] = VK_KHR_SWAPCHAIN_EXTENSION_NAME;
+    // With PRESENT, the adapter's swapchain_maintenance1 if it has one: it
+    // changes nothing for a swap chain that names no present scaling.
+    VkPhysicalDeviceSwapchainMaintenance1FeaturesKHR maintenance1Features = {0};
+    device->_swapchain_maintenance1 = (features & SPUDGPU_FEATURE_PRESENT) && adapter->_swapchain_maintenance1_extension;
+    if (device->_swapchain_maintenance1) {
+        deviceExtensions[deviceExtensionCount++] = adapter->_swapchain_maintenance1_extension;
+        maintenance1Features.sType                 = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SWAPCHAIN_MAINTENANCE_1_FEATURES_KHR;
+        maintenance1Features.swapchainMaintenance1 = VK_TRUE;
+        maintenance1Features.pNext                 = vk13Features.pNext;
+        vk13Features.pNext                         = &maintenance1Features;
+    }
     if (features & SPUDGPU_FEATURE_LAYERED_RENDERING)
         deviceExtensions[deviceExtensionCount++] = VK_EXT_SHADER_VIEWPORT_INDEX_LAYER_EXTENSION_NAME;
     VkPhysicalDeviceMeshShaderFeaturesEXT meshShaderFeatures = {0};

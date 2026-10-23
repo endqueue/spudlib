@@ -49,22 +49,112 @@ bool spudgpuvulkan___get_available_formats_internal(
 	return true;
 }
 
-// The surface's present modes, as spudgpuvulkan___get_available_formats_internal.
-bool spudgpuvulkan___get_available_present_modes_internal(
-	spudgpu_swap_chain_vulkan *pSwapChain,
+// [surface]'s present modes, made through [allocator]: *ppOutput holds
+// *pOutputCount of them in an array of *pOutputCapacity, the count it is
+// freed with. False if the array can't be made.
+static bool spudgpuvulkan___get_available_present_modes_internal(
+	const SPUD_ALLOCATOR *allocator,
+	VkPhysicalDevice physicalDevice,
+	VkSurfaceKHR surface,
 	VkPresentModeKHR **ppOutput,
 	uint32_t *pOutputCount,
 	uint32_t *pOutputCapacity) {
 	uint32_t presentModeCount = 0;
-	vkGetPhysicalDeviceSurfacePresentModesKHR(pSwapChain->_device._physical_device_vk, pSwapChain->_surface_vk,
-	                                          &presentModeCount, NULL);
-	*ppOutput = SPUD_NEW_ARRAY(&pSwapChain->head.allocator, VkPresentModeKHR, presentModeCount);
+	vkGetPhysicalDeviceSurfacePresentModesKHR(physicalDevice, surface, &presentModeCount, NULL);
+	*ppOutput = SPUD_NEW_ARRAY(allocator, VkPresentModeKHR, presentModeCount);
 	if (!*ppOutput) return false;
 	*pOutputCapacity = presentModeCount;
-	vkGetPhysicalDeviceSurfacePresentModesKHR(pSwapChain->_device._physical_device_vk, pSwapChain->_surface_vk,
-	                                          &presentModeCount, *ppOutput);
+	vkGetPhysicalDeviceSurfacePresentModesKHR(physicalDevice, surface, &presentModeCount, *ppOutput);
 	*pOutputCount = presentModeCount;
 	return true;
+}
+
+// What [surface] offers for scaling a swap chain of [presentMode]
+// (VK_KHR_surface_maintenance1). Only for a device with
+// _swapchain_maintenance1, whose instance has the call loaded.
+static SPUDRESULT spudgpuvulkan___scaling_capabilities_internal(
+	const spudgpu_device_vulkan *device,
+	VkSurfaceKHR surface,
+	VkPresentModeKHR presentMode,
+	VkSurfacePresentScalingCapabilitiesKHR *pOutput) {
+	VkSurfacePresentModeKHR mode = {0};
+	mode.sType = VK_STRUCTURE_TYPE_SURFACE_PRESENT_MODE_KHR;
+	mode.presentMode = presentMode;
+	VkPhysicalDeviceSurfaceInfo2KHR info = {0};
+	info.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SURFACE_INFO_2_KHR;
+	info.pNext = &mode;
+	info.surface = surface;
+	memset(pOutput, 0, sizeof(*pOutput));
+	pOutput->sType = VK_STRUCTURE_TYPE_SURFACE_PRESENT_SCALING_CAPABILITIES_KHR;
+	VkSurfaceCapabilities2KHR capabilities = {0};
+	capabilities.sType = VK_STRUCTURE_TYPE_SURFACE_CAPABILITIES_2_KHR;
+	capabilities.pNext = pOutput;
+	if (device->_instance._vkGetPhysicalDeviceSurfaceCapabilities2KHR(device->_physical_device_vk, &info, &capabilities) != VK_SUCCESS)
+		return SPUDRESULT_API_SPECIFIC_FAILURE;
+	return SPUD_SUCCESS;
+}
+
+// Whether [capabilities] scale one to one from the top left: the
+// ONE_TO_ONE scaling with MIN gravity on both axes.
+static bool spudgpuvulkan___one_to_one_offered_internal(const VkSurfacePresentScalingCapabilitiesKHR *capabilities) {
+	return (capabilities->supportedPresentScaling & VK_PRESENT_SCALING_ONE_TO_ONE_BIT_KHR) &&
+	       (capabilities->supportedPresentGravityX & VK_PRESENT_GRAVITY_MIN_BIT_KHR) &&
+	       (capabilities->supportedPresentGravityY & VK_PRESENT_GRAVITY_MIN_BIT_KHR);
+}
+
+// The SPUDGPU_PRESENT_SCALING bits besides ONE_TO_ONE that [capabilities]
+// keep the header's rule for. STRETCH takes no gravity; ASPECT_FIT is
+// centred on both axes.
+static uint32_t spudgpuvulkan___scalings_offered_internal(const VkSurfacePresentScalingCapabilitiesKHR *capabilities) {
+	uint32_t scalings = 0;
+	if (capabilities->supportedPresentScaling & VK_PRESENT_SCALING_STRETCH_BIT_KHR)
+		scalings |= SPUDGPU_PRESENT_SCALING_STRETCH;
+	if ((capabilities->supportedPresentScaling & VK_PRESENT_SCALING_ASPECT_RATIO_STRETCH_BIT_KHR) &&
+	    (capabilities->supportedPresentGravityX & VK_PRESENT_GRAVITY_CENTERED_BIT_KHR) &&
+	    (capabilities->supportedPresentGravityY & VK_PRESENT_GRAVITY_CENTERED_BIT_KHR))
+		scalings |= SPUDGPU_PRESENT_SCALING_ASPECT_FIT;
+	return scalings;
+}
+
+// spudgpu_get_surface_present_scalings' answer for [surface] on [device],
+// which spudgpu_create_swap_chain refuses a scaling outside of.
+// ONE_TO_ONE is always in it: where the surface offers no one-to-one
+// scaling, or the device has no swapchain_maintenance1, a ONE_TO_ONE swap
+// chain names no scaling and takes the surface's own size where the
+// surface fixes one, so that nothing is scaled. The rest is what the
+// surface offers for every present mode SpudGPU names that it has, so that
+// any present_mode a desc names keeps it.
+static SPUDRESULT spudgpuvulkan___surface_present_scalings_internal(
+	const spudgpu_device_vulkan *device,
+	VkSurfaceKHR surface,
+	uint32_t *pOutput) {
+	*pOutput = SPUDGPU_PRESENT_SCALING_ONE_TO_ONE;
+	if (!device->_swapchain_maintenance1) return SPUD_SUCCESS;
+
+	VkPresentModeKHR *pPresentModes = NULL;
+	uint32_t presentModeCount = 0;
+	uint32_t presentModeCapacity = 0;
+	if (!spudgpuvulkan___get_available_present_modes_internal(&device->head.allocator, device->_physical_device_vk, surface,
+	                                                          &pPresentModes, &presentModeCount, &presentModeCapacity))
+		return SPUDRESULT_OUT_OF_MEMORY;
+	uint32_t common = SPUDGPU_PRESENT_SCALING_STRETCH | SPUDGPU_PRESENT_SCALING_ASPECT_FIT;
+	bool anyMode = false;
+	SPUDRESULT sr = SPUD_SUCCESS;
+	for (uint32_t i = 0; i < presentModeCount && sr == SPUD_SUCCESS; i++) {
+		const VkPresentModeKHR mode = pPresentModes[i];
+		if (mode != VK_PRESENT_MODE_IMMEDIATE_KHR && mode != VK_PRESENT_MODE_FIFO_KHR && mode != VK_PRESENT_MODE_MAILBOX_KHR)
+			continue;
+		VkSurfacePresentScalingCapabilitiesKHR capabilities;
+		sr = spudgpuvulkan___scaling_capabilities_internal(device, surface, mode, &capabilities);
+		if (sr == SPUD_SUCCESS) {
+			common &= spudgpuvulkan___scalings_offered_internal(&capabilities);
+			anyMode = true;
+		}
+	}
+	SPUD_DELETE_ARRAY(&device->head.allocator, VkPresentModeKHR, pPresentModes, presentModeCapacity);
+	if (sr != SPUD_SUCCESS) return sr;
+	if (anyMode) *pOutput |= common;
+	return SPUD_SUCCESS;
 }
 
 VkSurfaceFormatKHR spudgpuvulkan___choose_surface_format_internal(
@@ -147,6 +237,9 @@ SPUDRESULT spudgpuvulkan___create_swapchain_internal(
 	VkSurfaceCapabilitiesKHR capabilities;
 	VkSurfaceFormatKHR surfaceFormat;
 	VkPresentModeKHR presentMode;
+	// Chained only when it names a scaling (scalingBehavior not 0).
+	VkSwapchainPresentScalingCreateInfoKHR scalingInfo = {0};
+	scalingInfo.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_PRESENT_SCALING_CREATE_INFO_KHR;
 	{
 		result = vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physicalDevice, pSwapChain->_surface_vk, &capabilities);
 		if (result != VK_SUCCESS) return SPUDRESULT_API_SPECIFIC_FAILURE;
@@ -164,11 +257,58 @@ SPUDRESULT spudgpuvulkan___create_swapchain_internal(
 		VkPresentModeKHR *pPresentModes = NULL;
 		uint32_t presentModeCount = 0;
 		uint32_t presentModeCapacity = 0;
-		if (!spudgpuvulkan___get_available_present_modes_internal(pSwapChain, &pPresentModes, &presentModeCount, &presentModeCapacity))
+		if (!spudgpuvulkan___get_available_present_modes_internal(allocator, physicalDevice, pSwapChain->_surface_vk,
+		                                                          &pPresentModes, &presentModeCount, &presentModeCapacity))
 			return SPUDRESULT_OUT_OF_MEMORY;
 		presentMode = spudgpuvulkan___choose_present_mode_internal(pPresentModes, presentModeCount, pSwapChain->_desc.present_mode);
 		SPUD_DELETE_ARRAY(allocator, VkPresentModeKHR, pPresentModes, presentModeCapacity);
-		pSwapChain->_extent_vk = spudgpuvulkan___choose_extent_internal(capabilities, width, height);
+
+		// The extents the swap chain's size is chosen within: the surface's,
+		// unless a scaling below says otherwise.
+		VkSurfaceCapabilitiesKHR extentLimits = capabilities;
+		// The present scaling, which spudgpu_create_swap_chain has checked
+		// against spudgpu_get_surface_present_scalings' answer: STRETCH and
+		// ASPECT_FIT are only in it where the surface offers them for
+		// presentMode. ONE_TO_ONE goes through the extension where the
+		// surface offers it, and is otherwise no scaling at the surface's
+		// size (spudgpuvulkan___surface_present_scalings_internal).
+		if (pSwapChain->_device._swapchain_maintenance1) {
+			VkSurfacePresentScalingCapabilitiesKHR scalingCapabilities;
+			SPUDRESULT sr = spudgpuvulkan___scaling_capabilities_internal(&pSwapChain->_device, pSwapChain->_surface_vk, presentMode,
+			                                                              &scalingCapabilities);
+			if (sr != SPUD_SUCCESS) return sr;
+			switch (pSwapChain->_desc.present_scaling) {
+				case SPUDGPU_PRESENT_SCALING_ONE_TO_ONE:
+					if (spudgpuvulkan___one_to_one_offered_internal(&scalingCapabilities)) {
+						scalingInfo.scalingBehavior = VK_PRESENT_SCALING_ONE_TO_ONE_BIT_KHR;
+						scalingInfo.presentGravityX = VK_PRESENT_GRAVITY_MIN_BIT_KHR;
+						scalingInfo.presentGravityY = VK_PRESENT_GRAVITY_MIN_BIT_KHR;
+					}
+					break;
+				case SPUDGPU_PRESENT_SCALING_STRETCH:
+					scalingInfo.scalingBehavior = VK_PRESENT_SCALING_STRETCH_BIT_KHR;
+					break;
+				case SPUDGPU_PRESENT_SCALING_ASPECT_FIT:
+					scalingInfo.scalingBehavior = VK_PRESENT_SCALING_ASPECT_RATIO_STRETCH_BIT_KHR;
+					scalingInfo.presentGravityX = VK_PRESENT_GRAVITY_CENTERED_BIT_KHR;
+					scalingInfo.presentGravityY = VK_PRESENT_GRAVITY_CENTERED_BIT_KHR;
+					break;
+				default:
+					break;
+			}
+			// A scaled swap chain's extent is the caller's, within the scaled
+			// range, rather than the surface's currentExtent
+			// (VUID-VkSwapchainCreateInfoKHR-pNext-07782). The special value
+			// (0xFFFFFFFF) means the surface takes the swap chain's size, as
+			// an unscaled one with no currentExtent does.
+			if (scalingInfo.scalingBehavior != 0 && scalingCapabilities.minScaledImageExtent.width != SPUD_UINT32_MAX) {
+				extentLimits.currentExtent.width  = SPUD_UINT32_MAX;
+				extentLimits.currentExtent.height = SPUD_UINT32_MAX;
+				extentLimits.minImageExtent       = scalingCapabilities.minScaledImageExtent;
+				extentLimits.maxImageExtent       = scalingCapabilities.maxScaledImageExtent;
+			}
+		}
+		pSwapChain->_extent_vk = spudgpuvulkan___choose_extent_internal(extentLimits, width, height);
 		// The surface can dictate the extent (currentExtent), overriding the
 		// requested size - report what the back buffers really are.
 		pSwapChain->_desc.width  = pSwapChain->_extent_vk.width;
@@ -201,7 +341,7 @@ SPUDRESULT spudgpuvulkan___create_swapchain_internal(
 	// Populate Creation Info
 	VkSwapchainCreateInfoKHR createInfo = {0};
 	createInfo.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
-	createInfo.pNext = NULL;
+	createInfo.pNext = scalingInfo.scalingBehavior != 0 ? &scalingInfo : NULL;
 	createInfo.surface = pSwapChain->_surface_vk;
 	createInfo.minImageCount = imageCount;
 	createInfo.imageFormat = surfaceFormat.format;
@@ -550,18 +690,27 @@ spudgpu_surface spudgpu_create_surface_from_callback(
 }
 
 
+SPUDRESULT spudgpu_get_surface_present_scalings(
+	spudgpu_device device,
+	spudgpu_surface surface,
+	uint32_t *out_scalings) {
+	if (!device) return SPUDRESULT_GPU_INVALID_DEVICE;
+	const SPUDRESULT sr = spudgpu___internal_check_surface_present_scalings(device->_features, surface, out_scalings);
+	if (sr != SPUD_SUCCESS) return sr;
+	return spudgpuvulkan___surface_present_scalings_internal(device, surface->_surface_vk, out_scalings);
+}
+
 SPUDRESULT spudgpu_create_swap_chain(
 	spudgpu_device device,
 	const spudgpu_swap_chain_desc *desc,
 	spudgpu_swap_chain *out_swap_chain) {
 	if (!device) return SPUDRESULT_GPU_INVALID_DEVICE;
-	if (!desc) return SPUDRESULT_NULL_DESC;
-	const SPUDRESULT base_sr = spud_struct_check(&desc->base, SPUD_STRUCT_TYPE_GPU_SWAP_CHAIN_DESC);
-	if (base_sr != SPUD_SUCCESS) return base_sr;
-	if (!out_swap_chain) return SPUDRESULT_NULL_OUTPUT_PARAMETER;
-	if (!desc->surface) return SPUDRESULT_GPU_INVALID_SURFACE;
-	if (!desc->queue) return SPUDRESULT_GPU_INVALID_COMMAND_QUEUE;
-	if (!(device->_features & SPUDGPU_FEATURE_PRESENT)) return SPUDRESULT_GPU_FEATURE_NOT_SUPPORTED;
+	const SPUDRESULT desc_sr = spudgpu___internal_check_swap_chain_desc(device->_features, desc, out_swap_chain);
+	if (desc_sr != SPUD_SUCCESS) return desc_sr;
+	uint32_t scalings = 0;
+	const SPUDRESULT scalings_sr = spudgpuvulkan___surface_present_scalings_internal(device, desc->surface->_surface_vk, &scalings);
+	if (scalings_sr != SPUD_SUCCESS) return scalings_sr;
+	if (!(scalings & desc->present_scaling)) return SPUDRESULT_GPU_PRESENT_SCALING_NOT_SUPPORTED;
 
 	spudgpu_swap_chain_vulkan result = {0};
 	result.head.allocator = device->head.allocator;

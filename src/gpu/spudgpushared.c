@@ -116,6 +116,46 @@ SPUDRESULT spudgpu___internal_get_adapter_properties(
 	return SPUD_SUCCESS;
 }
 
+SPUDRESULT spudgpu___internal_check_swap_chain_desc(
+    SPUDGPU_FEATURES features,
+    const spudgpu_swap_chain_desc *desc,
+    const spudgpu_swap_chain *out_swap_chain) {
+	if (!desc)
+		return SPUDRESULT_NULL_DESC;
+	const SPUDRESULT base_sr = spud_struct_check(&desc->base, SPUD_STRUCT_TYPE_GPU_SWAP_CHAIN_DESC);
+	if (base_sr != SPUD_SUCCESS)
+		return base_sr;
+	if (!out_swap_chain)
+		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
+	if (!desc->surface)
+		return SPUDRESULT_GPU_INVALID_SURFACE;
+	if (!desc->queue)
+		return SPUDRESULT_GPU_INVALID_COMMAND_QUEUE;
+	if (!(features & SPUDGPU_FEATURE_PRESENT))
+		return SPUDRESULT_GPU_FEATURE_NOT_SUPPORTED;
+	switch (desc->present_scaling) {
+	case SPUDGPU_PRESENT_SCALING_ONE_TO_ONE:
+	case SPUDGPU_PRESENT_SCALING_STRETCH:
+	case SPUDGPU_PRESENT_SCALING_ASPECT_FIT:
+		return SPUD_SUCCESS;
+	default:
+		return SPUDRESULT_GPU_INVALID_PRESENT_SCALING;
+	}
+}
+
+SPUDRESULT spudgpu___internal_check_surface_present_scalings(
+    SPUDGPU_FEATURES features,
+    const void *surface,
+    const uint32_t *out_scalings) {
+	if (!surface)
+		return SPUDRESULT_GPU_INVALID_SURFACE;
+	if (!out_scalings)
+		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
+	if (!(features & SPUDGPU_FEATURE_PRESENT))
+		return SPUDRESULT_GPU_FEATURE_NOT_SUPPORTED;
+	return SPUD_SUCCESS;
+}
+
 uint32_t spudgpu___internal_queue_count(
     const spudgpu_device_desc *desc,
     SPUDGPU_COMMAND_LIST_TYPE type) {

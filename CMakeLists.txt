@@ -575,6 +575,12 @@ if(NOT TARGET spudlib)
         # pool reset). Needs a GPU, no window; 77, skipped, with no adapter.
         add_executable(spudgpu_objects_test tests/spudgpu_objects_test.c)
         target_link_libraries(spudgpu_objects_test PRIVATE spudlib)
+        # On Metal a surface is a CAMetalLayer, which needs no window, so the
+        # test makes swap chains on one.
+        if(APPLE AND GRAPHICS_BACKEND STREQUAL "Metal")
+            target_sources(spudgpu_objects_test PRIVATE tests/spudgpu_test_metal_layer.m)
+            target_link_libraries(spudgpu_objects_test PRIVATE "-framework QuartzCore" "-framework Foundation")
+        endif()
         add_test(NAME spudgpu_objects_test COMMAND spudgpu_objects_test)
         set_tests_properties(spudgpu_objects_test PROPERTIES SKIP_RETURN_CODE 77)
 

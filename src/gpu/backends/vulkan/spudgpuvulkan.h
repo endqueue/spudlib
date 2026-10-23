@@ -22,6 +22,14 @@ typedef struct spudgpu_instance_t {
     // (_instance), taken after the list was made.
     spudgpu_adapter *_adapters;
     uint32_t _adapter_count;
+    // Which of VK_KHR_surface_maintenance1 and its EXT original are enabled
+    // (each with VK_KHR_get_surface_capabilities2), where the loader has
+    // them: an adapter's VK_KHR/EXT_swapchain_maintenance1 needs its own.
+    bool _surface_maintenance1_khr;
+    bool _surface_maintenance1_ext;
+    // VK_KHR_get_surface_capabilities2's, loaded when either is enabled;
+    // NULL otherwise.
+    PFN_vkGetPhysicalDeviceSurfaceCapabilities2KHR _vkGetPhysicalDeviceSurfaceCapabilities2KHR;
 } spudgpu_instance_vulkan;
 
 typedef struct spudgpu_adapter_t {
@@ -38,6 +46,11 @@ typedef struct spudgpu_adapter_t {
     uint32_t _family_direct;
     uint32_t _family_compute;
     uint32_t _family_copy;
+    // VK_KHR_swapchain_maintenance1 or VK_EXT_swapchain_maintenance1, the
+    // first the adapter lists with swapchainMaintenance1 and the instance
+    // has the surface extension for; NULL for neither. A device created
+    // with SPUDGPU_FEATURE_PRESENT enables it, for its present scalings.
+    const char *_swapchain_maintenance1_extension;
     // Whether a device exists on the adapter: one at a time, claimed with an
     // exchange by spudgpu_create_device and given back by
     // spudgpu_destroy_device. The adapter is shared, hidden state, so this is
@@ -93,6 +106,10 @@ typedef struct spudgpu_device_t {
     spudgpu_adapter_vulkan *_adapter;
     // spudgpu_device_desc::required_features: what every call checks.
     SPUDGPU_FEATURES _features;
+    // Whether the device enabled its adapter's
+    // _swapchain_maintenance1_extension: swap chains may then name a
+    // VkSwapchainPresentScalingCreateInfoKHR.
+    bool _swapchain_maintenance1;
     // The adapter's, copied for the limits the backend reads.
     VkPhysicalDeviceProperties _properties_vk;
     // The family direct queues are made from (the adapter's _family_direct).

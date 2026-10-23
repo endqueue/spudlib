@@ -34,8 +34,8 @@ behalf, never has a default that hides a choice, and holds no global state.
 
 ## Module map
 
-Every module returns the shared `SPUDRESULT` enum (`spudcore.h`, 157 values with
-`SPUD_SUCCESS`, as of 2026-10-22) rather than inventing its own error convention.
+Every module returns the shared `SPUDRESULT` enum (`spudcore.h`, 165 values with
+`SPUD_SUCCESS`, as of 2026-10-23) rather than inventing its own error convention.
 
 | Module | Header | Prefix | Backends |
 |---|---|---|---|
@@ -961,6 +961,58 @@ compiled.
   - Metal's `spudgpu_create_swap_chain` rejects `buffer_count != 1` and
     `SPUDGPU_PRESENT_MODE_MAILBOX`, and its pipeline rejects geometry and
     tessellation modules.
+- **Present scaling (2026-10-23).** How the compositor shows a back buffer
+  of another size than the surface was decided silently before, differently
+  per backend: D3D12 hardcoded `DXGI_SCALING_STRETCH`, Metal left
+  `contentsGravity` at Core Animation's `kCAGravityResize`, and Vulkan took
+  the surface's `currentExtent` where it is fixed (so nothing was scaled) and
+  left a mismatch unspecified where it is free (Wayland). Now
+  `spudgpu_swap_chain_desc::present_scaling` names one
+  `SPUDGPU_PRESENT_SCALING` (ONE_TO_ONE, STRETCH, ASPECT_FIT; NONE refused
+  with `SPUDRESULT_GPU_INVALID_PRESENT_SCALING`), and
+  `spudgpu_get_surface_present_scalings` says which a surface takes; a
+  scaling outside that is refused with
+  `SPUDRESULT_GPU_PRESENT_SCALING_NOT_SUPPORTED`. No filter and no bar color
+  is promised, since neither can be chosen on every backend. The checks
+  before the surface is read are written once
+  (`spudgpu___internal_check_swap_chain_desc`,
+  `spudgpu___internal_check_surface_present_scalings`). What each backend
+  does:
+  - D3D12: ONE_TO_ONE is `DXGI_SCALING_NONE`, STRETCH
+    `DXGI_SCALING_STRETCH`. No ASPECT_FIT: `DXGI_SCALING_ASPECT_RATIO_STRETCH`
+    acts as a stretch on an HWND swap chain (DXGI_SCALING's docs). No
+    ONE_TO_ONE on a `WS_EX_LAYOUTRTL` window, where `DXGI_SCALING_NONE`
+    aligns the right edges; the style is read at the query and at creation.
+    Written on macOS; not compiled.
+  - Vulkan: ONE_TO_ONE always. With `VK_KHR_swapchain_maintenance1` (or
+    the EXT original; the instance enables `VK_KHR_get_surface_capabilities2`
+    and `VK_KHR`/`VK_EXT_surface_maintenance1` where the loader has them,
+    and a device created with PRESENT enables the adapter's swapchain
+    extension with `swapchainMaintenance1`), STRETCH and ASPECT_FIT (centred
+    gravity) where `VkSurfacePresentScalingCapabilitiesKHR` offers them for
+    every present mode the surface has, and ONE_TO_ONE as the extension's
+    one-to-one with `MIN` gravity where offered. A scaled swap chain takes
+    the caller's size within `[minScaledImageExtent, maxScaledImageExtent]`;
+    an unscaled one keeps `currentExtent` where the surface fixes it. No
+    feature bit: what it offers is per surface and per present mode, and the
+    query answers that. Type-checked on macOS against the Vulkan 1.4.341
+    headers (the Windows SDK the build pins), with a stub Wayland header;
+    never run.
+  - Metal: all three, as `contentsGravity` (`kCAGravityTopLeft`, or
+    `kCAGravityBottomLeft` on a layer whose `contentsAreFlipped`, read at
+    creation; `kCAGravityResize`; `kCAGravityResizeAspect`), set with
+    actions off. No `magnificationFilter`. Run on macOS (Apple M5 Pro,
+    Debug): `spudgpu_objects_test` makes a swap chain of each on a windowless
+    `CAMetalLayer`, flipped and not, and reads the gravity back (plain,
+    ASan, TSan, Metal validation), and `spudgpusamples`' HelloTriangle
+    showed each in a 900x900 window over 1280x720 back buffers
+    (`--scaling`, `--window`), under Metal validation with warnings fatal:
+    top-left and cropped, stretched, and letterboxed.
+  Every caller in the workspace names one: a caller's renderer that scales
+  with draws of its own names ONE_TO_ONE, and so does every sample (their
+  windows can't be resized). The D3D12
+  and Vulkan halves need a Windows run (and Vulkan a Linux one, Wayland's
+  free extent included).
 - SpudFiles was reworked on 2026-10-22 (`SPUDFILES_TODO.md`): an instance
   with the caller's allocator; UTF-8 paths (Windows converts each to UTF-16
   and calls only the W functions); access, creation and share mode chosen by
@@ -1074,6 +1126,10 @@ compiled.
   desc and GPU address, a buffer view's and a heap's desc, a descriptor pool
   reset and allocated from again; also a GPU and no window, 77 without one;
   passes on Metal plain, ASan, TSan and under Metal validation, 2026-10-22;
+  since 2026-10-23 also the present scaling checks that come before a
+  surface is read, on a second device made with PRESENT, and on Metal swap
+  chains on a windowless `CAMetalLayer` (`tests/spudgpu_test_metal_layer.m`),
+  passing the same four ways;
   still never called anywhere: `spudgpu_create_surface_from_callback`, the
   storage-buffer and storage-image bindless calls,
   `spudgpu_cmd_bind_bindless_resources_compute` and

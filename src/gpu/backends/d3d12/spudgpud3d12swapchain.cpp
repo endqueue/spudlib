@@ -27,7 +27,32 @@ static void spudgpu_d3d12___release_swap_chain(spudgpu_swap_chain_d3d12 *swap_ch
 	SPUD_DELETE(&allocator, spudgpu_swap_chain_d3d12, swap_chain);
 }
 
+// The present scalings a flip model swap chain on [hwnd] keeps the header's
+// rule for. DXGI_SCALING_ASPECT_RATIO_STRETCH is never one: on a window's
+// swap chain it acts as DXGI_SCALING_STRETCH (DXGI_SCALING's docs). Nor is
+// DXGI_SCALING_NONE on a WS_EX_LAYOUTRTL window, which it aligns by the
+// right edges, not the left.
+static uint32_t spudgpu_d3d12___present_scalings(HWND hwnd) {
+	uint32_t scalings = SPUDGPU_PRESENT_SCALING_STRETCH;
+	if (!(GetWindowLongPtrW(hwnd, GWL_EXSTYLE) & WS_EX_LAYOUTRTL))
+		scalings |= SPUDGPU_PRESENT_SCALING_ONE_TO_ONE;
+	return scalings;
+}
+
 extern "C" {
+
+SPUDRESULT spudgpu_get_surface_present_scalings(
+    spudgpu_device device,
+    spudgpu_surface surface,
+    uint32_t *out_scalings) {
+	if (!device)
+		return SPUDRESULT_GPU_INVALID_DEVICE;
+	const SPUDRESULT sr = spudgpu___internal_check_surface_present_scalings(device->_features, surface, out_scalings);
+	if (sr != SPUD_SUCCESS)
+		return sr;
+	*out_scalings = spudgpu_d3d12___present_scalings(surface->_hwnd);
+	return SPUD_SUCCESS;
+}
 
 SPUDRESULT spudgpu_create_swap_chain(
     spudgpu_device device,
@@ -35,19 +60,11 @@ SPUDRESULT spudgpu_create_swap_chain(
     spudgpu_swap_chain *out_swap_chain) {
 	if (!device)
 		return SPUDRESULT_GPU_INVALID_DEVICE;
-	if (!desc)
-		return SPUDRESULT_NULL_DESC;
-	const SPUDRESULT base_sr = spud_struct_check(&desc->base, SPUD_STRUCT_TYPE_GPU_SWAP_CHAIN_DESC);
-	if (base_sr != SPUD_SUCCESS)
-		return base_sr;
-	if (!out_swap_chain)
-		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
-	if (!desc->surface)
-		return SPUDRESULT_GPU_INVALID_SURFACE;
-	if (!desc->queue)
-		return SPUDRESULT_GPU_INVALID_COMMAND_QUEUE;
-	if (!(device->_features & SPUDGPU_FEATURE_PRESENT))
-		return SPUDRESULT_GPU_FEATURE_NOT_SUPPORTED;
+	const SPUDRESULT desc_sr = spudgpu___internal_check_swap_chain_desc(device->_features, desc, out_swap_chain);
+	if (desc_sr != SPUD_SUCCESS)
+		return desc_sr;
+	if (!(spudgpu_d3d12___present_scalings(desc->surface->_hwnd) & desc->present_scaling))
+		return SPUDRESULT_GPU_PRESENT_SCALING_NOT_SUPPORTED;
 
 	spudgpu_swap_chain_d3d12 *pResult =
 	    SPUD_NEW(&device->head.allocator, spudgpu_swap_chain_d3d12);
@@ -78,7 +95,8 @@ SPUDRESULT spudgpu_create_swap_chain(
 	if (desc->usage & SPUDGPU_IMAGE_USAGE_STORAGE)
 		scDesc.BufferUsage |= DXGI_USAGE_UNORDERED_ACCESS;
 	scDesc.BufferCount           = desc->buffer_count;
-	scDesc.Scaling               = DXGI_SCALING_STRETCH;
+	// ONE_TO_ONE or STRETCH, the two spudgpu_d3d12___present_scalings offers.
+	scDesc.Scaling = desc->present_scaling == SPUDGPU_PRESENT_SCALING_ONE_TO_ONE ? DXGI_SCALING_NONE : DXGI_SCALING_STRETCH;
 	scDesc.SwapEffect            = DXGI_SWAP_EFFECT_FLIP_DISCARD;
 	scDesc.AlphaMode             = DXGI_ALPHA_MODE_UNSPECIFIED;
 	scDesc.Flags                 = 0;

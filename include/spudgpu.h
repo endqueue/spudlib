@@ -490,11 +490,14 @@ typedef uint64_t SPUDGPU_FEATURES;
  * `D3D12_FEATURE_DATA_D3D12_OPTIONS2::DepthBoundsTestSupported`. Metal:
  * `MTLGPUFamilyApple10`. */
 #define SPUDGPU_FEATURE_DEPTH_BOUNDS_TEST (UINT64_C(1) << 10)
-/** spudgpu_create_swap_chain(), refused with
- * SPUDRESULT_GPU_FEATURE_NOT_SUPPORTED, and spudgpu_adapter_supports_surface()
- * answering true. Vulkan: `VK_KHR_swapchain`. D3D12 and Metal: every adapter.
- * A device that never presents (tests, an offline render) need not ask, and a
- * GPU with no display is still listed for compute. */
+/** spudgpu_create_swap_chain() and spudgpu_get_surface_present_scalings(),
+ * each refused with SPUDRESULT_GPU_FEATURE_NOT_SUPPORTED, and
+ * spudgpu_adapter_supports_surface() answering true. Vulkan:
+ * `VK_KHR_swapchain`, and `VK_KHR_swapchain_maintenance1` (or its EXT
+ * original) too where the adapter has it, for the present scalings it
+ * offers. D3D12 and Metal: every adapter. A device that never presents
+ * (tests, an offline render) need not ask, and a GPU with no display is
+ * still listed for compute. */
 #define SPUDGPU_FEATURE_PRESENT (UINT64_C(1) << 11)
 /** An indirect draw whose arguments' first_instance is other than 0
  * (spudgpu_draw_indirect_args, spudgpu_draw_indexed_indirect_args). Without
@@ -3187,6 +3190,61 @@ enum {
 /** @} */
 
 /**
+ * @brief How the compositor shows a back buffer whose size isn't the
+ * surface's.
+ *
+ * A swap chain names exactly one (spudgpu_swap_chain_desc::present_scaling),
+ * and there is no default. Each value is the narrowest rule all three graphics
+ * APIs keep, and holds whenever the back buffer and the surface differ in
+ * size, as during a resize before the caller has made a new swap chain at the
+ * new size. When they match, all three show the back buffer as it is.
+ *
+ * Neither the filter the compositor scales with nor the color of what the
+ * back buffer leaves uncovered is promised: neither can be chosen on every
+ * backend. A caller that needs either does its own scaling with a draw into
+ * back buffers of the surface's size and names ONE_TO_ONE.
+ *
+ * Which values a surface takes is per surface:
+ * spudgpu_get_surface_present_scalings(). A pixel of the surface is the
+ * window's own: on Metal, the layer's `contentsScale` says how many of the
+ * display's it covers.
+ *
+ * @see SPUDGPU_PRESENT_SCALING_Constants
+ */
+typedef uint32_t SPUDGPU_PRESENT_SCALING;
+
+/**
+ * @name Present Scalings
+ * @anchor SPUDGPU_PRESENT_SCALING_Constants
+ *
+ * One bit each, so that spudgpu_get_surface_present_scalings() can report a
+ * set; a swap chain names exactly one.
+ *
+ * | Value      | D3D12 (flip model, HWND) | Vulkan (`VK_KHR_swapchain_maintenance1`) | Metal (`CAMetalLayer`) |
+ * |------------|--------------------------|------------------------------------------|------------------------|
+ * | ONE_TO_ONE | `DXGI_SCALING_NONE`      | `ONE_TO_ONE`, gravity `MIN` on X and Y, or no scaling with the surface's size | `contentsGravity` top left |
+ * | STRETCH    | `DXGI_SCALING_STRETCH`   | `STRETCH`                                | `kCAGravityResize` |
+ * | ASPECT_FIT | not offered              | `ASPECT_RATIO_STRETCH`, gravity `CENTERED` | `kCAGravityResizeAspect` |
+ */
+/** @{ */
+enum {
+	/** Refused with SPUDRESULT_GPU_INVALID_PRESENT_SCALING: a zeroed desc
+	 *  has not chosen. */
+	SPUDGPU_PRESENT_SCALING_NONE       = 0,
+	/** Pixel for pixel, the back buffer's top-left pixel at the surface's
+	 *  top-left. What of the surface the back buffer doesn't cover, and what
+	 *  of the back buffer falls outside the surface, is unspecified. */
+	SPUDGPU_PRESENT_SCALING_ONE_TO_ONE = 1u << 0,
+	/** Scaled to fill the surface, each axis on its own: the aspect ratio is
+	 *  not kept. */
+	SPUDGPU_PRESENT_SCALING_STRETCH    = 1u << 1,
+	/** Scaled to fit inside the surface with the aspect ratio kept, and
+	 *  centred. The bars beside or above and below it are unspecified. */
+	SPUDGPU_PRESENT_SCALING_ASPECT_FIT = 1u << 2,
+};
+/** @} */
+
+/**
  * @brief Configuration descriptor used to initialize a rendering surface target
  * linked to the OS windowing system.
  *
@@ -3247,6 +3305,14 @@ typedef struct spudgpu_swap_chain_desc {
 	SPUDGPU_PRESENT_MODE present_mode;
 
 	/**
+	 * @brief How the compositor shows a back buffer of another size than the
+	 * surface: exactly one SPUDGPU_PRESENT_SCALING, and one the surface takes
+	 * (spudgpu_get_surface_present_scalings()). Required: NONE is refused.
+	 * @see SPUDGPU_PRESENT_SCALING
+	 */
+	SPUDGPU_PRESENT_SCALING present_scaling;
+
+	/**
 	 * @brief Toggles whether the graphics device initializes in exclusive
 	 * fullscreen monitor mode or stays bounded inside a standard desktop window
 	 * framework.
@@ -3267,6 +3333,45 @@ typedef struct spudgpu_swap_chain_desc {
 } spudgpu_swap_chain_desc;
 
 /**
+ * @brief Reports which present scalings a swap chain on a surface may name.
+ *
+ * The answer is per surface and per device, and is the same for every
+ * present mode: a scaling it reports is taken by spudgpu_create_swap_chain()
+ * whatever `present_mode` the desc names. Ask again for a surface made again.
+ *
+ * - D3D12: ONE_TO_ONE and STRETCH. ASPECT_FIT is never offered:
+ *   `DXGI_SCALING_ASPECT_RATIO_STRETCH` acts as a stretch on a window's swap
+ *   chain. ONE_TO_ONE is not offered for a window with `WS_EX_LAYOUTRTL`,
+ *   where `DXGI_SCALING_NONE` aligns the right edges; the window's style is
+ *   read at this call and at spudgpu_create_swap_chain().
+ * - Vulkan: ONE_TO_ONE always. Where the device has
+ *   `VK_KHR_swapchain_maintenance1`, also what the surface's
+ *   `VkSurfacePresentScalingCapabilitiesKHR` offers for every present mode
+ *   the surface has (STRETCH; ASPECT_FIT with centred gravity on both axes).
+ *   Without it, ONE_TO_ONE alone: the back buffers are then the surface's own
+ *   size where the surface fixes one, and nothing is ever scaled.
+ * - Metal: all three.
+ *
+ * @param[in]  device       Device a swap chain would be created on.
+ * @param[in]  surface      Surface it would present to.
+ * @param[out] out_scalings Receives the SPUDGPU_PRESENT_SCALING bits the
+ *                          surface takes; never 0 on success.
+ *
+ * @retval SPUD_SUCCESS `out_scalings` was written.
+ * @retval SPUDRESULT_GPU_INVALID_DEVICE `device` is NULL.
+ * @retval SPUDRESULT_GPU_INVALID_SURFACE `surface` is NULL.
+ * @retval SPUDRESULT_NULL_OUTPUT_PARAMETER `out_scalings` is NULL.
+ * @retval SPUDRESULT_GPU_FEATURE_NOT_SUPPORTED The device was created without
+ *         SPUDGPU_FEATURE_PRESENT.
+ * @return SPUDRESULT_API_SPECIFIC_FAILURE if the graphics API fails, or
+ *         SPUDRESULT_OUT_OF_MEMORY.
+ */
+SPUDRESULT spudgpu_get_surface_present_scalings(
+    spudgpu_device device,
+    spudgpu_surface surface,
+    uint32_t *out_scalings);
+
+/**
  * @brief Creates a swap chain for rendering to a surface.
  *
  * @param[in]  device         Device to create the swap chain on.
@@ -3284,9 +3389,15 @@ typedef struct spudgpu_swap_chain_desc {
  * @retval SPUDRESULT_GPU_INVALID_COMMAND_QUEUE `desc->queue` is NULL.
  * @retval SPUDRESULT_GPU_FEATURE_NOT_SUPPORTED The device was created without
  *         SPUDGPU_FEATURE_PRESENT.
+ * @retval SPUDRESULT_GPU_INVALID_PRESENT_SCALING `desc->present_scaling` is
+ *         SPUDGPU_PRESENT_SCALING_NONE or not exactly one
+ *         SPUDGPU_PRESENT_SCALING. Checked before the surface is read.
  * @retval SPUDRESULT_DESC_INVALID_PARAMETERS The backend cannot create a swap
  *         chain with this configuration (Metal: `desc->buffer_count` other than
  *         1, or SPUDGPU_PRESENT_MODE_MAILBOX).
+ * @retval SPUDRESULT_GPU_PRESENT_SCALING_NOT_SUPPORTED The surface doesn't
+ *         take `desc->present_scaling`: it is not among what
+ *         spudgpu_get_surface_present_scalings() reports.
  * @return Another SPUDRESULT if the backend fails, such as
  *         SPUDRESULT_OUT_OF_MEMORY or SPUDRESULT_API_SPECIFIC_FAILURE.
  *
@@ -3310,7 +3421,10 @@ void spudgpu_destroy_swap_chain(spudgpu_swap_chain swap_chain);
  *
  * This can differ from what was requested: `width`/`height` are the real
  * back-buffer size (on Vulkan the surface can dictate it, e.g. a window still
- * 1x1 before layout), and `buffer_count` the real image count where a backend
+ * 1x1 before layout: its size where a ONE_TO_ONE swap chain has no
+ * `VK_KHR_swapchain_maintenance1` scaling, otherwise the request clamped to
+ * the range the surface takes; on Metal the size of the drawable last
+ * acquired), and `buffer_count` the real image count where a backend
  * reports it.
  *
  * @param[in]  swap_chain Swap chain to query.

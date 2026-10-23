@@ -83,6 +83,31 @@ SPUDRESULT spudgpu___internal_check_device_desc(
     const spudgpu_device_desc *desc,
     spudgpu_device *out_device);
 
+/* ---------------------------------------------------------------------------
+ * Swap chains
+ * ------------------------------------------------------------------------ */
+
+/* The checks of spudgpu_create_swap_chain() after its device check, in the
+ * header's order, none of which reads the surface: SPUDRESULT_NULL_DESC, the
+ * base's, SPUDRESULT_NULL_OUTPUT_PARAMETER, SPUDRESULT_GPU_INVALID_SURFACE,
+ * SPUDRESULT_GPU_INVALID_COMMAND_QUEUE, SPUDRESULT_GPU_FEATURE_NOT_SUPPORTED
+ * (no SPUDGPU_FEATURE_PRESENT in the device's [features]),
+ * SPUDRESULT_GPU_INVALID_PRESENT_SCALING. The backend's own checks follow,
+ * then SPUDRESULT_GPU_PRESENT_SCALING_NOT_SUPPORTED, the first that reads
+ * the surface. */
+SPUDRESULT spudgpu___internal_check_swap_chain_desc(
+    SPUDGPU_FEATURES features,
+    const spudgpu_swap_chain_desc *desc,
+    const spudgpu_swap_chain *out_swap_chain);
+
+/* The checks of spudgpu_get_surface_present_scalings() after its device
+ * check: SPUDRESULT_GPU_INVALID_SURFACE, SPUDRESULT_NULL_OUTPUT_PARAMETER,
+ * SPUDRESULT_GPU_FEATURE_NOT_SUPPORTED. */
+SPUDRESULT spudgpu___internal_check_surface_present_scalings(
+    SPUDGPU_FEATURES features,
+    const void *surface,
+    const uint32_t *out_scalings);
+
 /* How many queues of [type] [desc] asks for; 0 for BUNDLE or a value that
  * is not a type. */
 uint32_t spudgpu___internal_queue_count(

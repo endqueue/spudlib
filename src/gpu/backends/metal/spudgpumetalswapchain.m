@@ -32,6 +32,24 @@ static MTLPixelFormat spudgpumetal___internal_swap_chain_pixel_format(SPUDGPU_FO
 	}
 }
 
+// The layer's contentsGravity for [scaling], which has passed
+// spudgpu___internal_check_swap_chain_desc. Core Animation names the
+// vertical gravities by the layer's own y axis: where its contents are
+// flipped (an iOS layer, or one in a flipped view), kCAGravityBottomLeft is
+// the top-left corner on screen. Read once, here: a layer moved later into
+// a hierarchy that flips it keeps the gravity set now.
+static CALayerContentsGravity spudgpumetal___contents_gravity(CAMetalLayer *layer, SPUDGPU_PRESENT_SCALING scaling) {
+	switch (scaling) {
+	case SPUDGPU_PRESENT_SCALING_ONE_TO_ONE:
+		return [layer contentsAreFlipped] ? kCAGravityBottomLeft : kCAGravityTopLeft;
+	case SPUDGPU_PRESENT_SCALING_ASPECT_FIT:
+		return kCAGravityResizeAspect;
+	case SPUDGPU_PRESENT_SCALING_STRETCH:
+	default:
+		return kCAGravityResize;
+	}
+}
+
 static void spudgpumetal___internal_destroy_swap_chain(spudgpu_swap_chain_metal *swap_chain_metal) {
 	if (!swap_chain_metal)
 		return;
@@ -137,25 +155,29 @@ spudgpu_surface spudgpu_create_surface_from_callback(
 	return NULL;
 }
 
+SPUDRESULT spudgpu_get_surface_present_scalings(
+    spudgpu_device device,
+    spudgpu_surface surface,
+    uint32_t *out_scalings) {
+	if (!device)
+		return SPUDRESULT_GPU_INVALID_DEVICE;
+	const SPUDRESULT sr = spudgpu___internal_check_surface_present_scalings(device->_features, surface, out_scalings);
+	if (sr != SPUD_SUCCESS)
+		return sr;
+	// contentsGravity has all three on every CAMetalLayer.
+	*out_scalings = SPUDGPU_PRESENT_SCALING_ONE_TO_ONE | SPUDGPU_PRESENT_SCALING_STRETCH | SPUDGPU_PRESENT_SCALING_ASPECT_FIT;
+	return SPUD_SUCCESS;
+}
+
 SPUDRESULT spudgpu_create_swap_chain(
     spudgpu_device device,
     const spudgpu_swap_chain_desc *desc,
     spudgpu_swap_chain *out_swap_chain) {
 	if (!device)
 		return SPUDRESULT_GPU_INVALID_DEVICE;
-	if (!desc)
-		return SPUDRESULT_NULL_DESC;
-	const SPUDRESULT base_sr = spud_struct_check(&desc->base, SPUD_STRUCT_TYPE_GPU_SWAP_CHAIN_DESC);
-	if (base_sr != SPUD_SUCCESS)
-		return base_sr;
-	if (!out_swap_chain)
-		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
-	if (!desc->surface)
-		return SPUDRESULT_GPU_INVALID_SURFACE;
-	if (!desc->queue)
-		return SPUDRESULT_GPU_INVALID_COMMAND_QUEUE;
-	if (!(device->_features & SPUDGPU_FEATURE_PRESENT))
-		return SPUDRESULT_GPU_FEATURE_NOT_SUPPORTED;
+	const SPUDRESULT desc_sr = spudgpu___internal_check_swap_chain_desc(device->_features, desc, out_swap_chain);
+	if (desc_sr != SPUD_SUCCESS)
+		return desc_sr;
 	// Metal has no stable, enumerable N-image array the way Vulkan/D3D12 do -
 	// CAMetalLayer hands out one drawable at a time from an internal pool, so
 	// there is exactly one addressable image at any moment. Reject anything
@@ -172,6 +194,8 @@ SPUDRESULT spudgpu_create_swap_chain(
 	spudgpu_surface_metal *surface_metal = (spudgpu_surface_metal *)desc->surface;
 	if (!surface_metal->_metal_layer)
 		return SPUDRESULT_GPU_INVALID_SURFACE;
+	// Every layer takes all three (spudgpu_get_surface_present_scalings), so
+	// none is refused with SPUDRESULT_GPU_PRESENT_SCALING_NOT_SUPPORTED here.
 
 	MTLPixelFormat pixel_format = spudgpumetal___internal_swap_chain_pixel_format(desc->format);
 	if (pixel_format == MTLPixelFormatInvalid)
@@ -197,6 +221,13 @@ SPUDRESULT spudgpu_create_swap_chain(
 	// framebufferOnly drawables can only be rendered into; any other usage
 	// (blit source/destination, sampling, storage) needs it off.
 	swap_chain_metal->_metal_layer.framebufferOnly = desc->usage == 0 ? YES : NO;
+	// How a drawable of another size than the layer's bounds is shown. No
+	// magnificationFilter: no filter is promised on any backend.
+	[CATransaction begin];
+	[CATransaction setDisableActions:YES];
+	swap_chain_metal->_metal_layer.contentsGravity =
+	    spudgpumetal___contents_gravity(swap_chain_metal->_metal_layer, desc->present_scaling);
+	[CATransaction commit];
 
 	// _desc.buffer_count (1) long each, the count they are freed with.
 	swap_chain_metal->_back_buffer_images =

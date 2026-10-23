@@ -185,6 +185,12 @@ typedef enum SPUDRESULT {
 	SPUDRESULT_GPU_OUT_OF_DESCRIPTORS                          = 216,
 	/** A device desc's descriptor budget is above the adapter's limit. */
 	SPUDRESULT_GPU_DESCRIPTOR_BUDGET_TOO_LARGE                 = 217,
+	/** A swap chain desc's present_scaling is SPUDGPU_PRESENT_SCALING_NONE
+	 * or not exactly one SPUDGPU_PRESENT_SCALING. */
+	SPUDRESULT_GPU_INVALID_PRESENT_SCALING                     = 218,
+	/** The surface doesn't take the present scaling a swap chain desc names
+	 * (spudgpu_get_surface_present_scalings()). */
+	SPUDRESULT_GPU_PRESENT_SCALING_NOT_SUPPORTED               = 219,
 	SPUDRESULT_GPU_INVALID_MEMORY_KIND                         = 220,
 	SPUDRESULT_GPU_INVALID_BUFFER_USAGE                        = 221,
 	SPUDRESULT_GPU_INVALID_IMAGE_USAGE                         = 222,
