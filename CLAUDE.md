@@ -946,9 +946,9 @@ read).
   directory are gone, and with them every static buffer. Every check is in
   the front end (`src/spudfiles.c`); the backends implement
   `src/files/spudfilesshared.h`: one POSIX file for Linux and Apple
-  (`F_FULLFSYNC` where it exists) and Windows. Built and run on macOS;
-  the Windows backend is syntax-checked with mingw-w64 and the Linux build
-  hasn't been compiled. The platform's own error number isn't kept yet.
+  (`F_FULLFSYNC` where it exists) and Windows. Built and run on macOS,
+  and on Windows 11 (MSVC, `windows-d3d12`, Debug, 2026-10-22); the Linux
+  build hasn't been compiled. The platform's own error number isn't kept yet.
 - SpudNet was written on 2026-10-07 and its header reworked, and every backend
   rewritten to it, on 2026-10-08: streaming HTTP transfers, TLS and proxy
   descs, error detail, a resolver, a wait set. The Apple side compiles clean
@@ -1061,7 +1061,7 @@ read).
   flushing, a mapping at an unaligned offset outliving its file, path info,
   replace, remove, one-level directories, a non-ASCII name, two threads
   reading one file; counting allocator), both added 2026-10-22 and passing on
-  macOS plain, ASan and TSan, syntax-checked for Windows with mingw-w64,
+  macOS plain, ASan and TSan, and on Windows 11 (MSVC, Debug, 2026-10-22),
   `spudaudio_test` (every call but `spudaudio_stream_start` and a real
   `spudaudio_set_device_sample_rate`, so nothing is heard and no device is
   changed: argument checks, both directions' devices and properties, timing

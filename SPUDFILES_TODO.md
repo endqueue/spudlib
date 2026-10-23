@@ -226,9 +226,11 @@ chose 0644 and 0755.
 Run on macOS (2026-10-22): `tests/spudfiles_test` (every call and check, a
 non-ASCII name, two threads reading one file, a counting allocator) and
 spudlib's other seven ctests, plain and under ASan and TSan; the callers'
-tests over it. The Windows backend, the front end and the test are
-syntax-checked with mingw-w64; nothing has run on Windows. The POSIX
-backend's Linux build hasn't been compiled.
+tests over it. Run on Windows 11 (2026-10-22): built with MSVC under the
+`windows-d3d12` preset (Debug) with no warnings, `spudfiles_test` passing
+every check (the non-ASCII name and the two threads included) and
+spudlib's other seven ctests with it. The POSIX backend's Linux build
+hasn't been compiled.
 
 Left:
 

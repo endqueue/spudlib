@@ -155,7 +155,7 @@ Long-lived C APIs have these and spudlib does not:
     `SPUDRESULT`, with a POSIX backend for Linux and Apple
     (`src/memory/backends/posix/`) beside Windows'.
     `tests/spudmemory_test` passes on macOS, plain and under ASan and
-    TSan; the Windows backend is syntax-checked with mingw-w64, and the
+    TSan, and on Windows 11 (MSVC, Debug, 2026-10-22), and the
     POSIX one has not been compiled on Linux.
 - **A stated stability and threading policy.** `CLAUDE.md` says a released
   layout never changes, but nothing says what "released" is: there are no
