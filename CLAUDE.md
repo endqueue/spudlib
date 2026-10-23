@@ -539,7 +539,11 @@ GameInput and evdev builds were not run.
   The helpers are in `src/spudallocator.h`: `SPUD_NEW`, `SPUD_NEW_ZEROED`,
   `SPUD_DELETE`, `SPUD_NEW_ARRAY`, `SPUD_NEW_ARRAY_ZEROED`, `SPUD_DELETE_ARRAY`,
   `SPUD_RESIZE_ARRAY`, `spud_string_copy`/`spud_string_free`, and
-  `spud_allocate`/`spud_free` for an untyped blob.
+  `spud_allocate`/`spud_free` for an untyped blob. The workspace's
+  `check.sh conventions` counts every call of a C allocation function and
+  every allocating `new` and `delete` in `src/`; the ones allowed (the
+  system allocator a caller may choose, memory the platform hands out,
+  `d3dx12.h`) are in `check.baseline` with reasons.
 - **A block is freed with the size and alignment it was allocated with.** The
   allocator is told both, so that a pool or an arena needs no header. Keep a
   capacity beside every array whose length isn't otherwise known when it is
