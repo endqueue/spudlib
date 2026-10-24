@@ -347,6 +347,8 @@ void spudgpumetal___internal_end_active_compute_encoder(spudgpu_command_list_met
 	[cmd_list_metal->_active_compute_encoder release];
 	cmd_list_metal->_active_compute_encoder         = nil;
 	cmd_list_metal->_encoder_compute_pipeline_state = nil;
+	for (uint32_t i = 0; i < SPUDGPU_MAX_DESCRIPTOR_SET_LAYOUTS; i++)
+		cmd_list_metal->_encoder_compute_sets[i] = nil;
 }
 
 // Returns the active compute encoder, lazily opening one (ending any active

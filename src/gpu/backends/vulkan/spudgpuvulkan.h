@@ -18,8 +18,8 @@ typedef struct spudgpu_instance_t {
     spud_object_head head;
     VkInstance _instance_vk;
     // The adapters listed when the instance was made, which never change,
-    // freed with it. Each device and surface keeps a copy of this struct
-    // (_instance), taken after the list was made.
+    // freed with it. Each surface keeps a copy of this struct (_instance),
+    // taken after the list was made.
     spudgpu_adapter *_adapters;
     uint32_t _adapter_count;
     // Which of VK_KHR_surface_maintenance1 and its EXT original are enabled
@@ -51,6 +51,9 @@ typedef struct spudgpu_adapter_t {
     // has the surface extension for; NULL for neither. A device created
     // with SPUDGPU_FEATURE_PRESENT enables it, for its present scalings.
     const char *_swapchain_maintenance1_extension;
+    // The instance's, copied with _swapchain_maintenance1_extension (NULL
+    // without it): a device reads its surfaces' scalings through it.
+    PFN_vkGetPhysicalDeviceSurfaceCapabilities2KHR _vkGetPhysicalDeviceSurfaceCapabilities2KHR;
     // Whether a device exists on the adapter: one at a time, claimed with an
     // exchange by spudgpu_create_device and given back by
     // spudgpu_destroy_device. The adapter is shared, hidden state, so this is
@@ -102,7 +105,6 @@ typedef struct spudgpu_device_t {
     spud_object_head head;
     VkDevice _logical_device_vk;
     VkPhysicalDevice _physical_device_vk;
-    spudgpu_instance_vulkan _instance;
     spudgpu_adapter_vulkan *_adapter;
     // spudgpu_device_desc::required_features: what every call checks.
     SPUDGPU_FEATURES _features;

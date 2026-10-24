@@ -606,8 +606,14 @@ void spudgpu_cmd_bind_descriptor_sets_compute(
 		if (!set_metal)
 			continue;
 
+		// The set already bound at this index on this encoder: its buffer
+		// is set and its resources resident, and Metal's validation refuses
+		// setting the same buffer again.
+		if (cmd_metal->_encoder_compute_sets[first_set + i] == set_metal->_argument_buffer_mtl)
+			continue;
 		uint32_t buffer_index = SPUDGPU_METAL_DESCRIPTOR_SET_BUFFER_INDEX_BASE + first_set + i;
 		[cmd_metal->_active_compute_encoder setBuffer:set_metal->_argument_buffer_mtl offset:0 atIndex:buffer_index];
+		cmd_metal->_encoder_compute_sets[first_set + i] = set_metal->_argument_buffer_mtl;
 
 		// Every resource reached only indirectly through this argument
 		// buffer must be marked resident on this encoder - see

@@ -494,8 +494,10 @@ static bool spudgpuvulkan___read_adapter_facts(
             maintenance1Features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
             maintenance1Features2.pNext = &maintenance1Features;
             vkGetPhysicalDeviceFeatures2(physicalDevice, &maintenance1Features2);
-            if (maintenance1Features.swapchainMaintenance1)
+            if (maintenance1Features.swapchainMaintenance1) {
                 adapter->_swapchain_maintenance1_extension = maintenance1;
+                adapter->_vkGetPhysicalDeviceSurfaceCapabilities2KHR = instance->_vkGetPhysicalDeviceSurfaceCapabilities2KHR;
+            }
         }
     }
 

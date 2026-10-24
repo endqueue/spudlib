@@ -3224,7 +3224,7 @@ typedef uint32_t SPUDGPU_PRESENT_SCALING;
  * |------------|--------------------------|------------------------------------------|------------------------|
  * | ONE_TO_ONE | `DXGI_SCALING_NONE`      | `ONE_TO_ONE`, gravity `MIN` on X and Y, or no scaling with the surface's size | `contentsGravity` top left |
  * | STRETCH    | `DXGI_SCALING_STRETCH`   | `STRETCH`                                | `kCAGravityResize` |
- * | ASPECT_FIT | not offered              | `ASPECT_RATIO_STRETCH`, gravity `CENTERED` | `kCAGravityResizeAspect` |
+ * | ASPECT_FIT | not offered              | `ASPECT_RATIO_STRETCH`, gravity `CENTERED`; not offered on Win32 | `kCAGravityResizeAspect` |
  */
 /** @{ */
 enum {
@@ -3347,8 +3347,9 @@ typedef struct spudgpu_swap_chain_desc {
  * - Vulkan: ONE_TO_ONE always. Where the device has
  *   `VK_KHR_swapchain_maintenance1`, also what the surface's
  *   `VkSurfacePresentScalingCapabilitiesKHR` offers for every present mode
- *   the surface has (STRETCH; ASPECT_FIT with centred gravity on both axes).
- *   Without it, ONE_TO_ONE alone: the back buffers are then the surface's own
+ *   the surface has (STRETCH; ASPECT_FIT with centred gravity on both axes,
+ *   but never on a Win32 surface, where a driver offering it was seen to
+ *   stretch, as DXGI does). Without it, ONE_TO_ONE alone: the back buffers are then the surface's own
  *   size where the surface fixes one, and nothing is ever scaled.
  * - Metal: all three.
  *

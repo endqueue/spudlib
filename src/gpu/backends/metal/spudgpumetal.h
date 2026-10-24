@@ -305,6 +305,11 @@ typedef struct spudgpu_command_list_t {
 	// spudgpu_cmd_bind_compute_pipeline sets it only when it differs.
 	// Cleared with the encoder.
 	id<MTLComputePipelineState> _encoder_compute_pipeline_state;
+	// The argument buffer _active_compute_encoder has at each descriptor
+	// set's index, nil for none: binding a set already bound there is
+	// allowed and leaves the encoder as it is, since Metal's validation
+	// refuses setting the same buffer again. Cleared with the encoder.
+	id<MTLBuffer> _encoder_compute_sets[SPUDGPU_MAX_DESCRIPTOR_SET_LAYOUTS];
 
 	// Blit counterpart to _active_render_encoder/_active_compute_encoder
 	// above, backing spudgpu_cmd_copy_buffer/_copy_buffer_to_image/
