@@ -157,16 +157,29 @@ typedef enum SPUDRESULT {
 	/** spudgpu_create_instance(): the graphics API could not list its GPUs.
 	 * No GPU is not this: it is an instance with no adapters. */
 	SPUDRESULT_GPU_DEVICE_ENUMERATION_FAILURE                  = 199,
+	/** An instance argument is NULL. */
 	SPUDRESULT_GPU_INVALID_INSTANCE                            = 200,
+	/** A device argument is NULL. */
 	SPUDRESULT_GPU_INVALID_DEVICE                              = 201,
+	/** A command queue argument is NULL. */
 	SPUDRESULT_GPU_INVALID_COMMAND_QUEUE                       = 202,
+	/** A command allocator argument is NULL. */
 	SPUDRESULT_GPU_INVALID_COMMAND_ALLOCATOR                   = 203,
+	/** A command list argument, or an array of them, is NULL. */
 	SPUDRESULT_GPU_INVALID_COMMAND_LIST                        = 204,
+	/** A swap chain argument is NULL. */
 	SPUDRESULT_GPU_INVALID_SWAP_CHAIN                          = 205,
+	/** A surface argument, or a desc's surface, is NULL. */
 	SPUDRESULT_GPU_INVALID_SURFACE                             = 206,
+	/** A format is SPUDGPU_FORMAT_UNKNOWN, or one the call or the backend
+	 * can't use there. */
 	SPUDRESULT_GPU_INVALID_FORMAT                              = 207,
+	/** A surface's window handle is NULL. */
 	SPUDRESULT_GPU_INVALID_WINDOW_HANDLE                       = 208,
+	/** A surface's display handle is NULL where the platform needs one. */
 	SPUDRESULT_GPU_INVALID_DISPLAY_HANDLE                      = 209,
+	/** A command list type the call can't take there: a bundle submitted to
+	 * a queue, or a type no queue of the device runs. */
 	SPUDRESULT_GPU_INVALID_COMMAND_LIST_TYPE                   = 210,
 	/** An adapter argument is NULL. */
 	SPUDRESULT_GPU_INVALID_ADAPTER                             = 211,
@@ -191,27 +204,60 @@ typedef enum SPUDRESULT {
 	/** The surface doesn't take the present scaling a swap chain desc names
 	 * (spudgpu_get_surface_present_scalings()). */
 	SPUDRESULT_GPU_PRESENT_SCALING_NOT_SUPPORTED               = 219,
+	/** A memory kind is SPUDGPU_MEMORY_KIND_NONE or not a kind, or not one
+	 * the call takes (mapping a buffer that isn't mappable, say). */
 	SPUDRESULT_GPU_INVALID_MEMORY_KIND                         = 220,
+	/** A buffer usage is SPUDGPU_BUFFER_USAGE_NONE, or one its memory kind
+	 * does not allow. */
 	SPUDRESULT_GPU_INVALID_BUFFER_USAGE                        = 221,
+	/** An image usage is SPUDGPU_IMAGE_USAGE_NONE, or a combination the call
+	 * does not allow. */
 	SPUDRESULT_GPU_INVALID_IMAGE_USAGE                         = 222,
+	/** Reserved: no call returns it. */
 	SPUDRESULT_GPU_INVALID_BUFFER_STRIDE                       = 223,
+	/** An index buffer view's stride is not 2 or 4 bytes. */
 	SPUDRESULT_GPU_INVALID_INDEX_STRIDE                        = 224,
+	/** The device can't give the memory kind asked for: it wasn't created
+	 * with the feature that kind needs. */
 	SPUDRESULT_GPU_MEMORY_KIND_NOT_SUPPORTED                   = 225,
+	/** More color attachments than SPUDGPU_MAX_COLOR_ATTACHMENTS. */
 	SPUDRESULT_GPU_TOO_MANY_COLOR_ATTACHMENTS                  = 226,
+	/** A pipeline desc's depth bias clamp is not 0 on a device without
+	 * SPUDGPU_FEATURE_DEPTH_BIAS_CLAMP. */
 	SPUDRESULT_GPU_DEPTH_BIAS_CLAMP_NOT_SUPPORTED              = 227,
+	/** A pipeline desc's color attachments blend differently on a device
+	 * without SPUDGPU_FEATURE_INDEPENDENT_BLEND. */
 	SPUDRESULT_GPU_INDEPENDENT_BLEND_NOT_SUPPORTED             = 228,
+	/** A timestamp set on a device without SPUDGPU_FEATURE_PASS_TIMESTAMPS. */
 	SPUDRESULT_GPU_TIMESTAMPS_NOT_SUPPORTED                    = 229,
+	/** A buffer argument is NULL. */
 	SPUDRESULT_GPU_INVALID_BUFFER                              = 230,
+	/** A buffer view argument is NULL. */
 	SPUDRESULT_GPU_INVALID_BUFFER_VIEW                         = 231,
+	/** An image argument is NULL. */
 	SPUDRESULT_GPU_INVALID_IMAGE                               = 232,
+	/** An image view argument is NULL. */
 	SPUDRESULT_GPU_INVALID_IMAGE_VIEW                          = 233,
+	/** An image view type the image can't be viewed as, such as a cube view
+	 * of an image that isn't cube-capable, or a cube array view on a device
+	 * without SPUDGPU_FEATURE_CUBE_ARRAY_VIEWS. */
 	SPUDRESULT_GPU_INVALID_IMAGE_VIEW_TYPE                     = 234,
+	/** An image type the call can't take, such as a cube-capable image that
+	 * isn't SPUDGPU_IMAGE_TYPE_2D. */
 	SPUDRESULT_GPU_INVALID_IMAGE_TYPE                          = 235,
+	/** A buffer's, or a buffer view's, size is 0. */
 	SPUDRESULT_GPU_ZERO_BUFFER_SIZE                            = 236,
+	/** Reserved: no call returns it. */
 	SPUDRESULT_GPU_INVALID_BUFFER_SIZE                         = 237,
+	/** A view's range is not within its parent buffer or image, or is not a
+	 * range its view type can have (a cube view not of six layers, say). */
 	SPUDRESULT_GPU_BUFFER_OR_IMAGE_VIEW_RANGE_OUT_OF_SCOPE     = 238,
+	/** A mapped, flushed or invalidated range runs past the end of the
+	 * buffer. */
 	SPUDRESULT_GPU_MAP_OUT_OF_RANGE                            = 239,
+	/** A heap argument is NULL. */
 	SPUDRESULT_GPU_INVALID_HEAP                                = 240,
+	/** A heap desc's resource class is not a SPUDGPU_HEAP_RESOURCE_CLASS. */
 	SPUDRESULT_GPU_INVALID_HEAP_RESOURCE_CLASS                 = 241,
 	/** A heap's size is not a multiple of SPUDGPU_HEAP_SIZE_GRANULARITY. */
 	SPUDRESULT_GPU_INVALID_HEAP_SIZE                           = 242,
@@ -221,38 +267,79 @@ typedef enum SPUDRESULT {
 	SPUDRESULT_GPU_PLACEMENT_MISALIGNED                        = 244,
 	/** A placement runs past the end of its heap. */
 	SPUDRESULT_GPU_PLACEMENT_OUT_OF_RANGE                      = 245,
+	/** A timestamp set argument is NULL. */
 	SPUDRESULT_GPU_INVALID_TIMESTAMP_SET                       = 246,
+	/** Reserved: no call returns it. */
 	SPUDRESULT_GPU_INVALID_SEMAPHORE                           = 250,
+	/** A fence argument, or an array of them, is NULL. */
 	SPUDRESULT_GPU_INVALID_FENCE                               = 251,
+	/** A fence wait's timeout ran out before the fences reached their
+	 * values. */
 	SPUDRESULT_GPU_FENCE_WAIT_TIMED_OUT                        = 252,
+	/** A shader stage the call can't take, or a pipeline desc that names
+	 * both a vertex and a mesh module. */
 	SPUDRESULT_GPU_INVALID_SHADER_STAGE                        = 280,
+	/** Reserved: no call returns it. */
 	SPUDRESULT_GPU_INVALID_PRIMITIVE_TOPOLOGY                  = 281,
+	/** Reserved: no call returns it. */
 	SPUDRESULT_GPU_INVALID_CULL_MODE                           = 282,
+	/** Reserved: no call returns it. */
 	SPUDRESULT_GPU_INVALID_COMPARE_OP                          = 283,
+	/** Reserved: no call returns it. */
 	SPUDRESULT_GPU_INVALID_BLEND_FACTOR                        = 290,
+	/** Reserved: no call returns it. */
 	SPUDRESULT_GPU_INVALID_BLEND_OP                            = 291,
+	/** A shader module is NULL, or has no shader the call can use. */
 	SPUDRESULT_GPU_INVALID_SHADER_MODULE                       = 300,
+	/** A shader pipeline argument is NULL. */
 	SPUDRESULT_GPU_INVALID_SHADER_PIPELINE                     = 301,
+	/** A compute pipeline desc's compute module is NULL. */
 	SPUDRESULT_GPU_INVALID_COMPUTE_MODULE                      = 302,
+	/** A compute pipeline argument is NULL. */
 	SPUDRESULT_GPU_INVALID_COMPUTE_PIPELINE                    = 303,
+	/** A shader module desc's SPIR-V is NULL or 0 bytes long. */
 	SPUDRESULT_GPU_NULL_SPIRV                                  = 304,
+	/** A shader module desc's SPIR-V size is not a multiple of 4 bytes. */
 	SPUDRESULT_GPU_INVALID_SPIRV_ALIGNMENT                     = 305,
+	/** A pipeline desc has no fragment module, or neither a vertex nor a
+	 * mesh module. */
 	SPUDRESULT_GPU_VERTEX_AND_FRAGMENT_SHADER_REQUIRED         = 306,
+	/** The backend could not translate or compile a shader. */
 	SPUDRESULT_GPU_SHADER_COMPILATION_FAILED                   = 307,
+	/** Reserved: no call returns it. */
 	SPUDRESULT_GPU_INVALID_DESCRIPTOR_TYPE                     = 310,
+	/** Reserved: no call returns it. */
 	SPUDRESULT_GPU_INVALID_DESCRIPTOR_POOL_SIZE                = 311,
+	/** A descriptor pool argument, or a desc's pool, is NULL. */
 	SPUDRESULT_GPU_INVALID_DESCRIPTOR_POOL                     = 312,
+	/** A descriptor set layout is NULL, or one the call can't use. */
 	SPUDRESULT_GPU_INVALID_DESCRIPTOR_SET_LAYOUT               = 313,
+	/** Reserved: no call returns it. */
 	SPUDRESULT_GPU_INVALID_DESCRIPTOR_SET                      = 314,
+	/** Reserved: no call returns it. */
 	SPUDRESULT_GPU_INVALID_DESCRIPTOR_BUFFER_INFO              = 315,
+	/** Reserved: no call returns it. */
 	SPUDRESULT_GPU_INVALID_DESCRIPTOR_IMAGE_INFO               = 316,
+	/** Reserved: no call returns it. */
 	SPUDRESULT_GPU_INVALID_WRITE_DESCRIPTOR_SET                = 317,
+	/** A set layout has more bindings than
+	 * SPUDGPU_MAX_DESCRIPTOR_BINDINGS_PER_SET. */
 	SPUDRESULT_GPU_TOO_MANY_DESCRIPTOR_BINDINGS                = 318,
+	/** A descriptor pool desc has more pool sizes than
+	 * SPUDGPU_MAX_DESCRIPTOR_POOL_SIZES. */
 	SPUDRESULT_GPU_TOO_MANY_DESCRIPTOR_POOLS                   = 319,
+	/** A descriptor set allocation names no set layouts. */
 	SPUDRESULT_GPU_ZERO_DESCRIPTOR_SET_LAYOUTS                 = 320,
+	/** A descriptor set allocation names more set layouts than
+	 * SPUDGPU_MAX_DESCRIPTOR_SET_LAYOUTS. */
 	SPUDRESULT_GPU_TOO_MANY_DESCRIPTOR_SET_LAYOUTS             = 321,
+	/** The pool has no room left for the sets asked for, or the graphics
+	 * API's allocation of them failed. */
 	SPUDRESULT_GPU_INTERNAL_DESCRIPTOR_SET_ALLOCATION_FAIL     = 322,
+	/** A binding's descriptor type, or its place in the set, has no
+	 * equivalent in the graphics API. */
 	SPUDRESULT_GPU_CANNOT_RESOLVE_API_SPECIFIC_DESCRIPTOR_TYPE = 323,
+	/** The bindless table has no free slot left in that resource's class. */
 	SPUDRESULT_GPU_BINDLESS_OUT_OF_SLOTS                       = 324,
 
 	/**
@@ -268,19 +355,24 @@ typedef enum SPUDRESULT {
 	 * result.
 	 * @{
 	 */
-	SPUDRESULT_GPU_EXT_BINDLESS_NOT_SUPPORTED          = 325,
-	SPUDRESULT_GPU_EXT_MESH_SHADING_NOT_SUPPORTED      = 326,
-	SPUDRESULT_GPU_EXT_DEPTH_BOUNDS_TEST_NOT_SUPPORTED = 327,
+	SPUDRESULT_GPU_EXT_BINDLESS_NOT_SUPPORTED          = 325, /**< SPUDGPU_EXT_BINDLESS: the device has no SPUDGPU_FEATURE_BINDLESS. */
+	SPUDRESULT_GPU_EXT_MESH_SHADING_NOT_SUPPORTED      = 326, /**< SPUDGPU_EXT_MESH_SHADING: the device has no SPUDGPU_FEATURE_MESH_SHADING. */
+	SPUDRESULT_GPU_EXT_DEPTH_BOUNDS_TEST_NOT_SUPPORTED = 327, /**< SPUDGPU_EXT_DEPTH_BOUNDS_TEST. Reserved: no call returns it; the depth bounds test does nothing on a device without the feature. */
 	/** @} */
 
+	/** Reserved: no call returns it. */
 	SPUDRESULT_GPU_INVALID_RESOURCE_STATE                      = 350,
+	/** Reserved: no call returns it. */
 	SPUDRESULT_GPU_INVALID_IMAGE_LAYOUT                        = 351,
+	/** Reserved: no call returns it. */
 	SPUDRESULT_GPU_INVALID_PIPELINE_STAGE                      = 352,
+	/** Reserved: no call returns it. */
 	SPUDRESULT_GPU_INVALID_BUFFER_BARRIER                      = 353,
+	/** Reserved: no call returns it. */
 	SPUDRESULT_GPU_INVALID_IMAGE_BARRIER                       = 354,
 
-	SPUDRESULT_SFS_NULL_PATH = 1001,
-	SPUDRESULT_SFS_INVALID_FILE = 1002,
+	SPUDRESULT_SFS_NULL_PATH = 1001, /**< A path is NULL or empty. */
+	SPUDRESULT_SFS_INVALID_FILE = 1002, /**< A file argument is NULL. */
 	SPUDRESULT_SFS_INVALID_MAPPING = 1003, /**< Not returned since 2026-10-22, when sfs_mapping_release() became void; not reused. */
 	SPUDRESULT_SFS_NOT_READABLE = 1004, /**< Mapping a file not opened for reading. */
 	SPUDRESULT_SFS_DIFFERENT_VOLUME = 1005, /**< Replace across volumes (EXDEV / ERROR_NOT_SAME_DEVICE). */
@@ -300,18 +392,18 @@ typedef enum SPUDRESULT {
 	SPUDRESULT_SMEM_NOT_PAGE_ALIGNED = 2028, /**< A size or address is not a multiple of the page size. */
 
 	SPUDRESULT_SPUDNET_STARTUP_FAILED        = 3001, /**< spudnet_instance_create(): the platform's networking wouldn't start. */
-	SPUDRESULT_SPUDNET_INVALID_TCP_SOCKET    = 3002,
-	SPUDRESULT_SPUDNET_RESOLVE_FAILED        = 3003,
-	SPUDRESULT_SPUDNET_CONNECT_FAILED        = 3004,
-	SPUDRESULT_SPUDNET_LISTEN_FAILED         = 3005,
-	SPUDRESULT_SPUDNET_ACCEPT_FAILED         = 3006,
-	SPUDRESULT_SPUDNET_SEND_FAILED           = 3007,
-	SPUDRESULT_SPUDNET_RECV_FAILED           = 3008,
+	SPUDRESULT_SPUDNET_INVALID_TCP_SOCKET    = 3002, /**< A TCP socket is NULL, not open, or already connected. */
+	SPUDRESULT_SPUDNET_RESOLVE_FAILED        = 3003, /**< A host name could not be resolved to an address. */
+	SPUDRESULT_SPUDNET_CONNECT_FAILED        = 3004, /**< The connection to the other end could not be made. */
+	SPUDRESULT_SPUDNET_LISTEN_FAILED         = 3005, /**< A listener could not be bound or set listening. */
+	SPUDRESULT_SPUDNET_ACCEPT_FAILED         = 3006, /**< A connection could not be accepted. */
+	SPUDRESULT_SPUDNET_SEND_FAILED           = 3007, /**< Data could not be sent. */
+	SPUDRESULT_SPUDNET_RECV_FAILED           = 3008, /**< Data could not be received. */
 	/* 3009 and 3010 (WOULD_BLOCK, SET_BLOCKING_FAILED) went with SpudNet's
 	 * non-blocking mode and are not reused. */
 	SPUDRESULT_SPUDNET_INVALID_URL           = 3011, /**< Not a URL, or a scheme the call doesn't carry. */
-	SPUDRESULT_SPUDNET_INVALID_HTTP_CLIENT   = 3012,
-	SPUDRESULT_SPUDNET_INVALID_WEBSOCKET     = 3013,
+	SPUDRESULT_SPUDNET_INVALID_HTTP_CLIENT   = 3012, /**< An HTTP client argument is NULL. */
+	SPUDRESULT_SPUDNET_INVALID_WEBSOCKET     = 3013, /**< A WebSocket is NULL, not open, or already connected. */
 	SPUDRESULT_SPUDNET_TLS_FAILED            = 3014, /**< Handshake or certificate check failed. */
 	SPUDRESULT_SPUDNET_TIMED_OUT             = 3015, /**< The call's own time limit ran out, and nothing else. */
 	SPUDRESULT_SPUDNET_HTTP_FAILED           = 3016, /**< An HTTP transfer's start or its wait for the response failed. */
@@ -320,10 +412,10 @@ typedef enum SPUDRESULT {
 	SPUDRESULT_SPUDNET_WS_MESSAGE_TOO_BIG    = 3019, /**< Over the connect desc's max_message_size. */
 	SPUDRESULT_SPUDNET_UNSUPPORTED           = 3020, /**< This build's platform stack doesn't have it. */
 	SPUDRESULT_SPUDNET_ABORTED               = 3022, /**< The object's _abort was called. */
-	SPUDRESULT_SPUDNET_INVALID_TCP_LISTENER  = 3024,
+	SPUDRESULT_SPUDNET_INVALID_TCP_LISTENER  = 3024, /**< A TCP listener argument is NULL. */
 	SPUDRESULT_SPUDNET_INVALID_ADDRESS       = 3025, /**< Not a numeric IPv4 or IPv6 address. */
 	SPUDRESULT_SPUDNET_ADDRESS_IN_USE        = 3026, /**< Another listener already has that address and port. */
-	SPUDRESULT_SPUDNET_INVALID_WAIT_SET      = 3027,
+	SPUDRESULT_SPUDNET_INVALID_WAIT_SET      = 3027, /**< A wait set argument is NULL. */
 	SPUDRESULT_SPUDNET_ALREADY_IN_WAIT_SET   = 3028, /**< The object is in this set already, or a WebSocket in another. */
 	SPUDRESULT_SPUDNET_INVALID_RESOLVER      = 3029, /**< NULL, or one whose lookup has already been run. */
 	SPUDRESULT_SPUDNET_SYSTEM_TIMED_OUT      = 3030, /**< TCP: the operating system gave up waiting for the other end. */
@@ -331,20 +423,20 @@ typedef enum SPUDRESULT {
 	SPUDRESULT_SPUDNET_INVALID_HTTP_TRANSFER = 3032, /**< NULL, or a call out of the transfer's order of use. */
 	SPUDRESULT_SPUDNET_INVALID_INSTANCE      = 3033, /**< NULL, or not the instance the other object was made with. */
 
-	SPUDRESULT_SAUD_INVALID_INSTANCE      = 4001,
-	SPUDRESULT_SAUD_INVALID_DEVICE        = 4002,
-	SPUDRESULT_SAUD_INVALID_STREAM        = 4003,
-	SPUDRESULT_SAUD_FORMAT_NOT_SUPPORTED  = 4004,
-	SPUDRESULT_SAUD_EXCLUSIVE_UNAVAILABLE = 4005,
-	SPUDRESULT_SAUD_DEVICE_LOST           = 4006,
-	SPUDRESULT_SAUD_PERIOD_OUT_OF_RANGE   = 4007,
-	SPUDRESULT_SAUD_BUFFER_OUT_OF_RANGE   = 4008,
-	SPUDRESULT_SAUD_THREAD_PRIORITY_UNSUPPORTED = 4009,
-	SPUDRESULT_SAUD_THREAD_PRIORITY_DENIED      = 4010,
-	SPUDRESULT_SAUD_SAMPLE_RATE_NOT_SETTABLE    = 4011,
-	SPUDRESULT_SAUD_OS_CONVERSION_UNAVAILABLE   = 4012,
+	SPUDRESULT_SAUD_INVALID_INSTANCE      = 4001, /**< A SpudAudio instance argument is NULL. */
+	SPUDRESULT_SAUD_INVALID_DEVICE        = 4002, /**< An audio device argument, or a desc's device, is NULL. */
+	SPUDRESULT_SAUD_INVALID_STREAM        = 4003, /**< An audio stream argument is NULL. */
+	SPUDRESULT_SAUD_FORMAT_NOT_SUPPORTED  = 4004, /**< The endpoint can't take the format as written. */
+	SPUDRESULT_SAUD_EXCLUSIVE_UNAVAILABLE = 4005, /**< Exclusive mode is held by another client, or the backend has none. */
+	SPUDRESULT_SAUD_DEVICE_LOST           = 4006, /**< The device disappeared since enumeration. */
+	SPUDRESULT_SAUD_PERIOD_OUT_OF_RANGE   = 4007, /**< A period of 0, or one the OS doesn't grant. */
+	SPUDRESULT_SAUD_BUFFER_OUT_OF_RANGE   = 4008, /**< A buffer size below the period, set where the backend has no separate buffer, or one the OS doesn't grant. */
+	SPUDRESULT_SAUD_THREAD_PRIORITY_UNSUPPORTED = 4009, /**< The backend doesn't have the scheduling mechanism asked for. */
+	SPUDRESULT_SAUD_THREAD_PRIORITY_DENIED      = 4010, /**< The OS refused the thread priority asked for when the stream's thread started. */
+	SPUDRESULT_SAUD_SAMPLE_RATE_NOT_SETTABLE    = 4011, /**< The platform has no device-wide sample rate to set. */
+	SPUDRESULT_SAUD_OS_CONVERSION_UNAVAILABLE   = 4012, /**< ALLOW_OS_CONVERSION was set where the platform can't convert for the request. */
 
-	SPUDRESULT_SPUDINPUT_INVALID_INSTANCE      = 5001,
+	SPUDRESULT_SPUDINPUT_INVALID_INSTANCE      = 5001, /**< A SpudInput instance argument is NULL. */
 	SPUDRESULT_SPUDINPUT_GAMEPAD_NOT_CONNECTED = 5002, /**< The id names no gamepad as of the last poll. */
 	SPUDRESULT_SPUDINPUT_UNSUPPORTED           = 5003, /**< The native API doesn't offer the choice asked of it. */
 	SPUDRESULT_SPUDINPUT_FEATURE_NOT_PRESENT   = 5004, /**< The device doesn't have what the call is about. */

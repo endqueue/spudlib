@@ -163,6 +163,9 @@ static void test_clock_cycles(void) {
 	CHECK(previous > first);
 }
 
+/* Where test_ram_usage's block escapes to, so it is really allocated. */
+static unsigned char *volatile ram_usage_block;
+
 /* Memory in use is reported, the peak is never below it, and a large block
  * written whole raises both. Each output may be NULL. */
 static void test_ram_usage(void) {
@@ -185,6 +188,10 @@ static void test_ram_usage(void) {
 	if (!block)
 		return;
 	memset(block, 1, size);
+	/* The block escapes to a global: without it an optimizing compiler may
+	 * drop the malloc, memset and free as dead (GCC 16 at -O2 does), and no
+	 * memory is ever in use. */
+	ram_usage_block = block;
 	uint64_t after      = 0;
 	uint64_t peak_after = 0;
 	spudperf_get_ram_usage(&after, &peak_after);
@@ -193,6 +200,7 @@ static void test_ram_usage(void) {
 	CHECK(peak_after >= peak);
 	printf("spudperf_test: %llu MiB in use, %llu MiB with a 64 MiB block written\n", (unsigned long long)(current >> 20),
 	    (unsigned long long)(after >> 20));
+	ram_usage_block = NULL;
 	free(block);
 }
 

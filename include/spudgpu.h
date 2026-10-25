@@ -41,126 +41,126 @@ extern "C" {
  */
 typedef uint32_t SPUDGPU_FORMAT;
 enum {
-	SPUDGPU_FORMAT_UNKNOWN                    = 0,
-	SPUDGPU_FORMAT_R32G32B32A32_TYPELESS      = 1,
-	SPUDGPU_FORMAT_R32G32B32A32_FLOAT         = 2,
-	SPUDGPU_FORMAT_R32G32B32A32_UINT          = 3,
-	SPUDGPU_FORMAT_R32G32B32A32_SINT          = 4,
-	SPUDGPU_FORMAT_R32G32B32_TYPELESS         = 5,
-	SPUDGPU_FORMAT_R32G32B32_FLOAT            = 6,
-	SPUDGPU_FORMAT_R32G32B32_UINT             = 7,
-	SPUDGPU_FORMAT_R32G32B32_SINT             = 8,
-	SPUDGPU_FORMAT_R16G16B16A16_TYPELESS      = 9,
-	SPUDGPU_FORMAT_R16G16B16A16_FLOAT         = 10,
-	SPUDGPU_FORMAT_R16G16B16A16_UNORM         = 11,
-	SPUDGPU_FORMAT_R16G16B16A16_UINT          = 12,
-	SPUDGPU_FORMAT_R16G16B16A16_SNORM         = 13,
-	SPUDGPU_FORMAT_R16G16B16A16_SINT          = 14,
-	SPUDGPU_FORMAT_R32G32_TYPELESS            = 15,
-	SPUDGPU_FORMAT_R32G32_FLOAT               = 16,
-	SPUDGPU_FORMAT_R32G32_UINT                = 17,
-	SPUDGPU_FORMAT_R32G32_SINT                = 18,
-	SPUDGPU_FORMAT_R32G8X24_TYPELESS          = 19,
-	SPUDGPU_FORMAT_D32_FLOAT_S8X24_UINT       = 20,
-	SPUDGPU_FORMAT_R32_FLOAT_X8X24_TYPELESS   = 21,
-	SPUDGPU_FORMAT_X32_TYPELESS_G8X24_UINT    = 22,
-	SPUDGPU_FORMAT_R10G10B10A2_TYPELESS       = 23,
-	SPUDGPU_FORMAT_R10G10B10A2_UNORM          = 24,
-	SPUDGPU_FORMAT_R10G10B10A2_UINT           = 25,
-	SPUDGPU_FORMAT_R11G11B10_FLOAT            = 26,
-	SPUDGPU_FORMAT_R8G8B8A8_TYPELESS          = 27,
-	SPUDGPU_FORMAT_R8G8B8A8_UNORM             = 28,
-	SPUDGPU_FORMAT_R8G8B8A8_UNORM_SRGB        = 29,
-	SPUDGPU_FORMAT_R8G8B8A8_UINT              = 30,
-	SPUDGPU_FORMAT_R8G8B8A8_SNORM             = 31,
-	SPUDGPU_FORMAT_R8G8B8A8_SINT              = 32,
-	SPUDGPU_FORMAT_R16G16_TYPELESS            = 33,
-	SPUDGPU_FORMAT_R16G16_FLOAT               = 34,
-	SPUDGPU_FORMAT_R16G16_UNORM               = 35,
-	SPUDGPU_FORMAT_R16G16_UINT                = 36,
-	SPUDGPU_FORMAT_R16G16_SNORM               = 37,
-	SPUDGPU_FORMAT_R16G16_SINT                = 38,
-	SPUDGPU_FORMAT_R32_TYPELESS               = 39,
-	SPUDGPU_FORMAT_D32_FLOAT                  = 40,
-	SPUDGPU_FORMAT_R32_FLOAT                  = 41,
-	SPUDGPU_FORMAT_R32_UINT                   = 42,
-	SPUDGPU_FORMAT_R32_SINT                   = 43,
-	SPUDGPU_FORMAT_R24G8_TYPELESS             = 44,
-	SPUDGPU_FORMAT_D24_UNORM_S8_UINT          = 45,
-	SPUDGPU_FORMAT_R24_UNORM_X8_TYPELESS      = 46,
-	SPUDGPU_FORMAT_X24_TYPELESS_G8_UINT       = 47,
-	SPUDGPU_FORMAT_R8G8_TYPELESS              = 48,
-	SPUDGPU_FORMAT_R8G8_UNORM                 = 49,
-	SPUDGPU_FORMAT_R8G8_UINT                  = 50,
-	SPUDGPU_FORMAT_R8G8_SNORM                 = 51,
-	SPUDGPU_FORMAT_R8G8_SINT                  = 52,
-	SPUDGPU_FORMAT_R16_TYPELESS               = 53,
-	SPUDGPU_FORMAT_R16_FLOAT                  = 54,
-	SPUDGPU_FORMAT_D16_UNORM                  = 55,
-	SPUDGPU_FORMAT_R16_UNORM                  = 56,
-	SPUDGPU_FORMAT_R16_UINT                   = 57,
-	SPUDGPU_FORMAT_R16_SNORM                  = 58,
-	SPUDGPU_FORMAT_R16_SINT                   = 59,
-	SPUDGPU_FORMAT_R8_TYPELESS                = 60,
-	SPUDGPU_FORMAT_R8_UNORM                   = 61,
-	SPUDGPU_FORMAT_R8_UINT                    = 62,
-	SPUDGPU_FORMAT_R8_SNORM                   = 63,
-	SPUDGPU_FORMAT_R8_SINT                    = 64,
-	SPUDGPU_FORMAT_A8_UNORM                   = 65,
-	SPUDGPU_FORMAT_R1_UNORM                   = 66,
-	SPUDGPU_FORMAT_R9G9B9E5_SHAREDEXP         = 67,
-	SPUDGPU_FORMAT_R8G8_B8G8_UNORM            = 68,
-	SPUDGPU_FORMAT_G8R8_G8B8_UNORM            = 69,
-	SPUDGPU_FORMAT_BC1_TYPELESS               = 70,
-	SPUDGPU_FORMAT_BC1_UNORM                  = 71,
-	SPUDGPU_FORMAT_BC1_UNORM_SRGB             = 72,
-	SPUDGPU_FORMAT_BC2_TYPELESS               = 73,
-	SPUDGPU_FORMAT_BC2_UNORM                  = 74,
-	SPUDGPU_FORMAT_BC2_UNORM_SRGB             = 75,
-	SPUDGPU_FORMAT_BC3_TYPELESS               = 76,
-	SPUDGPU_FORMAT_BC3_UNORM                  = 77,
-	SPUDGPU_FORMAT_BC3_UNORM_SRGB             = 78,
-	SPUDGPU_FORMAT_BC4_TYPELESS               = 79,
-	SPUDGPU_FORMAT_BC4_UNORM                  = 80,
-	SPUDGPU_FORMAT_BC4_SNORM                  = 81,
-	SPUDGPU_FORMAT_BC5_TYPELESS               = 82,
-	SPUDGPU_FORMAT_BC5_UNORM                  = 83,
-	SPUDGPU_FORMAT_BC5_SNORM                  = 84,
-	SPUDGPU_FORMAT_B5G6R5_UNORM               = 85,
-	SPUDGPU_FORMAT_B5G5R5A1_UNORM             = 86,
-	SPUDGPU_FORMAT_B8G8R8A8_UNORM             = 87,
-	SPUDGPU_FORMAT_B8G8R8X8_UNORM             = 88,
-	SPUDGPU_FORMAT_R10G10B10_XR_BIAS_A2_UNORM = 89,
-	SPUDGPU_FORMAT_B8G8R8A8_TYPELESS          = 90,
-	SPUDGPU_FORMAT_B8G8R8A8_UNORM_SRGB        = 91,
-	SPUDGPU_FORMAT_B8G8R8X8_TYPELESS          = 92,
-	SPUDGPU_FORMAT_B8G8R8X8_UNORM_SRGB        = 93,
-	SPUDGPU_FORMAT_BC6H_TYPELESS              = 94,
-	SPUDGPU_FORMAT_BC6H_UF16                  = 95,
-	SPUDGPU_FORMAT_BC6H_SF16                  = 96,
-	SPUDGPU_FORMAT_BC7_TYPELESS               = 97,
-	SPUDGPU_FORMAT_BC7_UNORM                  = 98,
-	SPUDGPU_FORMAT_BC7_UNORM_SRGB             = 99,
-	SPUDGPU_FORMAT_AYUV                       = 100,
-	SPUDGPU_FORMAT_Y410                       = 101,
-	SPUDGPU_FORMAT_Y416                       = 102,
-	SPUDGPU_FORMAT_NV12                       = 103,
-	SPUDGPU_FORMAT_P010                       = 104,
-	SPUDGPU_FORMAT_P016                       = 105,
-	SPUDGPU_FORMAT_420_OPAQUE                 = 106,
-	SPUDGPU_FORMAT_YUY2                       = 107,
-	SPUDGPU_FORMAT_Y210                       = 108,
-	SPUDGPU_FORMAT_Y216                       = 109,
-	SPUDGPU_FORMAT_NV11                       = 110,
-	SPUDGPU_FORMAT_AI44                       = 111,
-	SPUDGPU_FORMAT_IA44                       = 112,
-	SPUDGPU_FORMAT_P8                         = 113,
-	SPUDGPU_FORMAT_A8P8                       = 114,
-	SPUDGPU_FORMAT_B4G4R4A4_UNORM             = 115,
+	SPUDGPU_FORMAT_UNKNOWN                    = 0, /**< No format. */
+	SPUDGPU_FORMAT_R32G32B32A32_TYPELESS      = 1, /**< DXGI_FORMAT_R32G32B32A32_TYPELESS. */
+	SPUDGPU_FORMAT_R32G32B32A32_FLOAT         = 2, /**< DXGI_FORMAT_R32G32B32A32_FLOAT. */
+	SPUDGPU_FORMAT_R32G32B32A32_UINT          = 3, /**< DXGI_FORMAT_R32G32B32A32_UINT. */
+	SPUDGPU_FORMAT_R32G32B32A32_SINT          = 4, /**< DXGI_FORMAT_R32G32B32A32_SINT. */
+	SPUDGPU_FORMAT_R32G32B32_TYPELESS         = 5, /**< DXGI_FORMAT_R32G32B32_TYPELESS. */
+	SPUDGPU_FORMAT_R32G32B32_FLOAT            = 6, /**< DXGI_FORMAT_R32G32B32_FLOAT. */
+	SPUDGPU_FORMAT_R32G32B32_UINT             = 7, /**< DXGI_FORMAT_R32G32B32_UINT. */
+	SPUDGPU_FORMAT_R32G32B32_SINT             = 8, /**< DXGI_FORMAT_R32G32B32_SINT. */
+	SPUDGPU_FORMAT_R16G16B16A16_TYPELESS      = 9, /**< DXGI_FORMAT_R16G16B16A16_TYPELESS. */
+	SPUDGPU_FORMAT_R16G16B16A16_FLOAT         = 10, /**< DXGI_FORMAT_R16G16B16A16_FLOAT. */
+	SPUDGPU_FORMAT_R16G16B16A16_UNORM         = 11, /**< DXGI_FORMAT_R16G16B16A16_UNORM. */
+	SPUDGPU_FORMAT_R16G16B16A16_UINT          = 12, /**< DXGI_FORMAT_R16G16B16A16_UINT. */
+	SPUDGPU_FORMAT_R16G16B16A16_SNORM         = 13, /**< DXGI_FORMAT_R16G16B16A16_SNORM. */
+	SPUDGPU_FORMAT_R16G16B16A16_SINT          = 14, /**< DXGI_FORMAT_R16G16B16A16_SINT. */
+	SPUDGPU_FORMAT_R32G32_TYPELESS            = 15, /**< DXGI_FORMAT_R32G32_TYPELESS. */
+	SPUDGPU_FORMAT_R32G32_FLOAT               = 16, /**< DXGI_FORMAT_R32G32_FLOAT. */
+	SPUDGPU_FORMAT_R32G32_UINT                = 17, /**< DXGI_FORMAT_R32G32_UINT. */
+	SPUDGPU_FORMAT_R32G32_SINT                = 18, /**< DXGI_FORMAT_R32G32_SINT. */
+	SPUDGPU_FORMAT_R32G8X24_TYPELESS          = 19, /**< DXGI_FORMAT_R32G8X24_TYPELESS. */
+	SPUDGPU_FORMAT_D32_FLOAT_S8X24_UINT       = 20, /**< DXGI_FORMAT_D32_FLOAT_S8X24_UINT. */
+	SPUDGPU_FORMAT_R32_FLOAT_X8X24_TYPELESS   = 21, /**< DXGI_FORMAT_R32_FLOAT_X8X24_TYPELESS. */
+	SPUDGPU_FORMAT_X32_TYPELESS_G8X24_UINT    = 22, /**< DXGI_FORMAT_X32_TYPELESS_G8X24_UINT. */
+	SPUDGPU_FORMAT_R10G10B10A2_TYPELESS       = 23, /**< DXGI_FORMAT_R10G10B10A2_TYPELESS. */
+	SPUDGPU_FORMAT_R10G10B10A2_UNORM          = 24, /**< DXGI_FORMAT_R10G10B10A2_UNORM. */
+	SPUDGPU_FORMAT_R10G10B10A2_UINT           = 25, /**< DXGI_FORMAT_R10G10B10A2_UINT. */
+	SPUDGPU_FORMAT_R11G11B10_FLOAT            = 26, /**< DXGI_FORMAT_R11G11B10_FLOAT. */
+	SPUDGPU_FORMAT_R8G8B8A8_TYPELESS          = 27, /**< DXGI_FORMAT_R8G8B8A8_TYPELESS. */
+	SPUDGPU_FORMAT_R8G8B8A8_UNORM             = 28, /**< DXGI_FORMAT_R8G8B8A8_UNORM. */
+	SPUDGPU_FORMAT_R8G8B8A8_UNORM_SRGB        = 29, /**< DXGI_FORMAT_R8G8B8A8_UNORM_SRGB. */
+	SPUDGPU_FORMAT_R8G8B8A8_UINT              = 30, /**< DXGI_FORMAT_R8G8B8A8_UINT. */
+	SPUDGPU_FORMAT_R8G8B8A8_SNORM             = 31, /**< DXGI_FORMAT_R8G8B8A8_SNORM. */
+	SPUDGPU_FORMAT_R8G8B8A8_SINT              = 32, /**< DXGI_FORMAT_R8G8B8A8_SINT. */
+	SPUDGPU_FORMAT_R16G16_TYPELESS            = 33, /**< DXGI_FORMAT_R16G16_TYPELESS. */
+	SPUDGPU_FORMAT_R16G16_FLOAT               = 34, /**< DXGI_FORMAT_R16G16_FLOAT. */
+	SPUDGPU_FORMAT_R16G16_UNORM               = 35, /**< DXGI_FORMAT_R16G16_UNORM. */
+	SPUDGPU_FORMAT_R16G16_UINT                = 36, /**< DXGI_FORMAT_R16G16_UINT. */
+	SPUDGPU_FORMAT_R16G16_SNORM               = 37, /**< DXGI_FORMAT_R16G16_SNORM. */
+	SPUDGPU_FORMAT_R16G16_SINT                = 38, /**< DXGI_FORMAT_R16G16_SINT. */
+	SPUDGPU_FORMAT_R32_TYPELESS               = 39, /**< DXGI_FORMAT_R32_TYPELESS. */
+	SPUDGPU_FORMAT_D32_FLOAT                  = 40, /**< DXGI_FORMAT_D32_FLOAT. */
+	SPUDGPU_FORMAT_R32_FLOAT                  = 41, /**< DXGI_FORMAT_R32_FLOAT. */
+	SPUDGPU_FORMAT_R32_UINT                   = 42, /**< DXGI_FORMAT_R32_UINT. */
+	SPUDGPU_FORMAT_R32_SINT                   = 43, /**< DXGI_FORMAT_R32_SINT. */
+	SPUDGPU_FORMAT_R24G8_TYPELESS             = 44, /**< DXGI_FORMAT_R24G8_TYPELESS. */
+	SPUDGPU_FORMAT_D24_UNORM_S8_UINT          = 45, /**< DXGI_FORMAT_D24_UNORM_S8_UINT. */
+	SPUDGPU_FORMAT_R24_UNORM_X8_TYPELESS      = 46, /**< DXGI_FORMAT_R24_UNORM_X8_TYPELESS. */
+	SPUDGPU_FORMAT_X24_TYPELESS_G8_UINT       = 47, /**< DXGI_FORMAT_X24_TYPELESS_G8_UINT. */
+	SPUDGPU_FORMAT_R8G8_TYPELESS              = 48, /**< DXGI_FORMAT_R8G8_TYPELESS. */
+	SPUDGPU_FORMAT_R8G8_UNORM                 = 49, /**< DXGI_FORMAT_R8G8_UNORM. */
+	SPUDGPU_FORMAT_R8G8_UINT                  = 50, /**< DXGI_FORMAT_R8G8_UINT. */
+	SPUDGPU_FORMAT_R8G8_SNORM                 = 51, /**< DXGI_FORMAT_R8G8_SNORM. */
+	SPUDGPU_FORMAT_R8G8_SINT                  = 52, /**< DXGI_FORMAT_R8G8_SINT. */
+	SPUDGPU_FORMAT_R16_TYPELESS               = 53, /**< DXGI_FORMAT_R16_TYPELESS. */
+	SPUDGPU_FORMAT_R16_FLOAT                  = 54, /**< DXGI_FORMAT_R16_FLOAT. */
+	SPUDGPU_FORMAT_D16_UNORM                  = 55, /**< DXGI_FORMAT_D16_UNORM. */
+	SPUDGPU_FORMAT_R16_UNORM                  = 56, /**< DXGI_FORMAT_R16_UNORM. */
+	SPUDGPU_FORMAT_R16_UINT                   = 57, /**< DXGI_FORMAT_R16_UINT. */
+	SPUDGPU_FORMAT_R16_SNORM                  = 58, /**< DXGI_FORMAT_R16_SNORM. */
+	SPUDGPU_FORMAT_R16_SINT                   = 59, /**< DXGI_FORMAT_R16_SINT. */
+	SPUDGPU_FORMAT_R8_TYPELESS                = 60, /**< DXGI_FORMAT_R8_TYPELESS. */
+	SPUDGPU_FORMAT_R8_UNORM                   = 61, /**< DXGI_FORMAT_R8_UNORM. */
+	SPUDGPU_FORMAT_R8_UINT                    = 62, /**< DXGI_FORMAT_R8_UINT. */
+	SPUDGPU_FORMAT_R8_SNORM                   = 63, /**< DXGI_FORMAT_R8_SNORM. */
+	SPUDGPU_FORMAT_R8_SINT                    = 64, /**< DXGI_FORMAT_R8_SINT. */
+	SPUDGPU_FORMAT_A8_UNORM                   = 65, /**< DXGI_FORMAT_A8_UNORM. */
+	SPUDGPU_FORMAT_R1_UNORM                   = 66, /**< DXGI_FORMAT_R1_UNORM. */
+	SPUDGPU_FORMAT_R9G9B9E5_SHAREDEXP         = 67, /**< DXGI_FORMAT_R9G9B9E5_SHAREDEXP. */
+	SPUDGPU_FORMAT_R8G8_B8G8_UNORM            = 68, /**< DXGI_FORMAT_R8G8_B8G8_UNORM. */
+	SPUDGPU_FORMAT_G8R8_G8B8_UNORM            = 69, /**< DXGI_FORMAT_G8R8_G8B8_UNORM. */
+	SPUDGPU_FORMAT_BC1_TYPELESS               = 70, /**< DXGI_FORMAT_BC1_TYPELESS. */
+	SPUDGPU_FORMAT_BC1_UNORM                  = 71, /**< DXGI_FORMAT_BC1_UNORM. */
+	SPUDGPU_FORMAT_BC1_UNORM_SRGB             = 72, /**< DXGI_FORMAT_BC1_UNORM_SRGB. */
+	SPUDGPU_FORMAT_BC2_TYPELESS               = 73, /**< DXGI_FORMAT_BC2_TYPELESS. */
+	SPUDGPU_FORMAT_BC2_UNORM                  = 74, /**< DXGI_FORMAT_BC2_UNORM. */
+	SPUDGPU_FORMAT_BC2_UNORM_SRGB             = 75, /**< DXGI_FORMAT_BC2_UNORM_SRGB. */
+	SPUDGPU_FORMAT_BC3_TYPELESS               = 76, /**< DXGI_FORMAT_BC3_TYPELESS. */
+	SPUDGPU_FORMAT_BC3_UNORM                  = 77, /**< DXGI_FORMAT_BC3_UNORM. */
+	SPUDGPU_FORMAT_BC3_UNORM_SRGB             = 78, /**< DXGI_FORMAT_BC3_UNORM_SRGB. */
+	SPUDGPU_FORMAT_BC4_TYPELESS               = 79, /**< DXGI_FORMAT_BC4_TYPELESS. */
+	SPUDGPU_FORMAT_BC4_UNORM                  = 80, /**< DXGI_FORMAT_BC4_UNORM. */
+	SPUDGPU_FORMAT_BC4_SNORM                  = 81, /**< DXGI_FORMAT_BC4_SNORM. */
+	SPUDGPU_FORMAT_BC5_TYPELESS               = 82, /**< DXGI_FORMAT_BC5_TYPELESS. */
+	SPUDGPU_FORMAT_BC5_UNORM                  = 83, /**< DXGI_FORMAT_BC5_UNORM. */
+	SPUDGPU_FORMAT_BC5_SNORM                  = 84, /**< DXGI_FORMAT_BC5_SNORM. */
+	SPUDGPU_FORMAT_B5G6R5_UNORM               = 85, /**< DXGI_FORMAT_B5G6R5_UNORM. */
+	SPUDGPU_FORMAT_B5G5R5A1_UNORM             = 86, /**< DXGI_FORMAT_B5G5R5A1_UNORM. */
+	SPUDGPU_FORMAT_B8G8R8A8_UNORM             = 87, /**< DXGI_FORMAT_B8G8R8A8_UNORM. */
+	SPUDGPU_FORMAT_B8G8R8X8_UNORM             = 88, /**< DXGI_FORMAT_B8G8R8X8_UNORM. */
+	SPUDGPU_FORMAT_R10G10B10_XR_BIAS_A2_UNORM = 89, /**< DXGI_FORMAT_R10G10B10_XR_BIAS_A2_UNORM. */
+	SPUDGPU_FORMAT_B8G8R8A8_TYPELESS          = 90, /**< DXGI_FORMAT_B8G8R8A8_TYPELESS. */
+	SPUDGPU_FORMAT_B8G8R8A8_UNORM_SRGB        = 91, /**< DXGI_FORMAT_B8G8R8A8_UNORM_SRGB. */
+	SPUDGPU_FORMAT_B8G8R8X8_TYPELESS          = 92, /**< DXGI_FORMAT_B8G8R8X8_TYPELESS. */
+	SPUDGPU_FORMAT_B8G8R8X8_UNORM_SRGB        = 93, /**< DXGI_FORMAT_B8G8R8X8_UNORM_SRGB. */
+	SPUDGPU_FORMAT_BC6H_TYPELESS              = 94, /**< DXGI_FORMAT_BC6H_TYPELESS. */
+	SPUDGPU_FORMAT_BC6H_UF16                  = 95, /**< DXGI_FORMAT_BC6H_UF16. */
+	SPUDGPU_FORMAT_BC6H_SF16                  = 96, /**< DXGI_FORMAT_BC6H_SF16. */
+	SPUDGPU_FORMAT_BC7_TYPELESS               = 97, /**< DXGI_FORMAT_BC7_TYPELESS. */
+	SPUDGPU_FORMAT_BC7_UNORM                  = 98, /**< DXGI_FORMAT_BC7_UNORM. */
+	SPUDGPU_FORMAT_BC7_UNORM_SRGB             = 99, /**< DXGI_FORMAT_BC7_UNORM_SRGB. */
+	SPUDGPU_FORMAT_AYUV                       = 100, /**< DXGI_FORMAT_AYUV. */
+	SPUDGPU_FORMAT_Y410                       = 101, /**< DXGI_FORMAT_Y410. */
+	SPUDGPU_FORMAT_Y416                       = 102, /**< DXGI_FORMAT_Y416. */
+	SPUDGPU_FORMAT_NV12                       = 103, /**< DXGI_FORMAT_NV12. */
+	SPUDGPU_FORMAT_P010                       = 104, /**< DXGI_FORMAT_P010. */
+	SPUDGPU_FORMAT_P016                       = 105, /**< DXGI_FORMAT_P016. */
+	SPUDGPU_FORMAT_420_OPAQUE                 = 106, /**< DXGI_FORMAT_420_OPAQUE. */
+	SPUDGPU_FORMAT_YUY2                       = 107, /**< DXGI_FORMAT_YUY2. */
+	SPUDGPU_FORMAT_Y210                       = 108, /**< DXGI_FORMAT_Y210. */
+	SPUDGPU_FORMAT_Y216                       = 109, /**< DXGI_FORMAT_Y216. */
+	SPUDGPU_FORMAT_NV11                       = 110, /**< DXGI_FORMAT_NV11. */
+	SPUDGPU_FORMAT_AI44                       = 111, /**< DXGI_FORMAT_AI44. */
+	SPUDGPU_FORMAT_IA44                       = 112, /**< DXGI_FORMAT_IA44. */
+	SPUDGPU_FORMAT_P8                         = 113, /**< DXGI_FORMAT_P8. */
+	SPUDGPU_FORMAT_A8P8                       = 114, /**< DXGI_FORMAT_A8P8. */
+	SPUDGPU_FORMAT_B4G4R4A4_UNORM             = 115, /**< DXGI_FORMAT_B4G4R4A4_UNORM. */
 
-	SPUDGPU_FORMAT_P208 = 130,
-	SPUDGPU_FORMAT_V208 = 131,
-	SPUDGPU_FORMAT_V408 = 132,
+	SPUDGPU_FORMAT_P208 = 130, /**< DXGI_FORMAT_P208. */
+	SPUDGPU_FORMAT_V208 = 131, /**< DXGI_FORMAT_V208. */
+	SPUDGPU_FORMAT_V408 = 132, /**< DXGI_FORMAT_V408. */
 
 	SPUDGPU_FORMAT_FORCE_UINT = -1 /**< 0xffffffff */
 };
@@ -346,14 +346,14 @@ SPUDRESULT spudgpu_destroy_instance(spudgpu_instance instance);
  * PCI vendor IDs, for comparing against SPUDGPU_ADAPTER_PROPERTIES::vendor_id.
  */
 /** @{ */
-#define SPUDGPU_VENDOR_INTEL 0x8086
-#define SPUDGPU_VENDOR_AMD_ATI 0x1002
-#define SPUDGPU_VENDOR_NVIDIA 0X10DE
-#define SPUDGPU_VENDOR_ARM 0x13B5
-#define SPUDGPU_VENDOR_QUALCOMM 0x5143
-#define SPUDGPU_VENDOR_IMGTEC 0x1010
-#define SPUDGPU_VENDOR_APPLE 0x106B
-#define SPUDGPU_VENDOR_VMWARE 0x15AD
+#define SPUDGPU_VENDOR_INTEL 0x8086 /**< Intel. */
+#define SPUDGPU_VENDOR_AMD_ATI 0x1002 /**< AMD (formerly ATI). */
+#define SPUDGPU_VENDOR_NVIDIA 0X10DE /**< NVIDIA. */
+#define SPUDGPU_VENDOR_ARM 0x13B5 /**< Arm. */
+#define SPUDGPU_VENDOR_QUALCOMM 0x5143 /**< Qualcomm. */
+#define SPUDGPU_VENDOR_IMGTEC 0x1010 /**< Imagination Technologies. */
+#define SPUDGPU_VENDOR_APPLE 0x106B /**< Apple. */
+#define SPUDGPU_VENDOR_VMWARE 0x15AD /**< VMware. */
 /** @} */
 
 /**
@@ -2193,16 +2193,16 @@ typedef struct spudgpu_image_desc {
  * @retval SPUDRESULT_STRUCT_UNKNOWN_IN_CHAIN `desc->base.next` is not NULL.
  * @retval SPUDRESULT_NULL_OUTPUT_PARAMETER `out_image` is NULL.
  * @retval SPUDRESULT_DESC_INVALID_PARAMETERS `desc->width`, `height`, `depth`,
- *         `array_layers` or `mip_levels` is 0.
+ *         `array_layers` or `mip_levels` is 0; or, checked after the usage
+ *         and type checks below, `desc->cube_capable` is set and
+ *         `desc->width` is not `desc->height`, or `desc->array_layers` is not
+ *         a multiple of six.
  * @retval SPUDRESULT_GPU_INVALID_IMAGE_USAGE `desc->usage` is
  *         SPUDGPU_IMAGE_USAGE_NONE, or combines
  *         SPUDGPU_IMAGE_USAGE_TRANSIENT_ATTACHMENT with usages it does not
  *         allow.
  * @retval SPUDRESULT_GPU_INVALID_IMAGE_TYPE `desc->cube_capable` is set and
  *         `desc->type` is not SPUDGPU_IMAGE_TYPE_2D.
- * @retval SPUDRESULT_DESC_INVALID_PARAMETERS `desc->cube_capable` is set and
- *         `desc->width` is not `desc->height`, or `desc->array_layers` is not
- *         a multiple of six.
  * @retval SPUDRESULT_GPU_INVALID_FORMAT `desc->format` is
  *         SPUDGPU_FORMAT_UNKNOWN.
  * @return Another SPUDRESULT if the backend fails, such as
@@ -2644,12 +2644,13 @@ typedef struct spudgpu_placement_requirements {
  * @retval SPUDRESULT_GPU_INVALID_HEAP `heap` is NULL.
  * @retval SPUDRESULT_NULL_DESC `desc` is NULL.
  * @retval SPUDRESULT_STRUCT_WRONG_TYPE `desc->base.type` is not
- *         SPUD_STRUCT_TYPE_GPU_BUFFER_DESC.
- * @retval SPUDRESULT_STRUCT_UNKNOWN_IN_CHAIN `desc->base.next` is not NULL.
+ *         SPUD_STRUCT_TYPE_GPU_BUFFER_DESC; or, checked after
+ *         `out_requirements` is found not NULL, `out_requirements->base.type`
+ *         is not SPUD_STRUCT_TYPE_GPU_PLACEMENT_REQUIREMENTS.
+ * @retval SPUDRESULT_STRUCT_UNKNOWN_IN_CHAIN `desc->base.next` is not NULL;
+ *         or, checked after `out_requirements->base.type`,
+ *         `out_requirements->base.next` is not NULL.
  * @retval SPUDRESULT_NULL_OUTPUT_PARAMETER `out_requirements` is NULL.
- * @retval SPUDRESULT_STRUCT_WRONG_TYPE `out_requirements->base.type` is not
- *         SPUD_STRUCT_TYPE_GPU_PLACEMENT_REQUIREMENTS.
- * @retval SPUDRESULT_STRUCT_UNKNOWN_IN_CHAIN `out_requirements->base.next` is not NULL.
  * @retval SPUDRESULT_GPU_ZERO_BUFFER_SIZE `desc->size` is 0.
  * @retval SPUDRESULT_GPU_INVALID_BUFFER_USAGE `desc->usage` is
  *         SPUDGPU_BUFFER_USAGE_NONE, or is one `desc->memory_kind` does not
@@ -2686,12 +2687,13 @@ SPUDRESULT spudgpu_get_buffer_placement_requirements(
  * @retval SPUDRESULT_GPU_INVALID_HEAP `heap` is NULL.
  * @retval SPUDRESULT_NULL_DESC `desc` is NULL.
  * @retval SPUDRESULT_STRUCT_WRONG_TYPE `desc->base.type` is not
- *         SPUD_STRUCT_TYPE_GPU_IMAGE_DESC.
- * @retval SPUDRESULT_STRUCT_UNKNOWN_IN_CHAIN `desc->base.next` is not NULL.
+ *         SPUD_STRUCT_TYPE_GPU_IMAGE_DESC; or, checked after
+ *         `out_requirements` is found not NULL, `out_requirements->base.type`
+ *         is not SPUD_STRUCT_TYPE_GPU_PLACEMENT_REQUIREMENTS.
+ * @retval SPUDRESULT_STRUCT_UNKNOWN_IN_CHAIN `desc->base.next` is not NULL;
+ *         or, checked after `out_requirements->base.type`,
+ *         `out_requirements->base.next` is not NULL.
  * @retval SPUDRESULT_NULL_OUTPUT_PARAMETER `out_requirements` is NULL.
- * @retval SPUDRESULT_STRUCT_WRONG_TYPE `out_requirements->base.type` is not
- *         SPUD_STRUCT_TYPE_GPU_PLACEMENT_REQUIREMENTS.
- * @retval SPUDRESULT_STRUCT_UNKNOWN_IN_CHAIN `out_requirements->base.next` is not NULL.
  * @retval (each result of spudgpu_create_image()'s desc checks, in its
  *         order.)
  * @retval SPUDRESULT_GPU_INVALID_IMAGE_USAGE `desc->usage` has
@@ -2921,7 +2923,7 @@ void spudgpu_cmd_image_barrier_subresource(
  */
 typedef uint32_t SPUDGPU_RESOURCE_STATE;
 enum {
-	SPUDGPU_RESOURCE_STATE_COMMON = 0,       /**< No particular use; what a new SPUDGPU_MEMORY_KIND_DEVICE buffer is in */
+	SPUDGPU_RESOURCE_STATE_COMMON = 0,       /**< No particular use; what a new SPUDGPU_MEMORY_KIND_DEVICE buffer is in, and what every buffer is in at the start of each submission (see spudgpu_buffer_barrier) */
 	SPUDGPU_RESOURCE_STATE_VERTEX_BUFFER,    /**< Bound as a vertex or uniform buffer */
 	SPUDGPU_RESOURCE_STATE_INDEX_BUFFER,     /**< Bound as an index buffer */
 	SPUDGPU_RESOURCE_STATE_RENDER_TARGET,    /**< Rendered into as a color attachment */
@@ -2963,6 +2965,29 @@ enum {
 
 /**
  * @brief One buffer state transition for spudgpu_cmd_pipeline_barrier().
+ *
+ * A buffer's state lasts until the end of the submission that moved it,
+ * and no further. A submission is one call of
+ * spudgpu_submit_command_lists(), spudgpu_submit_command_lists_synced() or
+ * spudgpu_queue_submit(): within it, a state set by one command list is the
+ * state the next list in the call starts in. At the start of each
+ * submission every buffer is in SPUDGPU_RESOURCE_STATE_COMMON, whatever an
+ * earlier submission left it in, so the first barrier a submission records
+ * for a buffer has `state_before` COMMON.
+ *
+ * A barrier out of COMMON is ordered after everything earlier submissions
+ * on the queue did with the buffer: their writes are complete and visible,
+ * and their reads are finished, before the barrier's `state_after` use
+ * begins. Nothing more is needed to overwrite a buffer the last submission
+ * read or wrote.
+ *
+ * The rule is buffers only. An image stays in the state or layout it was
+ * last moved to, across submissions, until the caller moves it again.
+ *
+ * Maps to: D3D12's buffer state decay, at the end of each
+ * ExecuteCommandLists; on Vulkan, a barrier out of COMMON waits on every
+ * earlier command and makes every earlier write available. Metal records no
+ * barriers.
  */
 typedef struct spudgpu_buffer_barrier {
 	/** `type` is SPUD_STRUCT_TYPE_GPU_BUFFER_BARRIER; `next` is NULL (nothing is chained onto
@@ -2974,7 +2999,8 @@ typedef struct spudgpu_buffer_barrier {
 	 * created in.
 	 */
 	spudgpu_buffer buffer;
-	/** The state the buffer is in when the barrier executes. */
+	/** The state the buffer is in when the barrier executes: COMMON for the
+	 * first barrier of a buffer in a submission (see above). */
 	SPUDGPU_RESOURCE_STATE state_before;
 	/** The state the buffer is in after it. */
 	SPUDGPU_RESOURCE_STATE state_after;
@@ -4977,6 +5003,11 @@ void spudgpu_cmd_push_constants(
  *
  * Maps normalized device coordinates (NDC) ranging [-1, 1] horizontally and
  * vertically directly into a target render target screen pixel domain.
+ *
+ * Clip space is Vulkan's on every backend: NDC -1 in Y is the viewport's top
+ * edge and +1 its bottom (+Y points down), and depth runs 0 to 1. D3D12 and
+ * Metal flip Y when they translate a shader, so the same shader and the same
+ * vertices give the same picture, the same way up, on all three.
  */
 /* Frozen: a value. It never changes; a new need gets a new type. */
 typedef struct SPUDGPU_VIEWPORT {
@@ -5625,11 +5656,11 @@ typedef struct spudgpu_image_buffer_copy_desc {
 	/** Number of array layers to copy. */
 	uint32_t array_layer_count;
 
-	/** Texel-space offset into the image where the region begins. */
-	uint32_t image_x, image_y, image_z;
+	/** Texel-space offset into the image where the region begins: x. */
+	uint32_t image_x, /** y. */ image_y, /** z. */ image_z;
 
-	/** Texel-space size of the copied region. */
-	uint32_t width, height, depth;
+	/** Texel-space size of the copied region: width. */
+	uint32_t width, /** Height. */ height, /** Depth. */ depth;
 } spudgpu_image_buffer_copy_desc;
 
 /**
@@ -5781,10 +5812,10 @@ typedef struct spudgpu_image_blit_desc {
 	uint32_t src_base_array_layer;
 	/** Number of array layers read. */
 	uint32_t src_array_layer_count;
-	/** One corner of the source region, in texels of #src_mip_level. */
-	uint32_t src_x0, src_y0, src_z0;
-	/** The opposite corner of the source region. */
-	uint32_t src_x1, src_y1, src_z1;
+	/** One corner of the source region, in texels of #src_mip_level: x. */
+	uint32_t src_x0, /** y. */ src_y0, /** z. */ src_z0;
+	/** The opposite corner of the source region: x. */
+	uint32_t src_x1, /** y. */ src_y1, /** z. */ src_z1;
 
 	/** Mip level written to. */
 	uint32_t dst_mip_level;
@@ -5792,10 +5823,10 @@ typedef struct spudgpu_image_blit_desc {
 	uint32_t dst_base_array_layer;
 	/** Number of array layers written. */
 	uint32_t dst_array_layer_count;
-	/** One corner of the destination region, in texels of #dst_mip_level. */
-	uint32_t dst_x0, dst_y0, dst_z0;
-	/** The opposite corner of the destination region. */
-	uint32_t dst_x1, dst_y1, dst_z1;
+	/** One corner of the destination region, in texels of #dst_mip_level: x. */
+	uint32_t dst_x0, /** y. */ dst_y0, /** z. */ dst_z0;
+	/** The opposite corner of the destination region: x. */
+	uint32_t dst_x1, /** y. */ dst_y1, /** z. */ dst_z1;
 
 	/** Filter applied when src and dst region sizes differ. */
 	SPUDGPU_FILTER filter;

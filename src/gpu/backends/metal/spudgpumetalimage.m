@@ -11,131 +11,6 @@
 #include <Metal/Metal.h>
 #include "../../../spudstructbase.h"
 
-// A practical, non-exhaustive subset covering the common uncompressed
-// formats - not the full ~100-entry DXGI-shaped SPUDGPU_FORMAT enum (block-
-// compressed BC formats and the many *_TYPELESS variants have no caller in
-// this workspace yet). TYPELESS formats are intentionally never mapped:
-// Metal has no typeless-resource concept the way D3D12 does - every texture
-// needs one concrete MTLPixelFormat at creation - so a typeless request is
-// rejected with SPUDRESULT_GPU_INVALID_FORMAT rather than silently picking
-// an arbitrary concrete interpretation the caller didn't ask for.
-// Not static: spudgpumetalshader.m reuses this for render/depth attachment
-// pixel formats, which must agree exactly with what an actual
-// spudgpu_create_image call for the same SPUDGPU_FORMAT would produce.
-MTLPixelFormat spudgpumetal___internal_image_pixel_format(SPUDGPU_FORMAT format) {
-	switch (format) {
-	// 8-bit per channel
-	case SPUDGPU_FORMAT_R8_UNORM:
-		return MTLPixelFormatR8Unorm;
-	case SPUDGPU_FORMAT_R8_SNORM:
-		return MTLPixelFormatR8Snorm;
-	case SPUDGPU_FORMAT_R8_UINT:
-		return MTLPixelFormatR8Uint;
-	case SPUDGPU_FORMAT_R8_SINT:
-		return MTLPixelFormatR8Sint;
-	case SPUDGPU_FORMAT_R8G8_UNORM:
-		return MTLPixelFormatRG8Unorm;
-	case SPUDGPU_FORMAT_R8G8_SNORM:
-		return MTLPixelFormatRG8Snorm;
-	case SPUDGPU_FORMAT_R8G8_UINT:
-		return MTLPixelFormatRG8Uint;
-	case SPUDGPU_FORMAT_R8G8_SINT:
-		return MTLPixelFormatRG8Sint;
-	case SPUDGPU_FORMAT_R8G8B8A8_UNORM:
-		return MTLPixelFormatRGBA8Unorm;
-	case SPUDGPU_FORMAT_R8G8B8A8_UNORM_SRGB:
-		return MTLPixelFormatRGBA8Unorm_sRGB;
-	case SPUDGPU_FORMAT_R8G8B8A8_SNORM:
-		return MTLPixelFormatRGBA8Snorm;
-	case SPUDGPU_FORMAT_R8G8B8A8_UINT:
-		return MTLPixelFormatRGBA8Uint;
-	case SPUDGPU_FORMAT_R8G8B8A8_SINT:
-		return MTLPixelFormatRGBA8Sint;
-	case SPUDGPU_FORMAT_B8G8R8A8_UNORM:
-		return MTLPixelFormatBGRA8Unorm;
-	case SPUDGPU_FORMAT_B8G8R8A8_UNORM_SRGB:
-		return MTLPixelFormatBGRA8Unorm_sRGB;
-
-	// 16-bit per channel
-	case SPUDGPU_FORMAT_R16_FLOAT:
-		return MTLPixelFormatR16Float;
-	case SPUDGPU_FORMAT_R16_UNORM:
-		return MTLPixelFormatR16Unorm;
-	case SPUDGPU_FORMAT_R16_SNORM:
-		return MTLPixelFormatR16Snorm;
-	case SPUDGPU_FORMAT_R16_UINT:
-		return MTLPixelFormatR16Uint;
-	case SPUDGPU_FORMAT_R16_SINT:
-		return MTLPixelFormatR16Sint;
-	case SPUDGPU_FORMAT_R16G16_FLOAT:
-		return MTLPixelFormatRG16Float;
-	case SPUDGPU_FORMAT_R16G16_UNORM:
-		return MTLPixelFormatRG16Unorm;
-	case SPUDGPU_FORMAT_R16G16_SNORM:
-		return MTLPixelFormatRG16Snorm;
-	case SPUDGPU_FORMAT_R16G16_UINT:
-		return MTLPixelFormatRG16Uint;
-	case SPUDGPU_FORMAT_R16G16_SINT:
-		return MTLPixelFormatRG16Sint;
-	case SPUDGPU_FORMAT_R16G16B16A16_FLOAT:
-		return MTLPixelFormatRGBA16Float;
-	case SPUDGPU_FORMAT_R16G16B16A16_UNORM:
-		return MTLPixelFormatRGBA16Unorm;
-	case SPUDGPU_FORMAT_R16G16B16A16_SNORM:
-		return MTLPixelFormatRGBA16Snorm;
-	case SPUDGPU_FORMAT_R16G16B16A16_UINT:
-		return MTLPixelFormatRGBA16Uint;
-	case SPUDGPU_FORMAT_R16G16B16A16_SINT:
-		return MTLPixelFormatRGBA16Sint;
-
-	// 32-bit per channel - no 3-component mapping: Metal has no RGB32
-	// pixel format (only 1/2/4-component 32-bit formats exist).
-	case SPUDGPU_FORMAT_R32_FLOAT:
-		return MTLPixelFormatR32Float;
-	case SPUDGPU_FORMAT_R32_UINT:
-		return MTLPixelFormatR32Uint;
-	case SPUDGPU_FORMAT_R32_SINT:
-		return MTLPixelFormatR32Sint;
-	case SPUDGPU_FORMAT_R32G32_FLOAT:
-		return MTLPixelFormatRG32Float;
-	case SPUDGPU_FORMAT_R32G32_UINT:
-		return MTLPixelFormatRG32Uint;
-	case SPUDGPU_FORMAT_R32G32_SINT:
-		return MTLPixelFormatRG32Sint;
-	case SPUDGPU_FORMAT_R32G32B32A32_FLOAT:
-		return MTLPixelFormatRGBA32Float;
-	case SPUDGPU_FORMAT_R32G32B32A32_UINT:
-		return MTLPixelFormatRGBA32Uint;
-	case SPUDGPU_FORMAT_R32G32B32A32_SINT:
-		return MTLPixelFormatRGBA32Sint;
-
-	// Packed
-	case SPUDGPU_FORMAT_R10G10B10A2_UNORM:
-		return MTLPixelFormatRGB10A2Unorm;
-	case SPUDGPU_FORMAT_R10G10B10A2_UINT:
-		return MTLPixelFormatRGB10A2Uint;
-	case SPUDGPU_FORMAT_R11G11B10_FLOAT:
-		return MTLPixelFormatRG11B10Float;
-
-	// Depth/stencil - SPUDGPU_FORMAT_D24_UNORM_S8_UINT is intentionally not
-	// mapped: MTLPixelFormatDepth24Unorm_Stencil8 is an Intel/AMD Mac-only
-	// feature set value, unavailable on Apple Silicon, which is this
-	// backend's only real target - there is no honest way to hand back a
-	// 24-bit-depth resource here, only the 32-bit-depth
-	// Depth32Float_Stencil8 that SPUDGPU_FORMAT_D32_FLOAT_S8X24_UINT below
-	// already covers.
-	case SPUDGPU_FORMAT_D16_UNORM:
-		return MTLPixelFormatDepth16Unorm;
-	case SPUDGPU_FORMAT_D32_FLOAT:
-		return MTLPixelFormatDepth32Float;
-	case SPUDGPU_FORMAT_D32_FLOAT_S8X24_UINT:
-		return MTLPixelFormatDepth32Float_Stencil8;
-
-	default:
-		return MTLPixelFormatInvalid;
-	}
-}
-
 static MTLTextureUsage spudgpumetal___internal_image_texture_usage(SPUDGPU_IMAGE_USAGE usage) {
 	MTLTextureUsage result = MTLTextureUsageUnknown;
 	if (usage & SPUDGPU_IMAGE_USAGE_SAMPLED)
@@ -214,7 +89,8 @@ SPUDRESULT spudgpumetal___check_image_desc(const spudgpu_image_desc *desc) {
 		if (desc->width != desc->height || desc->array_layers % 6 != 0)
 			return SPUDRESULT_DESC_INVALID_PARAMETERS;
 	}
-	if (spudgpumetal___internal_image_pixel_format(desc->format) == MTLPixelFormatInvalid)
+	// The format table (spudgpumetalformat.m) says why a format has none.
+	if (spudgpumetal___format_info(desc->format)->pixel == MTLPixelFormatInvalid)
 		return SPUDRESULT_GPU_INVALID_FORMAT;
 	return SPUD_SUCCESS;
 }
@@ -222,7 +98,7 @@ SPUDRESULT spudgpumetal___check_image_desc(const spudgpu_image_desc *desc) {
 MTLTextureDescriptor *spudgpumetal___new_texture_descriptor(const spudgpu_image_desc *desc) {
 	MTLTextureDescriptor *texture_desc = [[MTLTextureDescriptor alloc] init];
 	texture_desc.textureType           = spudgpumetal___internal_image_texture_type(desc->type, desc->array_layers);
-	texture_desc.pixelFormat           = spudgpumetal___internal_image_pixel_format(desc->format);
+	texture_desc.pixelFormat           = spudgpumetal___format_info(desc->format)->pixel;
 	texture_desc.width                 = desc->width;
 	texture_desc.height                = desc->height;
 	texture_desc.depth                 = (texture_desc.textureType == MTLTextureType3D) ? desc->depth : 1;
@@ -354,21 +230,6 @@ static MTLTextureType spudgpumetal___internal_image_view_texture_type(
 	}
 }
 
-// The aspects [format] has (SPUDGPU_IMAGE_ASPECT). The same table in every
-// backend: it decides which views spudgpu_create_image_view refuses.
-static uint64_t spudgpumetal___internal_format_aspects(SPUDGPU_FORMAT format) {
-	switch (format) {
-	case SPUDGPU_FORMAT_D24_UNORM_S8_UINT:
-	case SPUDGPU_FORMAT_D32_FLOAT_S8X24_UINT:
-		return SPUDGPU_IMAGE_ASPECT_DEPTH | SPUDGPU_IMAGE_ASPECT_STENCIL;
-	case SPUDGPU_FORMAT_D16_UNORM:
-	case SPUDGPU_FORMAT_D32_FLOAT:
-		return SPUDGPU_IMAGE_ASPECT_DEPTH;
-	default:
-		return SPUDGPU_IMAGE_ASPECT_COLOR;
-	}
-}
-
 SPUDRESULT spudgpu_create_image_view(
     spudgpu_image image,
     const spudgpu_image_view_desc *desc,
@@ -398,10 +259,12 @@ SPUDRESULT spudgpu_create_image_view(
 		    (desc->subresource_range.array_layer_count == 0 || desc->subresource_range.array_layer_count % 6 != 0))
 			return SPUDRESULT_GPU_BUFFER_OR_IMAGE_VIEW_RANGE_OUT_OF_SCOPE;
 	}
-	// The aspect rule of spudgpu.h, the same on every backend.
+	// The aspect rule of spudgpu.h, the same on every backend: the format's
+	// aspects are the format table's.
+	const spudgpumetal_format_info *format_info = spudgpumetal___format_info(parent_image_metal->_desc.format);
 	if (desc->subresource_range.aspect_mask == SPUDGPU_IMAGE_ASPECT_NONE)
 		return SPUDRESULT_DESC_INVALID_PARAMETERS;
-	if (desc->subresource_range.aspect_mask & ~spudgpumetal___internal_format_aspects(parent_image_metal->_desc.format))
+	if (desc->subresource_range.aspect_mask & ~format_info->aspects)
 		return SPUDRESULT_DESC_INVALID_PARAMETERS;
 	if (!parent_image_metal->_texture_mtl)
 		return SPUDRESULT_GPU_INVALID_IMAGE;
@@ -427,13 +290,13 @@ SPUDRESULT spudgpu_create_image_view(
 		// The parent's pixel format, except for a view of the stencil alone
 		// (SPUDGPU_IMAGE_ASPECT_STENCIL), which is what a shader reads the
 		// stencil through: Metal reaches the stencil of a depth and stencil
-		// texture as a view in the matching stencil format. The parent was
-		// created with MTLTextureUsagePixelFormatView for this (see
-		// spudgpu_create_image). spudgpu_image_view_desc has no format
-		// override beyond that.
+		// texture as a view in the matching stencil format, the format
+		// table's stencil_view. The parent was created with
+		// MTLTextureUsagePixelFormatView for this (see spudgpu_create_image).
+		// spudgpu_image_view_desc has no format override beyond that.
 		MTLPixelFormat view_format = parent_image_metal->_texture_mtl.pixelFormat;
-		if (desc->subresource_range.aspect_mask == SPUDGPU_IMAGE_ASPECT_STENCIL && view_format == MTLPixelFormatDepth32Float_Stencil8)
-			view_format = MTLPixelFormatX32_Stencil8;
+		if (desc->subresource_range.aspect_mask == SPUDGPU_IMAGE_ASPECT_STENCIL && format_info->stencil_view != MTLPixelFormatInvalid)
+			view_format = format_info->stencil_view;
 		view_metal->_texture_view_mtl = [parent_image_metal->_texture_mtl newTextureViewWithPixelFormat:view_format
 		                                                                                    textureType:view_type
 		                                                                                         levels:levels

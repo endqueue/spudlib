@@ -352,10 +352,30 @@ typedef struct spudgpu_timestamp_set_t {
 	MTLTimestamp _gpu_origin;
 } spudgpu_timestamp_set_metal;
 
-// Defined in spudgpumetalimage.m - shared so shader pipeline attachment
-// formats agree exactly with what spudgpu_create_image produces for the
-// same SPUDGPU_FORMAT.
-MTLPixelFormat spudgpumetal___internal_image_pixel_format(SPUDGPU_FORMAT format);
+// What one SPUDGPU_FORMAT is to Metal: an entry of the format table in
+// spudgpumetalformat.m, which every function of this backend that
+// translates a format or asks about one reads, so an image, a view, a
+// pipeline's attachments and a swap chain of one format always agree.
+typedef struct spudgpumetal_format_info {
+	// The texture and attachment format. Invalid: no image, view or
+	// attachment of this format can be made.
+	MTLPixelFormat pixel;
+	// The format of a view of the stencil aspect alone. Invalid where the
+	// format has no stencil.
+	MTLPixelFormat stencil_view;
+	// The vertex attribute format. Invalid: not an attribute format.
+	MTLVertexFormat vertex;
+	// The aspects the format has (SPUDGPU_IMAGE_ASPECT): what views of it
+	// spudgpu_create_image_view takes.
+	SPUDGPU_IMAGE_ASPECT aspects;
+	// A CAMetalLayer can be set to #pixel: a swap chain of it can be made.
+	bool presentable;
+} spudgpumetal_format_info;
+
+// Defined in spudgpumetalformat.m. The entry for [format]; for a format
+// with none (and any value out of range), one with every format Invalid,
+// the color aspect, and not presentable. Never NULL.
+const spudgpumetal_format_info *spudgpumetal___format_info(SPUDGPU_FORMAT format);
 
 // Defined in spudgpumetalcommand.m - ends and releases cmd_list_metal's
 // _active_compute_encoder if one is active, else a no-op. Shared with

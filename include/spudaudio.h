@@ -262,7 +262,8 @@ uint32_t spudaudio_sample_format_byte_size(SPUDAUDIO_SAMPLE_FORMAT fmt);
  * speakers and nearly all CoreAudio speaker labels. Names follow
  * PipeWire/ALSA: "R" is rear (WASAPI calls it back), and BC/BLC/BRC are
  * *bottom* positions (WASAPI's back center is RC). The 18 WASAPI speakers
- * come first, in WASAPI's bit order.
+ * come first, in WASAPI's dwChannelMask bit order: a speaker's bit is its
+ * position minus SPUDAUDIO_CHANNEL_POSITION_FL.
  *
  * - NA: a channel that exists but carries nothing (ALSA/PipeWire NA -
  *   common in HDMI maps). The only position that may repeat.
@@ -1004,12 +1005,13 @@ typedef struct SPUDAUDIO_STREAM_CONFIG {
  * @retval SPUD_SUCCESS Accepted; `out_config` is what creation would grant.
  * @retval SPUDRESULT_NULL_OUTPUT_PARAMETER `out_config` is NULL.
  * @retval SPUDRESULT_STRUCT_WRONG_TYPE `out_config->base.type` is not
- *         SPUD_STRUCT_TYPE_AUDIO_STREAM_CONFIG.
- * @retval SPUDRESULT_STRUCT_UNKNOWN_IN_CHAIN `out_config->base.next` is not NULL.
- * @retval SPUDRESULT_NULL_DESC `desc` is NULL.
- * @retval SPUDRESULT_STRUCT_WRONG_TYPE `desc->base.type` is not
+ *         SPUD_STRUCT_TYPE_AUDIO_STREAM_CONFIG; or, checked after `desc` is
+ *         found not NULL, `desc->base.type` is not
  *         SPUD_STRUCT_TYPE_AUDIO_STREAM_DESC.
- * @retval SPUDRESULT_STRUCT_UNKNOWN_IN_CHAIN `desc->base.next` is not NULL.
+ * @retval SPUDRESULT_STRUCT_UNKNOWN_IN_CHAIN `out_config->base.next` is not
+ *         NULL; or, checked after `desc->base.type`, `desc->base.next` is not
+ *         NULL.
+ * @retval SPUDRESULT_NULL_DESC `desc` is NULL.
  * @retval SPUDRESULT_SAUD_INVALID_DEVICE `desc->device` is NULL.
  * @retval SPUDRESULT_DESC_INVALID_PARAMETERS The format's channel count,
  *         rate or sample format is out of range, its positions break the

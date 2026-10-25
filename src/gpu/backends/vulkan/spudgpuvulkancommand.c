@@ -743,8 +743,10 @@ void spudgpu_cmd_set_depth_bounds(
 
 static VkAccessFlags spudgpu_vk___resource_state_to_access(SPUDGPU_RESOURCE_STATE state) {
     switch (state) {
+    // A vertex or a uniform buffer, as spudgpu.h has it (D3D12's
+    // VERTEX_AND_CONSTANT_BUFFER): read by vertex input and by shaders.
     case SPUDGPU_RESOURCE_STATE_VERTEX_BUFFER:
-        return VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT;
+        return VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT | VK_ACCESS_UNIFORM_READ_BIT;
     case SPUDGPU_RESOURCE_STATE_INDEX_BUFFER:
         return VK_ACCESS_INDEX_READ_BIT;
     // Read as well as written (a load op of LOAD, blending, the depth test),
@@ -773,6 +775,8 @@ static VkAccessFlags spudgpu_vk___resource_state_to_access(SPUDGPU_RESOURCE_STAT
 static VkPipelineStageFlags spudgpu_vk___resource_state_to_stage(SPUDGPU_RESOURCE_STATE state) {
     switch (state) {
     case SPUDGPU_RESOURCE_STATE_VERTEX_BUFFER:
+        return VK_PIPELINE_STAGE_VERTEX_INPUT_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
+               VK_PIPELINE_STAGE_VERTEX_SHADER_BIT;
     case SPUDGPU_RESOURCE_STATE_INDEX_BUFFER:
         return VK_PIPELINE_STAGE_VERTEX_INPUT_BIT;
     case SPUDGPU_RESOURCE_STATE_RENDER_TARGET:
@@ -859,7 +863,18 @@ void spudgpu_cmd_pipeline_barrier(
         vk_buffer_barriers[i].offset = 0;
         vk_buffer_barriers[i].size = VK_WHOLE_SIZE;
 
-        src_stage |= spudgpu_vk___resource_state_to_stage(b->state_before);
+        // Out of COMMON, a buffer may have been used in any way before: in
+        // an earlier submission, and on D3D12 every buffer is back in
+        // COMMON once a submission has run (the buffer state decays). D3D12
+        // orders a submission after the one before it; Vulkan doesn't, so
+        // the barrier waits for every earlier command and makes every write
+        // available, and the same calls are ordered on both.
+        if (b->state_before == SPUDGPU_RESOURCE_STATE_COMMON) {
+            vk_buffer_barriers[i].srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT;
+            src_stage |= VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+        } else {
+            src_stage |= spudgpu_vk___resource_state_to_stage(b->state_before);
+        }
         dst_stage |= spudgpu_vk___resource_state_to_stage(b->state_after);
     }
 

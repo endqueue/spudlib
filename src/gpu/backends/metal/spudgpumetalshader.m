@@ -345,56 +345,6 @@ void spudgpu_destroy_shader_module(spudgpu_shader_module shader_module) {
 // Render (shader) pipelines
 // -----------------------------------------------------------------------
 
-static MTLVertexFormat spudgpumetal___internal_vertex_format(SPUDGPU_FORMAT format) {
-	switch (format) {
-	case SPUDGPU_FORMAT_R8_UNORM:            return MTLVertexFormatUCharNormalized;
-	case SPUDGPU_FORMAT_R8_SNORM:            return MTLVertexFormatCharNormalized;
-	case SPUDGPU_FORMAT_R8_UINT:             return MTLVertexFormatUChar;
-	case SPUDGPU_FORMAT_R8_SINT:             return MTLVertexFormatChar;
-	case SPUDGPU_FORMAT_R8G8_UNORM:          return MTLVertexFormatUChar2Normalized;
-	case SPUDGPU_FORMAT_R8G8_SNORM:          return MTLVertexFormatChar2Normalized;
-	case SPUDGPU_FORMAT_R8G8_UINT:           return MTLVertexFormatUChar2;
-	case SPUDGPU_FORMAT_R8G8_SINT:           return MTLVertexFormatChar2;
-	case SPUDGPU_FORMAT_R8G8B8A8_UNORM:      return MTLVertexFormatUChar4Normalized;
-	case SPUDGPU_FORMAT_R8G8B8A8_SNORM:      return MTLVertexFormatChar4Normalized;
-	case SPUDGPU_FORMAT_R8G8B8A8_UINT:       return MTLVertexFormatUChar4;
-	case SPUDGPU_FORMAT_R8G8B8A8_SINT:       return MTLVertexFormatChar4;
-	case SPUDGPU_FORMAT_R16_FLOAT:           return MTLVertexFormatHalf;
-	case SPUDGPU_FORMAT_R16_UNORM:           return MTLVertexFormatUShortNormalized;
-	case SPUDGPU_FORMAT_R16_SNORM:           return MTLVertexFormatShortNormalized;
-	case SPUDGPU_FORMAT_R16_UINT:            return MTLVertexFormatUShort;
-	case SPUDGPU_FORMAT_R16_SINT:            return MTLVertexFormatShort;
-	case SPUDGPU_FORMAT_R16G16_FLOAT:        return MTLVertexFormatHalf2;
-	case SPUDGPU_FORMAT_R16G16_UNORM:        return MTLVertexFormatUShort2Normalized;
-	case SPUDGPU_FORMAT_R16G16_SNORM:        return MTLVertexFormatShort2Normalized;
-	case SPUDGPU_FORMAT_R16G16_UINT:         return MTLVertexFormatUShort2;
-	case SPUDGPU_FORMAT_R16G16_SINT:         return MTLVertexFormatShort2;
-	case SPUDGPU_FORMAT_R16G16B16A16_FLOAT:  return MTLVertexFormatHalf4;
-	case SPUDGPU_FORMAT_R16G16B16A16_UNORM:  return MTLVertexFormatUShort4Normalized;
-	case SPUDGPU_FORMAT_R16G16B16A16_SNORM:  return MTLVertexFormatShort4Normalized;
-	case SPUDGPU_FORMAT_R16G16B16A16_UINT:   return MTLVertexFormatUShort4;
-	case SPUDGPU_FORMAT_R16G16B16A16_SINT:   return MTLVertexFormatShort4;
-	case SPUDGPU_FORMAT_R32_FLOAT:           return MTLVertexFormatFloat;
-	case SPUDGPU_FORMAT_R32_UINT:            return MTLVertexFormatUInt;
-	case SPUDGPU_FORMAT_R32_SINT:            return MTLVertexFormatInt;
-	case SPUDGPU_FORMAT_R32G32_FLOAT:        return MTLVertexFormatFloat2;
-	case SPUDGPU_FORMAT_R32G32_UINT:         return MTLVertexFormatUInt2;
-	case SPUDGPU_FORMAT_R32G32_SINT:         return MTLVertexFormatInt2;
-	// Unlike MTLPixelFormat, MTLVertexFormat does have 3-component 32-bit
-	// variants - vertex buffers aren't going through the texture unit, so
-	// the same restriction spudgpumetal___internal_image_pixel_format
-	// documents doesn't apply here.
-	case SPUDGPU_FORMAT_R32G32B32_FLOAT:     return MTLVertexFormatFloat3;
-	case SPUDGPU_FORMAT_R32G32B32_UINT:      return MTLVertexFormatUInt3;
-	case SPUDGPU_FORMAT_R32G32B32_SINT:      return MTLVertexFormatInt3;
-	case SPUDGPU_FORMAT_R32G32B32A32_FLOAT:  return MTLVertexFormatFloat4;
-	case SPUDGPU_FORMAT_R32G32B32A32_UINT:   return MTLVertexFormatUInt4;
-	case SPUDGPU_FORMAT_R32G32B32A32_SINT:   return MTLVertexFormatInt4;
-	case SPUDGPU_FORMAT_R10G10B10A2_UNORM:   return MTLVertexFormatUInt1010102Normalized;
-	default:                                 return MTLVertexFormatInvalid;
-	}
-}
-
 // The class of primitive a topology draws. Patches have none here, for the
 // reason spudgpumetal___internal_primitive_type gives, and fall back the
 // same way.
@@ -456,7 +406,7 @@ static void spudgpumetal___internal_set_color_attachments(
 	for (uint32_t i = 0; i < desc->color_attachment_count; ++i) {
 		MTLRenderPipelineColorAttachmentDescriptor *attachment = attachments[i];
 		const spudgpu_blend_attachment_desc *blend             = &desc->blend_attachments[i];
-		attachment.pixelFormat     = spudgpumetal___internal_image_pixel_format(desc->color_attachment_formats[i]);
+		attachment.pixelFormat     = spudgpumetal___format_info(desc->color_attachment_formats[i])->pixel;
 		attachment.blendingEnabled = blend->blend_enable;
 		if (blend->blend_enable) {
 			attachment.sourceRGBBlendFactor        = spudgpumetal___internal_blend_factor(blend->src_color_blend_factor);
@@ -509,14 +459,20 @@ SPUDRESULT spudgpu_create_shader_pipeline(
 	if (!fragment_module_metal->_function_mtl)
 		return SPUDRESULT_GPU_INVALID_SHADER_MODULE;
 
+	// Attachment formats from the format table, as the images rendered to
+	// were made: a pipeline and the textures of its pass always agree.
 	for (uint32_t i = 0; i < desc->color_attachment_count; ++i)
-		if (spudgpumetal___internal_image_pixel_format(desc->color_attachment_formats[i]) == MTLPixelFormatInvalid)
+		if (spudgpumetal___format_info(desc->color_attachment_formats[i])->pixel == MTLPixelFormatInvalid)
 			return SPUDRESULT_GPU_INVALID_FORMAT;
 	MTLPixelFormat depth_format = MTLPixelFormatInvalid;
+	// A depth format with a stencil aspect is the stencil attachment too.
+	bool depth_has_stencil = false;
 	if (desc->depth_format != SPUDGPU_FORMAT_UNKNOWN) {
-		depth_format = spudgpumetal___internal_image_pixel_format(desc->depth_format);
+		const spudgpumetal_format_info *depth_info = spudgpumetal___format_info(desc->depth_format);
+		depth_format                               = depth_info->pixel;
 		if (depth_format == MTLPixelFormatInvalid)
 			return SPUDRESULT_GPU_INVALID_FORMAT;
+		depth_has_stencil = (depth_info->aspects & SPUDGPU_IMAGE_ASPECT_STENCIL) != 0;
 	}
 
 	spudgpu_device_metal *device_metal = (spudgpu_device_metal *)device;
@@ -542,7 +498,7 @@ SPUDRESULT spudgpu_create_shader_pipeline(
 
 		if (depth_format != MTLPixelFormatInvalid) {
 			pipeline_desc.depthAttachmentPixelFormat = depth_format;
-			if (depth_format == MTLPixelFormatDepth32Float_Stencil8) {
+			if (depth_has_stencil) {
 				pipeline_desc.stencilAttachmentPixelFormat = depth_format;
 			}
 		}
@@ -584,7 +540,7 @@ SPUDRESULT spudgpu_create_shader_pipeline(
 		for (uint32_t i = 0; i < desc->vertex_attribute_count; i++) {
 			const spudgpu_vertex_attribute_desc *a = &desc->vertex_attributes[i];
 			MTLVertexAttributeDescriptor *attr     = vertex_desc.attributes[a->location];
-			attr.format                            = spudgpumetal___internal_vertex_format(a->format);
+			attr.format                            = spudgpumetal___format_info(a->format)->vertex;
 			attr.offset                            = a->offset;
 			attr.bufferIndex                       = a->binding;
 		}
@@ -608,11 +564,9 @@ SPUDRESULT spudgpu_create_shader_pipeline(
 
 		if (depth_format != MTLPixelFormatInvalid) {
 			pipeline_desc.depthAttachmentPixelFormat = depth_format;
-			// Depth32Float_Stencil8 is the only depth/stencil combined
-			// format this backend maps images to (see
-			// spudgpumetalimage.m) - a texture in that format is
-			// implicitly usable as a stencil attachment too.
-			if (depth_format == MTLPixelFormatDepth32Float_Stencil8) {
+			// A depth and stencil texture (Depth32Float_Stencil8, the only
+			// one the format table has) is the stencil attachment too.
+			if (depth_has_stencil) {
 				pipeline_desc.stencilAttachmentPixelFormat = depth_format;
 			}
 		}

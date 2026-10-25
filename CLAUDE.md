@@ -652,7 +652,14 @@ GameInput and evdev builds were not run.
 
 All three backends have run a caller's full renderer on real hardware (as of
 2026-10-12): D3D12 on Windows, Vulkan on Linux, Metal on macOS, the same caller
-code on each. That covers the calls that caller makes. A call nothing above
+code on each. On 2026-10-25 Vulkan on Linux (Fedora 44, Intel Iris Xe on Mesa
+26.2.4, and llvmpipe) ran a caller's GPU test suite clean under validation and
+synchronization validation, after a fix here: a buffer barrier out of
+`COMMON` now waits on every earlier command and makes every write available
+(D3D12 orders submissions and decays buffers to `COMMON`; Vulkan had waited on
+nothing), and `VERTEX_BUFFER` includes uniform reads in shaders, as
+spudgpu.h says it does. Every sample in `spudgpusamples` but mesh shaders
+ran there too. That covers the calls that caller makes. A call nothing above
 SpudLib uses is only as verified as its sample in `spudgpusamples`. Vulkan
 on Windows has run `apricottests`' `aprend_gpu_tests` (2026-10-16, Intel Iris
 Xe and NVIDIA RTX A2000, validation layer clean), which found that the

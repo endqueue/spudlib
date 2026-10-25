@@ -645,7 +645,7 @@ SPUDRESULT spudgpu_create_instance(
     // Without this, invalid API usage tends to surface as an access violation
     // deep inside the ICD (e.g. igvk64.dll) instead of a VK_ERROR_* return,
     // since the driver isn't required to validate its own inputs.
-    static const char *validationLayer = "VK_LAYER_KHRONOS_validation";
+    static const char *const validationLayer = "VK_LAYER_KHRONOS_validation";
     uint32_t availableLayerCount = 0;
     vkEnumerateInstanceLayerProperties(&availableLayerCount, NULL);
     const uint32_t availableLayerCapacity = availableLayerCount;

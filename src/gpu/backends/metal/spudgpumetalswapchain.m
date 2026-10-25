@@ -17,21 +17,6 @@
 #include <Metal/Metal.h>
 #include "../../../spudstructbase.h"
 
-// Only the formats realistically requested for a swap chain's color
-// attachment - not a general spudgpu_image format table (that belongs to
-// spudgpumetalimage.m, itself still unimplemented).
-static MTLPixelFormat spudgpumetal___internal_swap_chain_pixel_format(SPUDGPU_FORMAT format) {
-	switch (format) {
-	case SPUDGPU_FORMAT_B8G8R8A8_UNORM:      return MTLPixelFormatBGRA8Unorm;
-	case SPUDGPU_FORMAT_B8G8R8A8_UNORM_SRGB: return MTLPixelFormatBGRA8Unorm_sRGB;
-	case SPUDGPU_FORMAT_R8G8B8A8_UNORM:      return MTLPixelFormatRGBA8Unorm;
-	case SPUDGPU_FORMAT_R8G8B8A8_UNORM_SRGB: return MTLPixelFormatRGBA8Unorm_sRGB;
-	case SPUDGPU_FORMAT_R16G16B16A16_FLOAT:  return MTLPixelFormatRGBA16Float;
-	case SPUDGPU_FORMAT_R10G10B10A2_UNORM:   return MTLPixelFormatRGB10A2Unorm;
-	default:                                 return MTLPixelFormatInvalid;
-	}
-}
-
 // The layer's contentsGravity for [scaling], which has passed
 // spudgpu___internal_check_swap_chain_desc. Core Animation names the
 // vertical gravities by the layer's own y axis: where its contents are
@@ -197,9 +182,11 @@ SPUDRESULT spudgpu_create_swap_chain(
 	// Every layer takes all three (spudgpu_get_surface_present_scalings), so
 	// none is refused with SPUDRESULT_GPU_PRESENT_SCALING_NOT_SUPPORTED here.
 
-	MTLPixelFormat pixel_format = spudgpumetal___internal_swap_chain_pixel_format(desc->format);
-	if (pixel_format == MTLPixelFormatInvalid)
+	// The format table's presentable formats: the ones a CAMetalLayer takes.
+	const spudgpumetal_format_info *format_info = spudgpumetal___format_info(desc->format);
+	if (!format_info->presentable)
 		return SPUDRESULT_DESC_INVALID_PARAMETERS;
+	MTLPixelFormat pixel_format = format_info->pixel;
 
 	SPUDRESULT sr = SPUD_SUCCESS;
 

@@ -345,12 +345,22 @@ SPUDRESULT sfs_file_map(
     uint64_t size,
     sfs_mapping *out_mapping);
 
-/** @brief The first mapped byte: the file's byte at the mapping's offset.
- * NULL for a NULL mapping. */
+/**
+ * @brief The first mapped byte: the file's byte at the mapping's offset.
+ * @param[in] mapping The mapping.
+ * @return The first byte, or NULL for a NULL mapping.
+ */
 const void *sfs_mapping_get_data(sfs_mapping mapping);
-/** @brief How many bytes are mapped. 0 for a NULL mapping. */
+/**
+ * @brief How many bytes are mapped.
+ * @param[in] mapping The mapping.
+ * @return The size in bytes, or 0 for a NULL mapping.
+ */
 uint64_t sfs_mapping_get_size(sfs_mapping mapping);
-/** @brief Unmaps a mapping. NULL does nothing. */
+/**
+ * @brief Unmaps a mapping.
+ * @param[in] mapping The mapping to release. NULL does nothing.
+ */
 void sfs_mapping_release(sfs_mapping mapping);
 
 /* ---- Paths ---- */

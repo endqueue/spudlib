@@ -349,11 +349,12 @@ void spudgpu_cmd_begin_rendering(
 			pass_desc.depthAttachment.storeAction = spudgpumetal___internal_store_action(desc->depth_attachment.depth_store_op);
 			pass_desc.depthAttachment.clearDepth  = desc->depth_attachment.clear_depth;
 
-			// Depth32Float_Stencil8 is the only combined depth/stencil format
-			// this backend produces (see spudgpumetalimage.m) - the same
-			// texture doubles as the stencil attachment when it's in that
-			// format.
-			if (view->_texture_view_mtl.pixelFormat == MTLPixelFormatDepth32Float_Stencil8) {
+			// A view of a depth and stencil texture in its own format is the
+			// stencil attachment too: the format table's stencil aspect
+			// (Depth32Float_Stencil8, the only such format it has). A view of
+			// the stencil alone is in another format and isn't.
+			const spudgpumetal_format_info *depth_info = spudgpumetal___format_info(view->_parent_image->_desc.format);
+			if ((depth_info->aspects & SPUDGPU_IMAGE_ASPECT_STENCIL) && view->_texture_view_mtl.pixelFormat == depth_info->pixel) {
 				pass_desc.stencilAttachment.texture      = view->_texture_view_mtl;
 				pass_desc.stencilAttachment.loadAction   = spudgpumetal___internal_load_action(desc->depth_attachment.stencil_load_op);
 				pass_desc.stencilAttachment.storeAction  = spudgpumetal___internal_store_action(desc->depth_attachment.stencil_store_op);

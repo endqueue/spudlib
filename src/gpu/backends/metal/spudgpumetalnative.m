@@ -112,12 +112,9 @@ MTLPixelFormat spudgpu_get_mtl_swap_chain_format(spudgpu_swap_chain swap_chain) 
 	if (!swap_chain_metal)
 		return MTLPixelFormatInvalid;
 
-	// METAL API CODE
-	// Needs a SPUDGPU_FORMAT -> MTLPixelFormat table (mirroring the D3D12
-	// backend's spudgpu_d3d12_get_dxgi_format) before this can translate
-	// swap_chain_metal->_desc.format for real.
-
-	return MTLPixelFormatInvalid;
+	// The layer's pixel format, as spudgpu_create_swap_chain set it from the
+	// format table.
+	return spudgpumetal___format_info(swap_chain_metal->_desc.format)->pixel;
 }
 
 #endif // SPUDGPU_COMPILE_METAL_API

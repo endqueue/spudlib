@@ -257,6 +257,7 @@ if(NOT TARGET spudlib)
                 src/gpu/backends/metal/spudgpumetalshader.m
                 src/gpu/backends/metal/spudgpumetalswapchain.m
                 src/gpu/backends/metal/spudgpumetalimage.m
+                src/gpu/backends/metal/spudgpumetalformat.m
                 src/gpu/backends/metal/spudgpumetaldescriptors.m
                 src/gpu/backends/metal/spudgpumetalcommand.m
                 src/gpu/backends/metal/spudgpumetalrenderpass.m
@@ -617,6 +618,14 @@ if(NOT TARGET spudlib)
         add_executable(spudaudio_test tests/spudaudio_test.c)
         target_link_libraries(spudaudio_test PRIVATE spudlib)
         add_test(NAME spudaudio_test COMMAND spudaudio_test)
+        if(UNIX AND NOT APPLE)
+            # Under the -asan and -tsan presets: what PipeWire and ALSA's
+            # pipewire plugin report from inside snd_pcm_open and _close,
+            # third-party code, each entry with its reason in the file. Set
+            # on the test so it holds in every build that adds spudlib.
+            set_tests_properties(spudaudio_test PROPERTIES ENVIRONMENT_MODIFICATION
+                "LSAN_OPTIONS=string_append::suppressions=${CMAKE_CURRENT_SOURCE_DIR}/tests/sanitizers/linux-lsan.supp;TSAN_OPTIONS=string_append::suppressions=${CMAKE_CURRENT_SOURCE_DIR}/tests/sanitizers/linux-tsan.supp")
+        endif()
 
         add_executable(spudaudio_sine tests/spudaudio_sine.c)
         target_link_libraries(spudaudio_sine PRIVATE spudlib)

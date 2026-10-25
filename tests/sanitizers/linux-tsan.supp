@@ -1,0 +1,11 @@
+# ThreadSanitizer suppressions for spudaudio_test on Linux, under the -tsan
+# presets (set on the test in CMakeLists.txt). Third-party code only, each
+# with its reason; SpudLib's own reports are fixed, never listed here.
+
+# ALSA's pipewire PCM plugin takes PipeWire's thread-loop lock (libspa's
+# loop_lock) and alsa-lib's PCM lock in both orders inside libasound:
+# snd_pcm_sw_params_current under the loop lock, snd_pcm_drop's loop lock
+# under the PCM lock. Both locks and both orders are inside the plugin, on
+# the one thread SpudAudio calls from; nothing SpudAudio does orders them.
+# Seen 2026-10-25 on Fedora 44, PipeWire 1.6.9, alsa-lib 1.2.16.
+deadlock:loop_lock

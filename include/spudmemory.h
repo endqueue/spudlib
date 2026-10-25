@@ -40,14 +40,18 @@
 extern "C" {
 #endif // __cplusplus
 
+/** @brief @p n kibibytes, in bytes, as a uint64_t. */
 #define SMEM_KiB(n) ((uint64_t)(n) << 10)
+/** @brief @p n mebibytes, in bytes, as a uint64_t. */
 #define SMEM_MiB(n) ((uint64_t)(n) << 20)
+/** @brief @p n gibibytes, in bytes, as a uint64_t. */
 #define SMEM_GiB(n) ((uint64_t)(n) << 30)
 
 /**
  * @brief The size of a page, in bytes: what every size and address the
  * other calls take is a multiple of. A power of two; the same for the life
  * of the process. 4 KiB on most x86-64 systems, 16 KiB on Apple Silicon.
+ * @return The page size in bytes.
  */
 uint32_t smem_get_page_size(void);
 

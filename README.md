@@ -120,12 +120,12 @@ CTest runs eight tests, none of which opens a window: `spudcore_test`,
 `spudmemory_test`, `spudaudio_test`, `spudperf_test` and `spudinput_test`.
 The two `spudgpu_` tests need a GPU and are skipped without one. SpudNet's test needs a
 local server and runs through `tests/run_spudnet_test.sh`. Most of SpudGPU is
-verified by `spudgpusamples` instead. [`CLAUDE.md`](CLAUDE.md), "Known gaps",
+verified by `spudgpusamples` instead. [`CLAUDE.md`](https://github.com/endqueue/spudlib/blob/master/CLAUDE.md), "Known gaps",
 records what each covers and what has run where.
 
 ## Contributing
 
-Read [`CLAUDE.md`](CLAUDE.md) before making structural changes. It covers the
+Read [`CLAUDE.md`](https://github.com/endqueue/spudlib/blob/master/CLAUDE.md) before making structural changes. It covers the
 zero-policy rule, `SPUDGPU_EXT_*` gating, struct bases and the backend file
 layout. Format with the repo's `.clang-format`.
 
