@@ -135,7 +135,7 @@ for (const SPUD_STRUCT_BASE *s = desc->base.next; s; s = s->next) {
    behavior. Vulkan's flat `sType`/`pNext` fields would instead rely on
    casting between unrelated structs that share their first fields. A flat
    `type` field would also clash with the existing `type` fields
-   (`spudgpu_image_desc::type`, `SFS_FILE_DIALOG_ATTRIBUTES::type`).
+   (`spudgpu_image_desc::type`, `SPUDFILE_FILE_DIALOG_ATTRIBUTES::type`).
 6. **Anything unknown in a chain is refused, never skipped.** Skipping it
    would quietly decide for the caller that the addition didn't matter.
    Vulkan leaves this to its validation layers; spudlib refuses at every
@@ -267,8 +267,8 @@ All frozen: `SPUDGPU_D3D12_BUFFER_VIEW`, `SPUDGPU_D3D12_IMAGE_VIEW` and
 Converted 2026-10-22, with the rework (`SPUDFILES_TODO.md`); the structs
 planned here went with the old API.
 
-- **`SPUD_STRUCT_BASE`:** `sfs_instance_desc` (5001), `sfs_open_desc` (5000).
-- **`SPUD_STRUCT_BASE_OUT`:** `SFS_PATH_INFO` (5002).
+- **`SPUD_STRUCT_BASE`:** `spudfile_instance_desc` (5001), `spudfile_open_desc` (5000).
+- **`SPUD_STRUCT_BASE_OUT`:** `SPUDFILE_PATH_INFO` (5002).
 
 ## ABI bugs (fixed 2026-10-18)
 

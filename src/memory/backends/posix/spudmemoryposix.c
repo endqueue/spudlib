@@ -12,9 +12,12 @@
 #define MAP_ANONYMOUS MAP_ANON
 #endif
 
-uint32_t smem_backend_page_size(void) { return (uint32_t)sysconf(_SC_PAGESIZE); }
+uint32_t spudmem_backend_page_size(void) { return (uint32_t)sysconf(_SC_PAGESIZE); }
 
-SPUDRESULT smem_backend_reserve(
+/* mmap places a mapping on any page boundary. */
+uint32_t spudmem_backend_reserve_granularity(void) { return spudmem_backend_page_size(); }
+
+SPUDRESULT spudmem_backend_reserve(
     uint64_t size,
     void **out_address) {
 	if (size > (uint64_t)SIZE_MAX)
@@ -28,7 +31,7 @@ SPUDRESULT smem_backend_reserve(
 	return SPUD_SUCCESS;
 }
 
-SPUDRESULT smem_backend_commit(
+SPUDRESULT spudmem_backend_commit(
     void *address,
     uint64_t size) {
 	if (mprotect(address, (size_t)size, PROT_READ | PROT_WRITE) != 0)
@@ -36,7 +39,7 @@ SPUDRESULT smem_backend_commit(
 	return SPUD_SUCCESS;
 }
 
-SPUDRESULT smem_backend_decommit(
+SPUDRESULT spudmem_backend_decommit(
     void *address,
     uint64_t size) {
 	/* A fresh PROT_NONE mapping over the range: the old pages go back to
@@ -49,7 +52,7 @@ SPUDRESULT smem_backend_decommit(
 	return SPUD_SUCCESS;
 }
 
-SPUDRESULT smem_backend_release(
+SPUDRESULT spudmem_backend_release(
     void *address,
     uint64_t size) {
 	if (munmap(address, (size_t)size) != 0)

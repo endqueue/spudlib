@@ -17,8 +17,8 @@
  * Rules that hold on every backend:
  *
  * - Every size, and every address passed in, is a multiple of the page size
- *   (smem_get_page_size()). Nothing is rounded: a size or address that isn't
- *   one is refused with SPUDRESULT_SMEM_NOT_PAGE_ALIGNED.
+ *   (spudmem_get_page_size()). Nothing is rounded: a size or address that isn't
+ *   one is refused with SPUDRESULT_SPUDMEM_NOT_PAGE_ALIGNED.
  * - A committed page reads zero until it is written, the first time and
  *   every time it is committed again after a decommit. Committing a page
  *   that is already committed leaves its contents as they are.
@@ -26,7 +26,7 @@
  *   faults on every backend today).
  * - The pages committed and decommitted are within one reservation, and a
  *   release gives back the whole of one: the address and size
- *   smem_reserve() returned. Anything else is undefined (Windows can't
+ *   spudmem_reserve() returned. Anything else is undefined (Windows can't
  *   release part of a reservation).
  *
  * No call holds state, so any may be called from any thread. Two threads
@@ -41,11 +41,11 @@ extern "C" {
 #endif // __cplusplus
 
 /** @brief @p n kibibytes, in bytes, as a uint64_t. */
-#define SMEM_KiB(n) ((uint64_t)(n) << 10)
+#define SPUDMEM_KiB(n) ((uint64_t)(n) << 10)
 /** @brief @p n mebibytes, in bytes, as a uint64_t. */
-#define SMEM_MiB(n) ((uint64_t)(n) << 20)
+#define SPUDMEM_MiB(n) ((uint64_t)(n) << 20)
 /** @brief @p n gibibytes, in bytes, as a uint64_t. */
-#define SMEM_GiB(n) ((uint64_t)(n) << 30)
+#define SPUDMEM_GiB(n) ((uint64_t)(n) << 30)
 
 /**
  * @brief The size of a page, in bytes: what every size and address the
@@ -53,18 +53,36 @@ extern "C" {
  * of the process. 4 KiB on most x86-64 systems, 16 KiB on Apple Silicon.
  * @return The page size in bytes.
  */
-uint32_t smem_get_page_size(void);
+uint32_t spudmem_get_page_size(void);
+
+/**
+ * @brief The reservation granularity, in bytes: where the system starts a
+ * reservation, and so the size below which a reservation strands address
+ * space no other reservation can use. A power of two and a multiple of the
+ * page size; the same for the life of the process. 64 KiB on Windows
+ * (`dwAllocationGranularity`); the page size on Linux and every Apple
+ * system.
+ *
+ * spudmem_reserve() still takes any multiple of the page size: a caller
+ * that reserves many small ranges reads this to size them, and nothing is
+ * rounded for it.
+ *
+ * @return The reservation granularity in bytes.
+ */
+uint32_t spudmem_get_reserve_granularity(void);
 
 /**
  * @brief Reserves address space, none of it committed.
  *
  * @param[in]  size        Bytes to reserve: a multiple of the page size.
  * @param[out] out_address Receives the start of the reservation, a
- *                         multiple of the page size; NULL on failure.
+ *                         multiple of the reservation granularity
+ *                         (spudmem_get_reserve_granularity()); NULL on
+ *                         failure.
  *
  * @retval SPUD_SUCCESS The space is reserved.
  * @retval SPUDRESULT_ZERO_SIZE `size` is 0.
- * @retval SPUDRESULT_SMEM_NOT_PAGE_ALIGNED `size` is not a multiple of the
+ * @retval SPUDRESULT_SPUDMEM_NOT_PAGE_ALIGNED `size` is not a multiple of the
  *         page size.
  * @retval SPUDRESULT_NULL_OUTPUT_PARAMETER `out_address` is NULL.
  * @retval SPUDRESULT_OUT_OF_MEMORY The system has no address space or
@@ -72,7 +90,7 @@ uint32_t smem_get_page_size(void);
  * @retval SPUDRESULT_API_SPECIFIC_FAILURE The platform refused for another
  *         reason.
  */
-SPUDRESULT smem_reserve(
+SPUDRESULT spudmem_reserve(
     uint64_t size,
     void **out_address);
 
@@ -84,15 +102,15 @@ SPUDRESULT smem_reserve(
  * @param[in] size    Bytes to commit: a multiple of the page size.
  *
  * @retval SPUD_SUCCESS The pages are committed.
- * @retval SPUDRESULT_SMEM_NULL_ADDRESS `address` is NULL.
- * @retval SPUDRESULT_SMEM_NOT_PAGE_ALIGNED `address` or `size` is not a
+ * @retval SPUDRESULT_SPUDMEM_NULL_ADDRESS `address` is NULL.
+ * @retval SPUDRESULT_SPUDMEM_NOT_PAGE_ALIGNED `address` or `size` is not a
  *         multiple of the page size.
  * @retval SPUDRESULT_ZERO_SIZE `size` is 0.
  * @retval SPUDRESULT_OUT_OF_MEMORY The system has no memory left for them.
  * @retval SPUDRESULT_API_SPECIFIC_FAILURE The platform refused for another
  *         reason.
  */
-SPUDRESULT smem_commit(
+SPUDRESULT spudmem_commit(
     void *address,
     uint64_t size);
 
@@ -105,30 +123,30 @@ SPUDRESULT smem_commit(
  * @param[in] size    Bytes to decommit: a multiple of the page size.
  *
  * @retval SPUD_SUCCESS The pages are decommitted.
- * @retval SPUDRESULT_SMEM_NULL_ADDRESS `address` is NULL.
- * @retval SPUDRESULT_SMEM_NOT_PAGE_ALIGNED `address` or `size` is not a
+ * @retval SPUDRESULT_SPUDMEM_NULL_ADDRESS `address` is NULL.
+ * @retval SPUDRESULT_SPUDMEM_NOT_PAGE_ALIGNED `address` or `size` is not a
  *         multiple of the page size.
  * @retval SPUDRESULT_ZERO_SIZE `size` is 0.
  * @retval SPUDRESULT_API_SPECIFIC_FAILURE The platform refused.
  */
-SPUDRESULT smem_decommit(
+SPUDRESULT spudmem_decommit(
     void *address,
     uint64_t size);
 
 /**
  * @brief Releases a whole reservation, committed pages and all.
  *
- * @param[in] address The start smem_reserve() returned.
+ * @param[in] address The start spudmem_reserve() returned.
  * @param[in] size    The size it was reserved with.
  *
  * @retval SPUD_SUCCESS The reservation is gone.
- * @retval SPUDRESULT_SMEM_NULL_ADDRESS `address` is NULL.
- * @retval SPUDRESULT_SMEM_NOT_PAGE_ALIGNED `address` or `size` is not a
+ * @retval SPUDRESULT_SPUDMEM_NULL_ADDRESS `address` is NULL.
+ * @retval SPUDRESULT_SPUDMEM_NOT_PAGE_ALIGNED `address` or `size` is not a
  *         multiple of the page size.
  * @retval SPUDRESULT_ZERO_SIZE `size` is 0.
  * @retval SPUDRESULT_API_SPECIFIC_FAILURE The platform refused.
  */
-SPUDRESULT smem_release(
+SPUDRESULT spudmem_release(
     void *address,
     uint64_t size);
 

@@ -14,17 +14,18 @@
 extern "C" {
 #endif
 
-uint32_t smem_backend_page_size(void);
-SPUDRESULT smem_backend_reserve(
+uint32_t spudmem_backend_page_size(void);
+uint32_t spudmem_backend_reserve_granularity(void);
+SPUDRESULT spudmem_backend_reserve(
     uint64_t size,
     void **out_address);
-SPUDRESULT smem_backend_commit(
+SPUDRESULT spudmem_backend_commit(
     void *address,
     uint64_t size);
-SPUDRESULT smem_backend_decommit(
+SPUDRESULT spudmem_backend_decommit(
     void *address,
     uint64_t size);
-SPUDRESULT smem_backend_release(
+SPUDRESULT spudmem_backend_release(
     void *address,
     uint64_t size);
 

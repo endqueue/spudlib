@@ -12,9 +12,11 @@ is removed and SpudInput's struct bases are in).
 
 ## The one rule everything else follows
 
-**SpudLib is pure mechanism, zero policy.** It translates a platform/GPU API into a
-consistent C interface and stops there. It never makes a decision on the caller's
-behalf, never has a default that hides a choice, and holds no global state.
+**SpudLib is pure mechanism, no hidden policy.** It translates a platform/GPU API into a
+consistent C interface and stops there. Every choice is visible and the caller's
+(worded so 2026-10-28, card S2): where a behaviour must exist at all, such as
+where validation messages go, the caller supplies it. It never makes a decision on
+the caller's behalf, never has a default that hides a choice, and holds no global state.
 
 - Expose enumeration/query functions so the caller can inspect and
   decide — `spudgpu_enumerate_adapters`, not `spudgpu_select_best_device`.
@@ -40,8 +42,8 @@ Every module returns the shared `SPUDRESULT` enum (`spudcore.h`, 165 values with
 | Module | Header | Prefix | Backends |
 |---|---|---|---|
 | SpudGPU | `spudgpu.h` | `spudgpu_` | Vulkan, D3D12, Metal |
-| SpudFiles | `spudfiles.h` | `sfs_` | Windows, Linux, macOS |
-| SpudMemory | `spudmemory.h` | `smem_` | Windows, POSIX (Linux + Apple, one file) |
+| SpudFiles | `spudfiles.h` | `spudfile_` | Windows, Linux, macOS |
+| SpudMemory | `spudmemory.h` | `spudmem_` | Windows, POSIX (Linux + Apple, one file) |
 | SpudNet | `spudnet.h` | `spudnet_` | TCP sockets: Winsock2, BSD sockets (Linux + Apple, one file). HTTP + WebSocket: WinHTTP, libcurl, NSURLSession |
 | SpudAudio | `spudaudio.h` | `spudaudio_` / `SPUDRESULT_SAUD_*` | WASAPI (Windows), ALSA (Linux), CoreAudio (macOS); an argument-checking stub where no API is compiled in (iOS, watchOS) |
 | SpudInput | `spudinput.h` | `spudinput_` / `SPUDRESULT_SPUDINPUT_*` | GameController (macOS, iOS, iPadOS), evdev (Linux), GameInput (Windows). Not written: XInput (Windows); with no API built in, no instance can be made |
@@ -1064,8 +1066,8 @@ D3D12 rebind as asked, which both allow.
   with the caller's allocator; UTF-8 paths (Windows converts each to UTF-16
   and calls only the W functions); access, creation and share mode chosen by
   the caller; reads and writes at an offset, with no cursor; what is at a
-  path from `sfs_path_get_info`; one directory level per
-  `sfs_directory_create`. The dialogs, path-string functions and working
+  path from `spudfile_path_get_info`; one directory level per
+  `spudfile_directory_create`. The dialogs, path-string functions and working
   directory are gone, and with them every static buffer. Every check is in
   the front end (`src/spudfiles.c`); the backends implement
   `src/files/spudfilesshared.h`: one POSIX file for Linux and Apple

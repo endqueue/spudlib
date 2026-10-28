@@ -90,7 +90,7 @@ static void test_allocator_system(void) {
 static void test_result_names(void) {
 	CHECK(strcmp(spudresult_str(SPUD_SUCCESS), "SPUD_SUCCESS") == 0);
 	CHECK(strcmp(spudresult_str(SPUDRESULT_GPU_INVALID_HEAP), "SPUDRESULT_GPU_INVALID_HEAP") == 0);
-	CHECK(strcmp(spudresult_str(SPUDRESULT_SFS_FLUSH_LEVEL_NOT_SUPPORTED), "SPUDRESULT_SFS_FLUSH_LEVEL_NOT_SUPPORTED") == 0);
+	CHECK(strcmp(spudresult_str(SPUDRESULT_SPUDFILE_FLUSH_LEVEL_NOT_SUPPORTED), "SPUDRESULT_SPUDFILE_FLUSH_LEVEL_NOT_SUPPORTED") == 0);
 	CHECK(strcmp(spudresult_str((SPUDRESULT)123456), "SPUDRESULT_UNKNOWN") == 0);
 }
 

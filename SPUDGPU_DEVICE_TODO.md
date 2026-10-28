@@ -1028,7 +1028,39 @@ touches the frame loop of every caller.
   D3D12 a process-wide one: switching the layer on removes every D3D12
   device the process already has. It becomes a field of
   `spudgpu_instance_desc` (off, on, on with GPU-based validation), with no
-  default, in every build. Its own change.
+  default, in every build. Its own change. **Decided 2026-10-28 with the
+  user (card S3): build it now**, before 1.0, with every caller in the
+  workspace in the same change. It needs Windows runs for D3D12 and Vulkan
+  (and a Linux one for Vulkan); Metal's half maps to its API validation
+  and shader validation where the process allows.
+- **SpudGPU's own checks and where messages go. Decided 2026-10-28 with
+  the user (card S2):** an opt-in check layer, built with S3 in the same
+  change. Unreal's RHI validation (`-rhivalidation`) is the model: checks
+  of SpudGPU's own rules on top of the native layers, which can't see them.
+  - **One callback for every message.** `spudgpu_instance_desc` takes a
+    message callback and its context. A message carries a severity, a
+    source (SpudGPU's own check, the native layer, GPU-based validation),
+    an id, the text and the object's debug name. D3D12's info queue,
+    Vulkan's debug messenger (none is registered today, so its layer
+    prints on its own) and Metal's reports all go to it, and the `printf`
+    in `spudgpu_d3d12_debug_message` goes. Logging, breaking or asserting
+    is the caller's choice.
+  - **Levels are S3's field:** off, on (the native layer plus SpudGPU's
+    own checks), on with GPU-based validation. Validation on with no
+    callback is refused at creation, so no message is dropped unseen.
+  - **In every build, switched at runtime:** off costs one predictable
+    branch per call; Debug and Release don't differ, so a Release-only bug
+    can be validated. The `void` calls stay `void` (option (c), results on
+    every call, was turned down: it taxes every draw).
+  - **What SpudGPU checks:** destroyed or foreign handles (another
+    device's), recording outside begin and end, bindings past the
+    descriptor budget, an EXT used without its feature bit, overlapping
+    calls on one object (X3's Debug check, here for SpudGPU), and barrier
+    states where cheap to track.
+  - **A misuse test harness:** each misuse made on purpose, the test
+    asserting the callback got the expected message id, on all three
+    backends (`ROADMAP.md`'s misuse harness, extended to the `void`
+    calls).
 
 ## Breaks
 

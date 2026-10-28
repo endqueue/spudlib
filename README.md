@@ -68,8 +68,8 @@ Every module reports errors through the shared `SPUDRESULT` enum
 | Module | Header | Prefix | Backends |
 |---|---|---|---|
 | SpudGPU | `spudgpu.h` | `spudgpu_` | Vulkan, D3D12, Metal |
-| SpudFiles | `spudfiles.h` | `sfs_` | Windows, Linux, macOS |
-| SpudMemory | `spudmemory.h` | `smem_` | Windows, POSIX (Linux + Apple, one file) |
+| SpudFiles | `spudfiles.h` | `spudfile_` | Windows, Linux, macOS |
+| SpudMemory | `spudmemory.h` | `spudmem_` | Windows, POSIX (Linux + Apple, one file) |
 | SpudNet | `spudnet.h` | `spudnet_` | TCP sockets: Winsock2, BSD sockets (Linux + Apple, one file). HTTP + WebSocket: WinHTTP, libcurl, NSURLSession |
 | SpudAudio | `spudaudio.h` | `spudaudio_` / `SPUDRESULT_SAUD_*` | WASAPI (Windows), ALSA (Linux), CoreAudio (macOS); an argument-checking stub where no API is compiled in (iOS, watchOS) |
 | SpudInput | `spudinput.h` | `spudinput_` / `SPUDRESULT_SPUDINPUT_*` | GameController (macOS, iOS, iPadOS), evdev (Linux), GameInput (Windows). Not written: XInput (Windows); with no API built in, no instance can be made |

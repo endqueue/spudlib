@@ -150,13 +150,24 @@ Long-lived C APIs have these and spudlib does not:
     (`free` on mapped memory) and create (no check of the reservation; a
     zero commit size divided by zero later) were broken. Nothing but
     a caller's log line used it, so it went rather than moving to another
-    repository. SpudMemory is `smem_get_page_size`, `smem_reserve`,
-    `smem_commit`, `smem_decommit` and `smem_release`, each returning a
+    repository. SpudMemory is `spudmem_get_page_size`, `spudmem_reserve`,
+    `spudmem_commit`, `spudmem_decommit` and `spudmem_release`, each returning a
     `SPUDRESULT`, with a POSIX backend for Linux and Apple
     (`src/memory/backends/posix/`) beside Windows'.
     `tests/spudmemory_test` passes on macOS, plain and under ASan and
     TSan, and on Windows 11 (MSVC, Debug, 2026-10-22), and the
     POSIX one has not been compiled on Linux.
+    **Decided 2026-10-27 with you (card X1b, line 2):** the shape is kept,
+    with two changes. The prefixes are spelled out: SpudMemory's `smem_` is
+    `spudmem_` (`SPUDMEM_`, `SPUDRESULT_SPUDMEM_*`) and SpudFiles' `sfs_` is
+    `spudfile_` (`SPUDFILE_`, `SPUDRESULT_SPUDFILE_*`), every caller
+    renamed in the same change (every caller in the workspace). And
+    `spudmem_get_reserve_granularity()` reports where a reservation starts
+    (Windows' 64 KiB `dwAllocationGranularity`; the page size on POSIX), as
+    Unreal's `GetVirtualSizeAlignment` does, so a caller can size small
+    reservations without stranding address space; nothing is rounded for
+    it. Run on macOS (2026-10-27); the Windows backend's new call is
+    written, not compiled.
 - **A stated stability and threading policy.** `CLAUDE.md` says a released
   layout never changes, but nothing says what "released" is: there are no
   tags or versions, and spudlib is STATIC only, pinned by commit in each
@@ -164,6 +175,19 @@ Long-lived C APIs have these and spudlib does not:
   down what is promised and from which version (as SQLite and Vulkan do), and
   per call what may be called from which thread at once (Vulkan's "externally
   synchronized"); today only about 15 places in the headers say.
+  **Decided 2026-10-27 with you (card X2):** per-library semantic versions
+  (`vX.Y.Z` tags, checked against `SPUDLIB_VERSION_*` from 1.0); before 1.0
+  a minor version may break, each break listed against the ABI snapshot;
+  from 1.0 released layouts are frozen and grow by chained structs, enums
+  and results append-only. spudlib stays static-only until a shared build
+  is needed, which keeps the next bullet waiting. Workspace releases are
+  dated tags on eqdev, never on spudlib. The rules are in the root
+  `CLAUDE.md`, "Versions and releases". **The threading half, decided
+  2026-10-27 (card X3):** every object is used by one caller at a time
+  (serialization, not thread identity), stated once in each header; the
+  exceptions carry a `Thread:` line; Debug builds detect overlapping calls
+  on one object. SpudLib creates no threads but what a platform imposes (an
+  audio callback; the network stacks' own). Root `CLAUDE.md`, "Threading".
 - **Before any shared build of spudlib** (not needed while it is static
   only): an export macro, default-hidden symbols, a `SOVERSION`, and symbol
   versioning or a `.def` file.
