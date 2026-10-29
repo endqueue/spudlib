@@ -1289,7 +1289,16 @@ the above ran again, as clean.
   needs something real: `spudaudio_sine` (an audio device and someone listening;
   until 2026-10-22 its probe loop zeroed the config's base each round, so
   every probe was refused as `SPUDRESULT_STRUCT_WRONG_TYPE` and it never
-  reached a stream; fixed, not run since)
+  reached a stream; fixed. Run on Windows 11 over WASAPI on 2026-10-29,
+  Debug, on the default output (Sony WH-1000XM5, Bluetooth; 48 kHz float
+  stereo): the tone was heard clean, twice, by someone listening. Every check
+  passed but one on the first run: "host time agrees with sample rate
+  (within 1%)" measured 45,243.7 Hz against 48,000 (47,544.2 on the 1 s
+  restart, a pass). The frames themselves kept time (3.15 s of audio in
+  3.39 s); what drifted is each callback's `host_time_ns` over the first
+  seconds, likely the Bluetooth path's latency settling, which the check
+  counts over a short run. Not looked into further; the wired speakers have
+  not been run)
   and `spudnet_test` (a local server, started by `tests/run_spudnet_test.sh`).
   SpudGPU's are `spudgpu_device_test` and `spudgpu_objects_test`, which
   draw nothing; the rest of SpudGPU is
