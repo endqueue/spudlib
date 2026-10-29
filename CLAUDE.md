@@ -541,7 +541,9 @@ GameInput and evdev builds were not run.
   The helpers are in `src/spudallocator.h`: `SPUD_NEW`, `SPUD_NEW_ZEROED`,
   `SPUD_DELETE`, `SPUD_NEW_ARRAY`, `SPUD_NEW_ARRAY_ZEROED`, `SPUD_DELETE_ARRAY`,
   `SPUD_RESIZE_ARRAY`, `spud_string_copy`/`spud_string_free`, and
-  `spud_allocate`/`spud_free` for an untyped blob. The workspace's
+  `spud_allocate`/`spud_free` for an untyped blob. An array that grows is an
+  `EQ_ARRAY` from eqstd (below), on the object's `SPUD_ALLOCATOR` handed
+  over by `spud_eq_allocator`. The workspace's
   `check.sh conventions` counts every call of a C allocation function and
   every allocating `new` and `delete` in `src/`; the ones allowed (the
   system allocator a caller may choose, memory the platform hands out,
@@ -549,9 +551,28 @@ GameInput and evdev builds were not run.
 - **A block is freed with the size and alignment it was allocated with.** The
   allocator is told both, so that a pool or an arena needs no header. Keep a
   capacity beside every array whose length isn't otherwise known when it is
-  freed, and free it with that capacity; a realloc becomes `SPUD_RESIZE_ARRAY`
-  with the old and new capacity. Two arrays that share one capacity are grown
-  both or neither. A size of 0 is asked for and freed as 1 by the helpers, so a
+  freed, and free it with that capacity. Two arrays that share one capacity
+  are grown both or neither.
+- **An array that grows is an `EQ_ARRAY` (eqstd), not a pointer, a count and
+  a capacity grown by hand** (since 2026-10-29). eqstd is the workspace's
+  header-only container library (`../eqstd`, belonging to no layer, never in
+  a public API), a PRIVATE dependency of `spudlib`: no public header includes
+  it. The object that owns the array keeps an `EQ_ALLOCATOR` made by
+  `spud_eq_allocator(&head.allocator)` (`src/spudallocator.h`) beside it, since
+  the array keeps a pointer to it; every eqstd call that grows returns an
+  `EQ_RESULT`, and anything but `EQ_SUCCESS` becomes `SPUDRESULT_OUT_OF_MEMORY`
+  (or the caller's false), the array unchanged. eqstd keeps
+  `SPUD_ALLOCATOR`'s contract (never 0 bytes, each block freed with its size
+  and alignment; an array's alignment is `EQ_ARRAY_ALIGNMENT` of the
+  element's size, a multiple of its alignment). Where a growth pattern
+  matters (a table sized from the capacity, a count that must fit a
+  `uint32_t`), the capacity is chosen here and given to `eq_array_reserve`,
+  which allocates exactly that; otherwise `eq_array_push` grows by doubling
+  from 4. Converted: SpudNet's response headers (`src/net/spudnethttp.c`)
+  and the wait set's members and poll entries (`src/net/spudnetwaitset.c`).
+  Still `SPUD_RESIZE_ARRAY`, to convert when they can be compiled and tested
+  again: WASAPI's endpoints, GameInput's devices, evdev's gamepads and the
+  D3D12 backend's indirect signatures and heap free ranges. A size of 0 is asked for and freed as 1 by the helpers, so a
   count that may be 0 needs no case of its own. `tests/spudtest_allocator.h`
   checks all of this in a test.
 - **Every handle starts with a `spud_object_head`** (`src/spudallocator.h`): its
@@ -606,7 +627,11 @@ GameInput and evdev builds were not run.
   `spudgpud3d12context.cpp`, `spudgpud3d12command.cpp`, `spudgpud3d12renderpass.cpp`
   and `spudgpud3d12shader.cpp`, the bindless free stacks, and an image's
   `_subresource_states` in `spudgpud3d12.hpp`) still allocate
-  through the standard allocator, which reports failure by throwing.
+  through the standard allocator, which reports failure by throwing. They
+  become `eq::array` / `eq::string` on the device's allocator, and the
+  `SPUD_RESIZE_ARRAY` arrays listed above `EQ_ARRAY`s, when those files are
+  next built on their platforms (Windows, Linux); then `SPUD_RESIZE_ARRAY`
+  goes.
 - **A debug name is copied, never kept as the caller's pointer, in every
   build.** `debug_name` fields and the name member of a handle exist in
   Debug and Release alike (since 2026-10-18; before, only under
@@ -785,6 +810,14 @@ D3D12 rebind as asked, which both allow.
 
 ## Build system
 
+- **eqstd** (`EQ_ARRAY` and the rest; see "An array that grows") is linked
+  PRIVATE. `CMakeLists.txt`'s `spud_add_workspace_or_fetch` adds the
+  workspace's `../eqstd` checkout, edits included, when it is there (in its
+  own binary dir, and only if no `eqstd` target exists yet), and otherwise
+  fetches `endqueue/eqstd` at the commit pinned there (a hash, never a
+  branch), so a clone of spudlib alone still builds. eqstd's own tests are
+  built only when it is the top-level project. Moving the pin: change the
+  hash in the call, with the code that needs the newer eqstd.
 - `GRAPHICS_BACKEND` is a single-choice CMake cache variable (`Vulkan` / `D3D12` /
   `Metal`) — there is no multi-backend build. The source list is assembled per-platform
   and per-backend *before* `add_library`, so only one backend's translation units ever
