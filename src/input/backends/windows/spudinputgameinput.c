@@ -73,6 +73,8 @@ typedef struct spudinput_gameinput_pad {
 	IGameInputReading *reading;
 } spudinput_gameinput_pad;
 
+typedef EQ_ARRAY(IGameInputDevice *) spudinput_gameinput_device_array;
+
 typedef struct spudinput_gameinput_instance {
 	IGameInput *game_input;
 	IGameInputDispatcher *dispatcher;
@@ -80,14 +82,14 @@ typedef struct spudinput_gameinput_instance {
 	/* The instance's allocator, for the device callback, which is given only
 	 * this struct. */
 	const SPUD_ALLOCATOR *allocator;
+	/* eqstd's view of it (spud_eq_allocator), which `connected` points at. */
+	EQ_ALLOCATOR eq_allocator;
 
 	/* Guards what follows, which the device callback writes. */
 	SRWLOCK lock;
 	/* The gamepads connected, as the callback has said, each with a
 	 * reference of its own. */
-	IGameInputDevice **connected;
-	uint32_t connected_count;
-	uint32_t connected_capacity;
+	spudinput_gameinput_device_array connected;
 	/* A callback could not write a change down for want of memory: the
 	 * list is to be made again from GameInput. */
 	bool lost;
@@ -130,9 +132,9 @@ static SPUDINPUT_GAMEPAD_BUTTONS spudinput_gameinput_map_buttons(GameInputGamepa
 static int64_t spudinput_gameinput_find_connected(
     const spudinput_gameinput_instance *backend,
     const IGameInputDevice *device) {
-	for (uint32_t i = 0; i < backend->connected_count; ++i) {
-		if (backend->connected[i] == device)
-			return i;
+	for (size_t i = 0; i < backend->connected.count; ++i) {
+		if (backend->connected.data[i] == device)
+			return (int64_t)i;
 	}
 	return -1;
 }
@@ -140,9 +142,9 @@ static int64_t spudinput_gameinput_find_connected(
 /* Drops every device the list holds. Called with the lock held, or when
  * nothing else can reach the list. */
 static void spudinput_gameinput_clear_connected(spudinput_gameinput_instance *backend) {
-	for (uint32_t i = 0; i < backend->connected_count; ++i)
-		backend->connected[i]->lpVtbl->Release(backend->connected[i]);
-	backend->connected_count = 0;
+	for (size_t i = 0; i < backend->connected.count; ++i)
+		backend->connected.data[i]->lpVtbl->Release(backend->connected.data[i]);
+	eq_array_clear(&backend->connected);
 }
 
 /* GameInput says a gamepad came or went. Only the move between connected
@@ -165,23 +167,16 @@ static void CALLBACK spudinput_gameinput_device_callback(
 	AcquireSRWLockExclusive(&backend->lock);
 	const int64_t index = spudinput_gameinput_find_connected(backend, device);
 	if (is_connected && index < 0) {
-		if (backend->connected_count == backend->connected_capacity) {
-			const uint32_t capacity = backend->connected_capacity ? backend->connected_capacity * 2 : 4;
-			IGameInputDevice **connected =
-			    SPUD_RESIZE_ARRAY(backend->allocator, IGameInputDevice *, backend->connected, backend->connected_capacity, capacity);
-			if (!connected) {
-				backend->lost = true;
-				ReleaseSRWLockExclusive(&backend->lock);
-				return;
-			}
-			backend->connected          = connected;
-			backend->connected_capacity = capacity;
+		if (eq_array_push(&backend->connected, &device) != EQ_SUCCESS) {
+			backend->lost = true;
+			ReleaseSRWLockExclusive(&backend->lock);
+			return;
 		}
 		device->lpVtbl->AddRef(device);
-		backend->connected[backend->connected_count++] = device;
 	} else if (!is_connected && index >= 0) {
 		device->lpVtbl->Release(device);
-		backend->connected[index] = backend->connected[--backend->connected_count];
+		// An index inside the list, so the removal can't fail.
+		(void)eq_array_remove_swap(&backend->connected, (size_t)index);
 	}
 	ReleaseSRWLockExclusive(&backend->lock);
 }
@@ -360,7 +355,9 @@ SPUDINPUT_BACKEND_FUNCTION SPUDRESULT spudinput_gameinput_create(spudinput_insta
 	spudinput_gameinput_instance *backend = SPUD_NEW_ZEROED(allocator, spudinput_gameinput_instance);
 	if (!backend)
 		return SPUDRESULT_OUT_OF_MEMORY;
-	backend->allocator = allocator;
+	backend->allocator    = allocator;
+	backend->eq_allocator = spud_eq_allocator(allocator);
+	eq_array_init(&backend->connected, &backend->eq_allocator);
 	InitializeSRWLock(&backend->lock);
 
 	if (FAILED(GameInputCreate(&backend->game_input))) {
@@ -379,7 +376,7 @@ SPUDINPUT_BACKEND_FUNCTION SPUDRESULT spudinput_gameinput_create(spudinput_insta
 	const SPUDRESULT result = spudinput_gameinput_register(backend, GameInputBlockingEnumeration);
 	if (result != SPUD_SUCCESS) {
 		backend->game_input->lpVtbl->Release(backend->game_input);
-		SPUD_DELETE_ARRAY(allocator, IGameInputDevice *, backend->connected, backend->connected_capacity);
+		eq_array_free(&backend->connected);
 		SPUD_DELETE(allocator, spudinput_gameinput_instance, backend);
 		return result;
 	}
@@ -389,7 +386,7 @@ SPUDINPUT_BACKEND_FUNCTION SPUDRESULT spudinput_gameinput_create(spudinput_insta
 	if (FAILED(backend->game_input->lpVtbl->CreateDispatcher(backend->game_input, &backend->dispatcher))) {
 		spudinput_gameinput_unregister(backend);
 		spudinput_gameinput_clear_connected(backend);
-		SPUD_DELETE_ARRAY(allocator, IGameInputDevice *, backend->connected, backend->connected_capacity);
+		eq_array_free(&backend->connected);
 		backend->game_input->lpVtbl->Release(backend->game_input);
 		SPUD_DELETE(allocator, spudinput_gameinput_instance, backend);
 		return SPUDRESULT_API_SPECIFIC_FAILURE;
@@ -404,7 +401,7 @@ SPUDINPUT_BACKEND_FUNCTION void spudinput_gameinput_destroy(spudinput_instance i
 
 	spudinput_gameinput_unregister(backend);
 	spudinput_gameinput_clear_connected(backend);
-	SPUD_DELETE_ARRAY(backend->allocator, IGameInputDevice *, backend->connected, backend->connected_capacity);
+	eq_array_free(&backend->connected);
 	backend->dispatcher->lpVtbl->Release(backend->dispatcher);
 	backend->game_input->lpVtbl->Release(backend->game_input);
 	SPUD_DELETE(&instance->allocator, spudinput_gameinput_instance, backend);
@@ -445,10 +442,10 @@ SPUDINPUT_BACKEND_FUNCTION SPUDRESULT spudinput_gameinput_poll(spudinput_instanc
 	 * written to: a pad for each device that has no record yet, and room
 	 * for them in the table. */
 	uint32_t arrived_count = 0;
-	for (uint32_t i = 0; i < backend->connected_count; ++i) {
+	for (size_t i = 0; i < backend->connected.count; ++i) {
 		bool known = false;
 		for (uint32_t j = 0; j < instance->record_count && !known; ++j)
-			known = ((spudinput_gameinput_pad *)instance->records[j].native)->device == backend->connected[i];
+			known = ((spudinput_gameinput_pad *)instance->records[j].native)->device == backend->connected.data[i];
 		if (!known)
 			++arrived_count;
 	}
@@ -494,8 +491,8 @@ SPUDINPUT_BACKEND_FUNCTION SPUDRESULT spudinput_gameinput_poll(spudinput_instanc
 
 	/* The new ones. */
 	uint32_t next = 0;
-	for (uint32_t i = 0; i < backend->connected_count; ++i) {
-		IGameInputDevice *device = backend->connected[i];
+	for (size_t i = 0; i < backend->connected.count; ++i) {
+		IGameInputDevice *device = backend->connected.data[i];
 		bool known               = false;
 		for (uint32_t j = 0; j < known_count && !known; ++j)
 			known = ((spudinput_gameinput_pad *)instance->records[j].native)->device == device;

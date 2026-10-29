@@ -8,7 +8,7 @@ what SpudLib parses, and what is fuzzed here, is what the stacks hand on:
 
 | Target | Function (file) | Bytes from |
 |---|---|---|
-| `spudnet_fuzz_http_head` | `spudnet_head_add_header_line`, `spudnet_head_add_header`, `spudnet_head_get_header` (`src/net/spudnethttp.c`) | the server: a response's header block, a line at a time (libcurl, WinHTTP) or as pairs (NSURLSession) |
+| `spudnet_fuzz_http_head` | `spudnet_head_add_header_line`, `spudnet_head_add_header`, `spudnet_head_get_header` (`src/net/spudnethttp.c`); on Windows also `spudnet_win_add_raw_headers` (`src/net/backends/windows/spudnetwinhttp.c`) | the server: a response's header block, a line at a time (libcurl, WinHTTP) or as pairs (NSURLSession), and on Windows as WinHTTP hands over the whole block, UTF-16 |
 | `spudnet_fuzz_certificate` | `spudnet_certificate_public_key_info` (`src/spudnet.c`) | the server: its certificate's DER, walked to the key a pin is checked against (WinHTTP, NSURLSession) |
 | `spudnet_fuzz_text` | `spudnet_utf8_valid`, `spudnet_error_record`, `spudnet_ascii_equal_no_case`, `spudnet_url_has_scheme`, `spudnet_headers_accept_encoding` | the caller or the stack: text checked before a WebSocket send, a stack's message cut to fit a record |
 | `spudnet_fuzz_proxy` | `spudnet_proxy_parse` (`src/spudnet.c`) | the caller: a proxy URL |
@@ -32,6 +32,22 @@ cmake --build --preset macos-fuzz-debug
 mkdir -p /tmp/fuzz-head && cp tests/fuzz/corpus/spudnet_fuzz_http_head/* /tmp/fuzz-head/
 build-macos-fuzz/Debug/spudnet_fuzz_http_head -max_total_time=1200 -max_len=4096 /tmp/fuzz-head
 ```
+
+On Windows (2026-10-29), from a Visual Studio developer prompt with LLVM's
+`bin` on `PATH` (LLVM 23.1.4 ran it):
+
+```sh
+cmake --preset windows-fuzz
+cmake --build --preset windows-fuzz-relwithdebinfo
+PATH="/c/Program Files/LLVM/lib/clang/23/lib/windows:$PATH"   build-windows-fuzz/RelWithDebInfo/spudnet_fuzz_http_head -max_total_time=600 -max_len=4096 <scratch corpus>
+```
+
+It is LLVM's clang through its GNU-style driver, RelWithDebInfo at `-O1`
+with asserts on, on the static release CRT, which clang's AddressSanitizer
+and LLVM's prebuilt libFuzzer need on Windows, and without indirect-call
+and comparison tracing, which break C++ exceptions there
+(`../../../claude_made_decisions.md`, 2026-10-29). The runtime DLL beside
+the clang version on the `PATH` above must be found to run a target.
 
 Fuzz into a scratch copy of the corpus, not `corpus/` itself, which holds
 only a few small, valid seeds. On macOS, LeakSanitizer reports a leak in

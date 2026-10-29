@@ -117,6 +117,7 @@ if(NOT TARGET spudlib)
             src/files/backends/windows/spudfileswindows.c
             src/net/backends/windows/spudnetwindows.c
             src/net/backends/windows/spudnetwinhttp.c
+            src/net/backends/windows/spudnetwinhttphead.h
             src/memory/backends/windows/spudmemorywindows.c
         )
     endif()
@@ -413,13 +414,9 @@ if(NOT TARGET spudlib)
             endif()
             target_compile_definitions(spudlib PUBLIC SPUDGPU_COMPILE_VULKAN_API=1)
 
-            if(WIN32)
-                # Manually hint where Vulkan is located on Windows
-                # On Linux, it is automatically /usr/include and /usr/lib64
-                set(Vulkan_INCLUDE_DIR "C:/VulkanSDK/1.4.341.1/Include")
-                set(Vulkan_LIBRARY "C:/VulkanSDK/1.4.341.1/Lib/vulkan-1.lib")
-                set(Vulkan_GLSLC_EXECUTABLE "C:/VulkanSDK/1.4.341.1/Bin/glslc.exe")
-            elseif(UNIX AND NOT APPLE)
+            # On Windows find_package(Vulkan) finds the SDK through the VULKAN_SDK
+            # variable its installer sets, whatever version is installed.
+            if(UNIX AND NOT APPLE)
                 # The Vulkan WSI surface type is compiled in (spudgpuvulkanswapchain.c
                 # switches on SPUDGPU_PLATFORM_XLIB / SPUDGPU_PLATFORM_WAYLAND), so it
                 # must match the window handles the caller will pass: an X11

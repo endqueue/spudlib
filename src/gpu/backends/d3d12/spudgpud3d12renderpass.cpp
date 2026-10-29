@@ -5,7 +5,6 @@
 #include "../../spudgpushared.h"
 #include <cassert>
 #include <cstdio>
-#include <vector>
 #include "../../../spudstructbase.h"
 
 // Maps SPUDGPU_IMAGE_LAYOUT to D3D12_RESOURCE_STATES.
@@ -92,9 +91,10 @@ static UINT spudgpu_d3d12_format_plane_count(DXGI_FORMAT format) {
 	}
 }
 
-// One transition barrier for every plane of (mip, layer) of [image].
-static void spudgpu_d3d12_push_subresource_barriers(
-    std::vector<D3D12_RESOURCE_BARRIER> &barriers,
+// One transition barrier for every plane of (mip, layer) of [image]. False,
+// with some of them pushed, if [barriers] couldn't grow.
+static bool spudgpu_d3d12_push_subresource_barriers(
+    eq::array<D3D12_RESOURCE_BARRIER> &barriers,
     spudgpu_image_d3d12 *image,
     UINT mip,
     UINT layer,
@@ -111,8 +111,10 @@ static void spudgpu_d3d12_push_subresource_barriers(
 		barrier.Transition.StateBefore = stateBefore;
 		barrier.Transition.StateAfter  = stateAfter;
 		barrier.Transition.Subresource = D3D12CalcSubresource(mip, layer, plane, mipLevels, arraySize);
-		barriers.push_back(barrier);
+		if (barriers.push(barrier) != EQ_SUCCESS)
+			return false;
 	}
+	return true;
 }
 
 static void spudgpu_d3d12_resource_barrier(
@@ -130,18 +132,25 @@ static void spudgpu_d3d12_resource_barrier(
 		// again afterwards.
 		const UINT mipLevels = image->_desc.mip_levels;
 		const UINT arraySize = image->_desc.array_layers;
-		std::vector<D3D12_RESOURCE_BARRIER> barriers;
-		for (UINT layer = 0; layer < arraySize; ++layer) {
-			for (UINT mip = 0; mip < mipLevels; ++mip) {
-				const D3D12_RESOURCE_STATES stateBefore = image->_subresource_states[mip + (size_t)layer * mipLevels];
+		eq::array<D3D12_RESOURCE_BARRIER> barriers(&image->_device->_eq_allocator);
+		bool built = true;
+		for (UINT layer = 0; layer < arraySize && built; ++layer) {
+			for (UINT mip = 0; mip < mipLevels && built; ++mip) {
+				const D3D12_RESOURCE_STATES stateBefore = image->_subresource_states.data[mip + (size_t)layer * mipLevels];
 				if (stateBefore != stateAfter)
-					spudgpu_d3d12_push_subresource_barriers(barriers, image, mip, layer, stateBefore, stateAfter);
+					built = spudgpu_d3d12_push_subresource_barriers(barriers, image, mip, layer, stateBefore, stateAfter);
 			}
 		}
-		if (barriers.empty() && is_storage_state)
-			barriers.push_back(spudgpu_d3d12_uav_barrier(image));
+		if (built && barriers.empty() && is_storage_state)
+			built = barriers.push(spudgpu_d3d12_uav_barrier(image)) == EQ_SUCCESS;
+		// Out of memory: nothing is recorded, and the tracked states stay as
+		// they were.
+		if (!built) {
+			printf("spudgpu: spudgpu_cmd_image_barrier - out of memory building barriers; nothing recorded\n");
+			return;
+		}
 		if (!barriers.empty())
-			cmdList->ResourceBarrier((UINT)barriers.size(), barriers.data());
+			cmdList->ResourceBarrier((UINT)barriers.size(), barriers.data);
 		image->_subresource_states.clear();
 		image->_current_state = stateAfter;
 		return;
@@ -226,22 +235,20 @@ void spudgpu_cmd_image_barrier_subresource(
 	// (see spudgpu_d3d12_resource_barrier), the state before is the one
 	// tracked here, never old_layout.
 	if (image->_subresource_states.empty()) {
-		try {
-			image->_subresource_states.assign((size_t)mipLevels * arraySize, image->_current_state);
-		} catch (const std::bad_alloc &) {
+		if (image->_subresource_states.resize((size_t)mipLevels * arraySize) != EQ_SUCCESS) {
 			printf("spudgpu: spudgpu_cmd_image_barrier_subresource - out of memory tracking subresource states; nothing recorded\n");
 			return;
 		}
+		for (D3D12_RESOURCE_STATES &state : image->_subresource_states)
+			state = image->_current_state;
 	}
 
 	// Room for every barrier this can make is taken first, so that nothing
 	// below can fail once the tracked states start to change.
-	std::vector<D3D12_RESOURCE_BARRIER> barriers;
-	try {
-		// One more than the transitions, for the ordering barrier below.
-		barriers.reserve(
-		    (size_t)range->mip_level_count * range->array_layer_count * spudgpu_d3d12_format_plane_count(image->_d3d_resource_desc.Format) + 1);
-	} catch (const std::bad_alloc &) {
+	eq::array<D3D12_RESOURCE_BARRIER> barriers(&image->_device->_eq_allocator);
+	// One more than the transitions, for the ordering barrier below.
+	if (barriers.reserve((size_t)range->mip_level_count * range->array_layer_count * spudgpu_d3d12_format_plane_count(image->_d3d_resource_desc.Format) +
+	                     1) != EQ_SUCCESS) {
 		printf("spudgpu: spudgpu_cmd_image_barrier_subresource - out of memory building barriers; nothing recorded\n");
 		return;
 	}
@@ -249,10 +256,11 @@ void spudgpu_cmd_image_barrier_subresource(
 		for (UINT mip = 0; mip < (UINT)range->mip_level_count; ++mip) {
 			const UINT m                   = (UINT)range->base_mip_level + mip;
 			const UINT l                   = (UINT)range->base_array_layer + layer;
-			D3D12_RESOURCE_STATES &tracked = image->_subresource_states[m + (size_t)l * mipLevels];
+			D3D12_RESOURCE_STATES &tracked = image->_subresource_states.data[m + (size_t)l * mipLevels];
 			if (tracked == stateAfter)
 				continue;
-			spudgpu_d3d12_push_subresource_barriers(barriers, image, m, l, tracked, stateAfter);
+			// Room was made above, so the pushes can't fail.
+			(void)spudgpu_d3d12_push_subresource_barriers(barriers, image, m, l, tracked, stateAfter);
 			tracked = stateAfter;
 		}
 	}
@@ -260,10 +268,10 @@ void spudgpu_cmd_image_barrier_subresource(
 	// Nothing in the range had to move and it is in the storage state: the
 	// header's ordering barrier.
 	if (barriers.empty() && stateAfter == D3D12_RESOURCE_STATE_UNORDERED_ACCESS)
-		barriers.push_back(spudgpu_d3d12_uav_barrier(image));
+		(void)barriers.push(spudgpu_d3d12_uav_barrier(image));
 
 	if (!barriers.empty())
-		cmd->_d3d_cmd_list->ResourceBarrier((UINT)barriers.size(), barriers.data());
+		cmd->_d3d_cmd_list->ResourceBarrier((UINT)barriers.size(), barriers.data);
 
 	// Back in one state everywhere: return to tracking the image as a whole.
 	bool uniform = true;

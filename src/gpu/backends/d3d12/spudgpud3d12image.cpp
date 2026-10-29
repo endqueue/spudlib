@@ -295,8 +295,9 @@ SPUDRESULT spudgpu_create_image(
 	    SPUD_NEW(&device->head.allocator, spudgpu_image_d3d12);
 	if (!pResult)
 		return SPUDRESULT_OUT_OF_MEMORY;
-	pResult                 = new (pResult) spudgpu_image_d3d12();
-	pResult->head.allocator = device->head.allocator;
+	pResult                      = new (pResult) spudgpu_image_d3d12();
+	pResult->head.allocator      = device->head.allocator;
+	pResult->_subresource_states = eq::array<D3D12_RESOURCE_STATES>(&device->_eq_allocator);
 	pResult->_device        = device;
 	pResult->_desc          = *desc;
 

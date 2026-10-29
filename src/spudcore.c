@@ -36,6 +36,10 @@ const char *spud_debug_name_get(void *object) {
 
 static void *spud_system_allocate(void *user_data, size_t size, size_t alignment) {
 	(void)user_data;
+	/* A size no rounding to the alignment can hold is refused here, on every
+	 * platform, rather than left to the C library to notice. */
+	if (size > SIZE_MAX - (alignment - 1))
+		return NULL;
 #if defined(_WIN32)
 	return _aligned_malloc(size, alignment);
 #else
@@ -44,8 +48,6 @@ static void *spud_system_allocate(void *user_data, size_t size, size_t alignment
 	 * up to one. */
 	if (alignment <= _Alignof(max_align_t))
 		return malloc(size);
-	if (size > SIZE_MAX - (alignment - 1))
-		return NULL;
 	return aligned_alloc(alignment, (size + alignment - 1) & ~(alignment - 1));
 #endif
 }

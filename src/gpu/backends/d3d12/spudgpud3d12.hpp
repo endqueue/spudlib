@@ -4,6 +4,7 @@
 #include "../../../spudallocator.h"
 #include "../../spudgpushared.h"
 #include "d3dx12.h"
+#include "eqstd.hpp"
 #include "spudgpu.h"
 #include "spudgpu_d3d12_natives.h"
 #include <array>
@@ -12,7 +13,6 @@
 #include <dxgi1_6.h>
 #include <mutex>
 #include <new>
-#include <vector>
 #include <wrl/client.h>
 
 #define D3D12_GPU_VIRTUAL_ADDRESS_NULL ((D3D12_GPU_VIRTUAL_ADDRESS)0)
@@ -168,17 +168,16 @@ typedef struct spudgpu_d3d12_heap_range {
 // Each is made with the device, as large as the device's descriptor budget
 // (spudgpu_device_desc::max_descriptors, ::max_samplers), and not made at all
 // for a budget of 0 (spudgpud3d12descriptors.cpp).
+typedef EQ_ARRAY(spudgpu_d3d12_heap_range) spudgpu_d3d12_heap_ranges;
+
 typedef struct spudgpu_d3d12_shader_heap {
 	Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> heap;
 	uint32_t increment = 0;
-	// The unused ranges, sorted by offset, with touching neighbours merged:
-	// free_ranges[0, free_count), in an array of free_capacity made through
-	// the device's allocator. The device frees it, with that capacity, when
+	// The unused ranges, sorted by offset, with touching neighbours merged,
+	// grown through the device's _eq_allocator. The device frees them when
 	// it is destroyed (spudgpud3d12context.cpp): a destructor has no
-	// allocator to free it through.
-	spudgpu_d3d12_heap_range *free_ranges = nullptr;
-	uint32_t free_count                   = 0;
-	uint32_t free_capacity                = 0;
+	// allocator to free them through.
+	spudgpu_d3d12_heap_ranges free_ranges = {};
 } spudgpu_d3d12_shader_heap;
 
 // A root-signature-less command signature describing one DRAW (or
@@ -189,16 +188,11 @@ typedef struct spudgpu_d3d12_indirect_signature {
 	bool indexed;
 } spudgpu_d3d12_indirect_signature;
 
-// The device's indirect draw signatures: entries[0, count) in an array of
-// capacity made through the device's allocator. Each signature is released,
-// and the array freed with that capacity, when the device is destroyed
-// (spudgpud3d12context.cpp): a destructor has no allocator to free it
-// through.
-typedef struct spudgpu_d3d12_indirect_signatures {
-	spudgpu_d3d12_indirect_signature *entries = nullptr;
-	uint32_t count                            = 0;
-	uint32_t capacity                         = 0;
-} spudgpu_d3d12_indirect_signatures;
+// The device's indirect draw signatures, grown through the device's
+// _eq_allocator. Each signature is released, and the array freed, when the
+// device is destroyed (spudgpud3d12context.cpp): a destructor has no
+// allocator to free it through.
+typedef EQ_ARRAY(spudgpu_d3d12_indirect_signature) spudgpu_d3d12_indirect_signatures;
 
 typedef struct spudgpu_bindless_state_d3d12 {
 	// A range of the device's shader-visible CBV_SRV_UAV heap
@@ -222,10 +216,11 @@ typedef struct spudgpu_bindless_state_d3d12 {
 	uint32_t storage_image_next_unused  = 0;
 	uint32_t storage_buffer_next_unused = 0;
 
-	// Stacks of freed indices, reused before drawing from *_next_unused.
-	std::vector<uint32_t> sampled_image_free_stack;
-	std::vector<uint32_t> storage_image_free_stack;
-	std::vector<uint32_t> storage_buffer_free_stack;
+	// Stacks of freed indices, reused before drawing from *_next_unused, on
+	// the device's _eq_allocator (given when the state is made).
+	eq::array<uint32_t> sampled_image_free_stack;
+	eq::array<uint32_t> storage_image_free_stack;
+	eq::array<uint32_t> storage_buffer_free_stack;
 
 	// Guards the counters and stacks above: registering and unregistering
 	// may be done from any thread, and the bindless table is SpudGPU's, not
@@ -237,6 +232,9 @@ typedef struct spudgpu_bindless_state_d3d12 {
 
 typedef struct spudgpu_device_t {
 	spud_object_head head;
+	// eqstd's view of head.allocator (spud_eq_allocator), which the device's
+	// arrays point at: the heaps' free ranges and the indirect signatures.
+	EQ_ALLOCATOR _eq_allocator;
 	spudgpu_adapter_d3d12 *_adapter;
 	Microsoft::WRL::ComPtr<ID3D12Device14> _d3d_device;
 	// spudgpu_device_desc::required_features: what every call checks.
@@ -426,8 +424,9 @@ typedef struct spudgpu_image_t {
 	// at index mip + layer * mip_levels, and _current_state is not read
 	// until the states agree again and this is emptied. A single state for
 	// the whole image can't describe mip N in one layout and mip N + 1 in
-	// another, which is what that call exists for.
-	std::vector<D3D12_RESOURCE_STATES> _subresource_states;
+	// another, which is what that call exists for. On the device's
+	// _eq_allocator, given when the image is made.
+	eq::array<D3D12_RESOURCE_STATES> _subresource_states;
 	// nullptr for a committed image; the heap it was placed in otherwise
 	// (spudgpu_create_placed_image).
 	spudgpu_heap _heap;

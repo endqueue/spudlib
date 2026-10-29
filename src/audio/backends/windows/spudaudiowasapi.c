@@ -119,6 +119,7 @@ struct wasapi_endpoint {
 	SPUDAUDIO_DIRECTION direction;
 	char persistent_id[256];
 };
+typedef EQ_ARRAY(struct wasapi_endpoint) wasapi_endpoint_array;
 
 /*
  * Device-change notification for one instance: exists while a callback is
@@ -139,6 +140,9 @@ struct wasapi_watch {
 	// A copy of the instance's, not a pointer to it: the last Release, which
 	// frees the watch, may come after the instance has gone.
 	SPUD_ALLOCATOR allocator;
+	// eqstd's view of `allocator` (spud_eq_allocator), which `endpoints`
+	// points at.
+	EQ_ALLOCATOR eq_allocator;
 	SPUDAUDIO_DEVICE_EVENT_CALLBACK callback;
 	void *user_data;
 	IMMDeviceEnumerator *enumerator; // the instance's; not used once stopped
@@ -149,9 +153,7 @@ struct wasapi_watch {
 
 	SRWLOCK lock;       // the fields below
 	bool have_baseline; // changes before the baseline is taken are not events
-	struct wasapi_endpoint *endpoints;
-	uint32_t endpoint_count;
-	uint32_t endpoint_capacity; // what `endpoints` was allocated, and is freed, with
+	wasapi_endpoint_array endpoints;
 };
 
 struct spudaudio_instance_t {
@@ -644,8 +646,8 @@ static bool wasapi_endpoint_info(IMMDeviceEnumerator *enumerator, LPCWSTR wide_i
 // Index of an endpoint in the watch's record, or -1. Lock held. Endpoint
 // ids are unique across both directions.
 static int wasapi_watch_find(const struct wasapi_watch *w, const char *id) {
-	for (uint32_t i = 0; i < w->endpoint_count; ++i)
-		if (strcmp(w->endpoints[i].persistent_id, id) == 0)
+	for (size_t i = 0; i < w->endpoints.count; ++i)
+		if (strcmp(w->endpoints.data[i].persistent_id, id) == 0)
 			return (int)i;
 	return -1;
 }
@@ -654,19 +656,11 @@ static int wasapi_watch_find(const struct wasapi_watch *w, const char *id) {
 // notification threads as well as the caller's, so the allocator is called
 // there too.
 static bool wasapi_watch_add(struct wasapi_watch *w, const char *id, SPUDAUDIO_DIRECTION direction) {
-	if (w->endpoint_count == w->endpoint_capacity) {
-		const uint32_t capacity        = w->endpoint_capacity ? w->endpoint_capacity * 2 : 16;
-		struct wasapi_endpoint *bigger = SPUD_RESIZE_ARRAY(&w->allocator, struct wasapi_endpoint, w->endpoints, w->endpoint_capacity, capacity);
-		if (!bigger)
-			return false;
-		w->endpoints         = bigger;
-		w->endpoint_capacity = capacity;
-	}
-	struct wasapi_endpoint *e = &w->endpoints[w->endpoint_count++];
-	memset(e, 0, sizeof(*e));
-	e->direction = direction;
-	strncpy(e->persistent_id, id, sizeof(e->persistent_id) - 1);
-	return true;
+	struct wasapi_endpoint e;
+	memset(&e, 0, sizeof(e));
+	e.direction = direction;
+	strncpy(e.persistent_id, id, sizeof(e.persistent_id) - 1);
+	return eq_array_push(&w->endpoints, &e) == EQ_SUCCESS;
 }
 
 // A notification enters the watch. False once the watch has stopped; the
@@ -706,9 +700,10 @@ static void wasapi_watch_update(struct wasapi_watch *w, LPCWSTR wide_id, bool ac
 			// otherwise have nothing to match.
 			report = wasapi_watch_add(w, id, direction);
 		} else if (!active && at >= 0) {
-			direction        = w->endpoints[at].direction;
-			w->endpoints[at] = w->endpoints[--w->endpoint_count];
-			report           = true;
+			direction = w->endpoints.data[at].direction;
+			// An index inside the record, so the removal can't fail.
+			(void)eq_array_remove_swap(&w->endpoints, (size_t)at);
+			report = true;
 		}
 	}
 	ReleaseSRWLockExclusive(&w->lock);
@@ -737,7 +732,7 @@ static ULONG STDMETHODCALLTYPE wasapi_watch_release(IMMNotificationClient *self)
 	const LONG refs        = InterlockedDecrement(&w->refs);
 	if (refs == 0) {
 		const SPUD_ALLOCATOR allocator = w->allocator;
-		SPUD_DELETE_ARRAY(&allocator, struct wasapi_endpoint, w->endpoints, w->endpoint_capacity);
+		eq_array_free(&w->endpoints);
 		SPUD_DELETE(&allocator, struct wasapi_watch, w);
 	}
 	return (ULONG)refs;
@@ -887,6 +882,8 @@ static SPUDRESULT wasapi_watch_create(spudaudio_instance instance, SPUDAUDIO_DEV
 	w->client.lpVtbl = &wasapi_watch_vtbl;
 	w->refs          = 1;
 	w->allocator     = instance->head.allocator;
+	w->eq_allocator  = spud_eq_allocator(&w->allocator);
+	eq_array_init(&w->endpoints, &w->eq_allocator);
 	w->callback      = callback;
 	w->user_data     = user_data;
 	w->enumerator    = instance->enumerator;

@@ -138,7 +138,8 @@ SPUDRESULT spudgpu_create_swap_chain(
 	}
 	for (uint32_t i = 0; i < desc->buffer_count; ++i) {
 		new (&images[i]) spudgpu_image_d3d12();
-		images[i].head.allocator = pResult->head.allocator;
+		images[i].head.allocator      = pResult->head.allocator;
+		images[i]._subresource_states = eq::array<D3D12_RESOURCE_STATES>(&device->_eq_allocator);
 	}
 	pResult->_back_buffer_images = images;
 

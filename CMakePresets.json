@@ -157,6 +157,57 @@
         "CMAKE_C_COMPILER": "clang",
         "CMAKE_CXX_COMPILER": "clang++"
       }
+    },
+    {
+      "name": "windows-sanitize-asan",
+      "hidden": true,
+      "cacheVariables": {
+        "CMAKE_CONFIGURATION_TYPES": "Debug",
+        "CMAKE_C_FLAGS_DEBUG": "/Ob0 /Od /fsanitize=address",
+        "CMAKE_CXX_FLAGS_DEBUG": "/Ob0 /Od /fsanitize=address",
+        "CMAKE_EXE_LINKER_FLAGS_DEBUG": "/debug /INCREMENTAL:NO",
+        "CMAKE_SHARED_LINKER_FLAGS_DEBUG": "/debug /INCREMENTAL:NO",
+        "CMAKE_MODULE_LINKER_FLAGS_DEBUG": "/debug /INCREMENTAL:NO"
+      }
+    },
+    {
+      "name": "windows-d3d12-asan",
+      "displayName": "SpudLib Windows D3D12 ASan",
+      "inherits": [
+        "windows-sanitize-asan",
+        "windows-d3d12"
+      ],
+      "binaryDir": "${sourceDir}/build-windows-d3d12-asan"
+    },
+    {
+      "name": "windows-vulkan-asan",
+      "displayName": "SpudLib Windows Vulkan ASan",
+      "inherits": [
+        "windows-sanitize-asan",
+        "windows-vulkan"
+      ],
+      "binaryDir": "${sourceDir}/build-windows-vulkan-asan"
+    },
+    {
+      "name": "windows-fuzz",
+      "displayName": "SpudLib Windows libFuzzer (clang)",
+      "generator": "Ninja Multi-Config",
+      "binaryDir": "${sourceDir}/build-windows-fuzz",
+      "cacheVariables": {
+        "SPUDLIB_BUILD_FUZZERS": "ON",
+        "CMAKE_C_FLAGS": "-fsanitize=fuzzer-no-link,address,undefined -fno-sanitize-recover=undefined -fno-omit-frame-pointer -fno-sanitize-coverage=indirect-calls,trace-cmp",
+        "CMAKE_CXX_FLAGS": "-fsanitize=fuzzer-no-link,address,undefined -fno-sanitize-recover=undefined -fno-omit-frame-pointer -fno-sanitize-coverage=indirect-calls,trace-cmp -D_DISABLE_STRING_ANNOTATION -D_DISABLE_VECTOR_ANNOTATION",
+        "CMAKE_EXE_LINKER_FLAGS": "-fsanitize=address,undefined",
+        "CMAKE_SHARED_LINKER_FLAGS": "-fsanitize=address,undefined",
+        "CMAKE_MODULE_LINKER_FLAGS": "-fsanitize=address,undefined",
+        "GRAPHICS_BACKEND": "D3D12",
+        "CMAKE_CONFIGURATION_TYPES": "RelWithDebInfo",
+        "CMAKE_C_FLAGS_RELWITHDEBINFO": "-O1 -g",
+        "CMAKE_CXX_FLAGS_RELWITHDEBINFO": "-O1 -g",
+        "CMAKE_MSVC_RUNTIME_LIBRARY": "MultiThreaded",
+        "CMAKE_C_COMPILER": "clang",
+        "CMAKE_CXX_COMPILER": "clang++"
+      }
     }
   ],
   "buildPresets": [
@@ -303,6 +354,24 @@
       "displayName": "SpudLib Linux libFuzzer (Debug)",
       "configurePreset": "linux-fuzz",
       "configuration": "Debug"
+    },
+    {
+      "name": "windows-d3d12-asan-debug",
+      "displayName": "SpudLib Windows D3D12 ASan (Debug)",
+      "configurePreset": "windows-d3d12-asan",
+      "configuration": "Debug"
+    },
+    {
+      "name": "windows-vulkan-asan-debug",
+      "displayName": "SpudLib Windows Vulkan ASan (Debug)",
+      "configurePreset": "windows-vulkan-asan",
+      "configuration": "Debug"
+    },
+    {
+      "name": "windows-fuzz-relwithdebinfo",
+      "displayName": "SpudLib Windows libFuzzer (RelWithDebInfo)",
+      "configurePreset": "windows-fuzz",
+      "configuration": "RelWithDebInfo"
     }
   ],
   "testPresets": [
@@ -373,6 +442,42 @@
       },
       "environment": {
         "ASAN_OPTIONS": "halt_on_error=1:detect_stack_use_after_return=1:check_initialization_order=1:strict_init_order=1",
+        "UBSAN_OPTIONS": "print_stacktrace=1:halt_on_error=1"
+      }
+    },
+    {
+      "name": "windows-d3d12-asan",
+      "configurePreset": "windows-d3d12-asan",
+      "configuration": "Debug",
+      "output": {
+        "outputOnFailure": true
+      },
+      "environment": {
+        "ASAN_OPTIONS": "halt_on_error=1:check_initialization_order=1:strict_init_order=1",
+        "PATH": "$penv{VCToolsInstallDir}bin/Hostx64/x64;$penv{PATH}"
+      }
+    },
+    {
+      "name": "windows-vulkan-asan",
+      "configurePreset": "windows-vulkan-asan",
+      "configuration": "Debug",
+      "output": {
+        "outputOnFailure": true
+      },
+      "environment": {
+        "ASAN_OPTIONS": "halt_on_error=1:check_initialization_order=1:strict_init_order=1",
+        "PATH": "$penv{VCToolsInstallDir}bin/Hostx64/x64;$penv{PATH}"
+      }
+    },
+    {
+      "name": "windows-fuzz",
+      "configurePreset": "windows-fuzz",
+      "configuration": "RelWithDebInfo",
+      "output": {
+        "outputOnFailure": true
+      },
+      "environment": {
+        "ASAN_OPTIONS": "halt_on_error=1:check_initialization_order=1:strict_init_order=1",
         "UBSAN_OPTIONS": "print_stacktrace=1:halt_on_error=1"
       }
     }

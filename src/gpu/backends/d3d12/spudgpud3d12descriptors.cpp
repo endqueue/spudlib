@@ -79,13 +79,12 @@ static void spudgpu_d3d12___free_descriptor_sets(
 // descriptors, all unused, its free list made through [allocator] (the
 // device's). Leaves it empty on failure.
 static SPUDRESULT spudgpu_d3d12___create_shader_heap(
-    const SPUD_ALLOCATOR *allocator,
     ID3D12Device *d3dDevice,
     D3D12_DESCRIPTOR_HEAP_TYPE type,
     uint32_t capacity,
     spudgpu_d3d12_shader_heap &heap) {
-	spudgpu_d3d12_heap_range *ranges = SPUD_NEW_ARRAY(allocator, spudgpu_d3d12_heap_range, 1);
-	if (!ranges)
+	const spudgpu_d3d12_heap_range whole = {0, capacity};
+	if (eq_array_push(&heap.free_ranges, &whole) != EQ_SUCCESS)
 		return SPUDRESULT_OUT_OF_MEMORY;
 	D3D12_DESCRIPTOR_HEAP_DESC heapDesc = {};
 	heapDesc.Type                       = type;
@@ -93,24 +92,17 @@ static SPUDRESULT spudgpu_d3d12___create_shader_heap(
 	heapDesc.Flags                      = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
 	heapDesc.NodeMask                   = 0;
 	if (FAILED(d3dDevice->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(&heap.heap)))) {
-		SPUD_DELETE_ARRAY(allocator, spudgpu_d3d12_heap_range, ranges, 1);
+		eq_array_free(&heap.free_ranges);
 		return SPUDRESULT_API_SPECIFIC_FAILURE;
 	}
-	heap.increment     = d3dDevice->GetDescriptorHandleIncrementSize(type);
-	ranges[0]          = {0, capacity};
-	heap.free_ranges   = ranges;
-	heap.free_count    = 1;
-	heap.free_capacity = 1;
+	heap.increment = d3dDevice->GetDescriptorHandleIncrementSize(type);
 	return SPUD_SUCCESS;
 }
 
 // Releases [heap] and its free list, leaving it empty.
-static void spudgpu_d3d12___release_shader_heap(const SPUD_ALLOCATOR *allocator, spudgpu_d3d12_shader_heap &heap) {
+static void spudgpu_d3d12___release_shader_heap(spudgpu_d3d12_shader_heap &heap) {
 	heap.heap.Reset();
-	SPUD_DELETE_ARRAY(allocator, spudgpu_d3d12_heap_range, heap.free_ranges, heap.free_capacity);
-	heap.free_ranges   = nullptr;
-	heap.free_count    = 0;
-	heap.free_capacity = 0;
+	eq_array_free(&heap.free_ranges);
 }
 
 SPUDRESULT spudgpu_d3d12___create_shader_heaps(
@@ -122,16 +114,14 @@ SPUDRESULT spudgpu_d3d12___create_shader_heaps(
 	// A budget of 0 is no heap: D3D12 makes no heap of 0 descriptors, and
 	// every pool that asks for one of that kind is refused.
 	if (max_descriptors > 0)
-		sr = spudgpu_d3d12___create_shader_heap(
-		    &device->head.allocator, d3dDevice, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, max_descriptors, device->_csv_heap);
+		sr = spudgpu_d3d12___create_shader_heap(d3dDevice, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, max_descriptors, device->_csv_heap);
 	if (sr != SPUD_SUCCESS)
 		return sr;
 	if (max_samplers > 0)
-		sr = spudgpu_d3d12___create_shader_heap(
-		    &device->head.allocator, d3dDevice, D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER, max_samplers, device->_sampler_heap);
+		sr = spudgpu_d3d12___create_shader_heap(d3dDevice, D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER, max_samplers, device->_sampler_heap);
 	if (sr != SPUD_SUCCESS) {
 		// Both or neither.
-		spudgpu_d3d12___release_shader_heap(&device->head.allocator, device->_csv_heap);
+		spudgpu_d3d12___release_shader_heap(device->_csv_heap);
 		return sr;
 	}
 	return SPUD_SUCCESS;
@@ -143,17 +133,16 @@ static SPUDRESULT spudgpu_d3d12___heap_take(spudgpu_d3d12_shader_heap &heap, uin
 	*out_offset = 0;
 	if (count == 0)
 		return SPUD_SUCCESS;
-	for (uint32_t i = 0; i < heap.free_count; ++i) {
-		spudgpu_d3d12_heap_range &range = heap.free_ranges[i];
+	for (size_t i = 0; i < heap.free_ranges.count; ++i) {
+		spudgpu_d3d12_heap_range &range = heap.free_ranges.data[i];
 		if (range.count < count)
 			continue;
 		*out_offset = range.offset;
 		range.offset += count;
 		range.count -= count;
-		if (range.count == 0) {
-			memmove(&heap.free_ranges[i], &heap.free_ranges[i + 1], (heap.free_count - i - 1) * sizeof(spudgpu_d3d12_heap_range));
-			--heap.free_count;
-		}
+		// An index inside the array, so the removal can't fail.
+		if (range.count == 0)
+			(void)eq_array_remove(&heap.free_ranges, i, 1);
 		return SPUD_SUCCESS;
 	}
 	// The device's budget, which is this heap, has no run of [count]
@@ -164,49 +153,41 @@ static SPUDRESULT spudgpu_d3d12___heap_take(spudgpu_d3d12_shader_heap &heap, uin
 }
 
 // Gives [count] descriptors at [offset] back to [heap], merged with the
-// unused ranges either side; [allocator] is the device's, which a longer
-// free list is made through. The caller holds device->_shader_heap_mutex.
+// unused ranges either side; a longer free list is made through the device's
+// allocator, which the list holds. The caller holds
+// device->_shader_heap_mutex.
 static void spudgpu_d3d12___heap_give_back(
-    const SPUD_ALLOCATOR *allocator,
     spudgpu_d3d12_shader_heap &heap,
     uint32_t offset,
     uint32_t count) {
 	if (count == 0)
 		return;
+	spudgpu_d3d12_heap_ranges &ranges = heap.free_ranges;
 	// The first unused range after the one given back.
-	uint32_t next = 0;
-	while (next < heap.free_count && heap.free_ranges[next].offset < offset)
+	size_t next = 0;
+	while (next < ranges.count && ranges.data[next].offset < offset)
 		++next;
-	const bool joins_previous = next > 0 && heap.free_ranges[next - 1].offset + heap.free_ranges[next - 1].count == offset;
-	const bool joins_next     = next < heap.free_count && offset + count == heap.free_ranges[next].offset;
+	const bool joins_previous = next > 0 && ranges.data[next - 1].offset + ranges.data[next - 1].count == offset;
+	const bool joins_next     = next < ranges.count && offset + count == ranges.data[next].offset;
 	if (joins_previous && joins_next) {
-		heap.free_ranges[next - 1].count += count + heap.free_ranges[next].count;
-		memmove(&heap.free_ranges[next], &heap.free_ranges[next + 1], (heap.free_count - next - 1) * sizeof(spudgpu_d3d12_heap_range));
-		--heap.free_count;
+		ranges.data[next - 1].count += count + ranges.data[next].count;
+		// An index inside the array, so the removal can't fail.
+		(void)eq_array_remove(&ranges, next, 1);
 		return;
 	}
 	if (joins_previous) {
-		heap.free_ranges[next - 1].count += count;
+		ranges.data[next - 1].count += count;
 		return;
 	}
 	if (joins_next) {
-		heap.free_ranges[next].offset = offset;
-		heap.free_ranges[next].count += count;
+		ranges.data[next].offset = offset;
+		ranges.data[next].count += count;
 		return;
 	}
-	if (heap.free_count == heap.free_capacity) {
-		uint32_t capacity = heap.free_capacity * 2;
-		auto *grown       = SPUD_RESIZE_ARRAY(allocator, spudgpu_d3d12_heap_range, heap.free_ranges, heap.free_capacity, capacity);
-		// Out of memory: the old list is untouched and the range stays
-		// taken. The heap is smaller from now on, and nothing else is wrong.
-		if (!grown)
-			return;
-		heap.free_ranges   = grown;
-		heap.free_capacity = capacity;
-	}
-	memmove(&heap.free_ranges[next + 1], &heap.free_ranges[next], (heap.free_count - next) * sizeof(spudgpu_d3d12_heap_range));
-	heap.free_ranges[next] = {offset, count};
-	++heap.free_count;
+	// Out of memory: the list is untouched and the range stays taken. The
+	// heap is smaller from now on, and nothing else is wrong.
+	const spudgpu_d3d12_heap_range given = {offset, count};
+	(void)eq_array_insert(&ranges, next, &given, 1);
 }
 
 // Takes [csv_count] CBV/SRV/UAV and [sampler_count] sampler descriptors of
@@ -223,7 +204,7 @@ static SPUDRESULT spudgpu_d3d12___take_shader_heap_ranges(
 		return sr;
 	sr = spudgpu_d3d12___heap_take(device->_sampler_heap, sampler_count, out_sampler_offset);
 	if (sr != SPUD_SUCCESS) {
-		spudgpu_d3d12___heap_give_back(&device->head.allocator, device->_csv_heap, *out_csv_offset, csv_count);
+		spudgpu_d3d12___heap_give_back(device->_csv_heap, *out_csv_offset, csv_count);
 		return sr;
 	}
 	return SPUD_SUCCESS;
@@ -236,8 +217,8 @@ static void spudgpu_d3d12___give_back_shader_heap_ranges(
     uint32_t sampler_offset,
     uint32_t sampler_count) {
 	std::lock_guard<std::mutex> lock(device->_shader_heap_mutex);
-	spudgpu_d3d12___heap_give_back(&device->head.allocator, device->_csv_heap, csv_offset, csv_count);
-	spudgpu_d3d12___heap_give_back(&device->head.allocator, device->_sampler_heap, sampler_offset, sampler_count);
+	spudgpu_d3d12___heap_give_back(device->_csv_heap, csv_offset, csv_count);
+	spudgpu_d3d12___heap_give_back(device->_sampler_heap, sampler_offset, sampler_count);
 }
 
 // Descriptor [index] of [heap], for the CPU to write and for a root table.
@@ -819,8 +800,11 @@ SPUDRESULT spudgpu_d3d12___create_bindless_state(spudgpu_device_d3d12 *device) {
 		spudgpu_d3d12___give_back_shader_heap_ranges(device, offset, 3 * SPUDGPU_BINDLESS_MAX_SLOTS_PER_CLASS, 0, 0);
 		return SPUDRESULT_OUT_OF_MEMORY;
 	}
-	state         = new (state) spudgpu_bindless_state_d3d12();
-	state->offset = offset;
+	state                            = new (state) spudgpu_bindless_state_d3d12();
+	state->sampled_image_free_stack  = eq::array<uint32_t>(&device->_eq_allocator);
+	state->storage_image_free_stack  = eq::array<uint32_t>(&device->_eq_allocator);
+	state->storage_buffer_free_stack = eq::array<uint32_t>(&device->_eq_allocator);
+	state->offset                    = offset;
 	state->layout = layout;
 
 	device->_bindless = state;
@@ -830,11 +814,12 @@ SPUDRESULT spudgpu_d3d12___create_bindless_state(spudgpu_device_d3d12 *device) {
 // Called with the state's lock held.
 static SPUDRESULT spudgpud3d12___bindless_alloc_index(
     uint32_t *next_unused,
-    std::vector<uint32_t> &free_stack,
+    eq::array<uint32_t> &free_stack,
     uint32_t *out_index) {
 	if (!free_stack.empty()) {
-		*out_index = free_stack.back();
-		free_stack.pop_back();
+		*out_index = free_stack.data[free_stack.count - 1];
+		// The last element, so the removal can't fail.
+		(void)free_stack.remove(free_stack.count - 1);
 		return SPUD_SUCCESS;
 	}
 	if (*next_unused >= SPUDGPU_BINDLESS_MAX_SLOTS_PER_CLASS)
@@ -893,7 +878,9 @@ void spudgpu_bindless_unregister_sampled_image(spudgpu_device device, uint32_t i
 	if (index == SPUDGPU_BINDLESS_INVALID_INDEX)
 		return;
 	std::lock_guard<std::mutex> slots_lock(state->lock);
-	state->sampled_image_free_stack.push_back(index);
+	// Out of memory: the slot isn't reused, and the table is a slot
+	// smaller from now on.
+	(void)state->sampled_image_free_stack.push(index);
 }
 
 SPUDRESULT spudgpu_bindless_register_storage_image(
@@ -938,7 +925,9 @@ void spudgpu_bindless_unregister_storage_image(spudgpu_device device, uint32_t i
 	if (index == SPUDGPU_BINDLESS_INVALID_INDEX)
 		return;
 	std::lock_guard<std::mutex> slots_lock(state->lock);
-	state->storage_image_free_stack.push_back(index);
+	// Out of memory: the slot isn't reused, and the table is a slot
+	// smaller from now on.
+	(void)state->storage_image_free_stack.push(index);
 }
 
 SPUDRESULT spudgpu_bindless_register_storage_buffer(
@@ -998,7 +987,9 @@ void spudgpu_bindless_unregister_storage_buffer(spudgpu_device device, uint32_t 
 	if (index == SPUDGPU_BINDLESS_INVALID_INDEX)
 		return;
 	std::lock_guard<std::mutex> slots_lock(state->lock);
-	state->storage_buffer_free_stack.push_back(index);
+	// Out of memory: the slot isn't reused, and the table is a slot
+	// smaller from now on.
+	(void)state->storage_buffer_free_stack.push(index);
 }
 
 void spudgpu_cmd_bind_bindless_resources(

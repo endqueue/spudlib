@@ -2,8 +2,6 @@
 #if SPUDGPU_COMPILE_D3D12_API
 
 #include "spudgpud3d12.hpp"
-#include <vector>
-#include <string>
 #include <cstring>
 #include "../../../spudstructbase.h"
 #include "../../spudgpushared.h"
@@ -221,7 +219,8 @@ static void spudgpu_d3d12___destroy_adapters(spudgpu_instance_d3d12 *instance) {
 // level can be made on: one probe device at a time, each released before
 // the next. Software adapters (WARP) are listed too, marked.
 static SPUDRESULT spudgpu_d3d12___list_adapters(spudgpu_instance_d3d12 *instance) {
-	std::vector<spudgpu_adapter_d3d12 *> listed;
+	const EQ_ALLOCATOR eq_allocator = spud_eq_allocator(&instance->head.allocator);
+	eq::array<spudgpu_adapter_d3d12 *> listed(&eq_allocator);
 	Microsoft::WRL::ComPtr<IDXGIAdapter1> dxgi_adapter1;
 	for (UINT index = 0; instance->_dxgi_factory->EnumAdapters1(index, &dxgi_adapter1) != DXGI_ERROR_NOT_FOUND; ++index) {
 		Microsoft::WRL::ComPtr<IDXGIAdapter4> dxgi_adapter;
@@ -244,7 +243,15 @@ static SPUDRESULT spudgpu_d3d12___list_adapters(spudgpu_instance_d3d12 *instance
 			SPUD_DELETE(&instance->head.allocator, spudgpu_adapter_d3d12, adapter);
 			continue;
 		}
-		listed.push_back(adapter);
+		if (listed.push(adapter) != EQ_SUCCESS) {
+			adapter->~spudgpu_adapter_d3d12();
+			SPUD_DELETE(&instance->head.allocator, spudgpu_adapter_d3d12, adapter);
+			for (spudgpu_adapter_d3d12 *made : listed) {
+				made->~spudgpu_adapter_d3d12();
+				SPUD_DELETE(&instance->head.allocator, spudgpu_adapter_d3d12, made);
+			}
+			return SPUDRESULT_OUT_OF_MEMORY;
+		}
 	}
 	if (listed.empty())
 		return SPUD_SUCCESS;
@@ -257,7 +264,7 @@ static SPUDRESULT spudgpu_d3d12___list_adapters(spudgpu_instance_d3d12 *instance
 		return SPUDRESULT_OUT_OF_MEMORY;
 	}
 	for (size_t i = 0; i < listed.size(); ++i)
-		instance->_adapters[i] = listed[i];
+		instance->_adapters[i] = listed.data[i];
 	instance->_adapter_count = (uint32_t)listed.size();
 	return SPUD_SUCCESS;
 }
@@ -444,17 +451,17 @@ static void spudgpu_d3d12___free_device(spudgpu_device_d3d12 *device) {
 		SPUD_DELETE(&allocator, spudgpu_bindless_state_d3d12, bindless);
 		device->_bindless = nullptr;
 	}
-	// Freed here, with the capacities they were made with, rather than in
-	// their structs' destructors, which have no allocator.
-	SPUD_DELETE_ARRAY(&allocator, spudgpu_d3d12_heap_range, device->_csv_heap.free_ranges, device->_csv_heap.free_capacity);
-	SPUD_DELETE_ARRAY(&allocator, spudgpu_d3d12_heap_range, device->_sampler_heap.free_ranges, device->_sampler_heap.free_capacity);
+	// Freed here rather than in their structs' destructors, which have no
+	// allocator.
+	eq_array_free(&device->_csv_heap.free_ranges);
+	eq_array_free(&device->_sampler_heap.free_ranges);
 	if (device->_tight_draw_signature)
 		device->_tight_draw_signature->Release();
 	if (device->_tight_draw_indexed_signature)
 		device->_tight_draw_indexed_signature->Release();
-	for (uint32_t i = 0; i < device->_indirect_signatures.count; ++i)
-		device->_indirect_signatures.entries[i].signature->Release();
-	SPUD_DELETE_ARRAY(&allocator, spudgpu_d3d12_indirect_signature, device->_indirect_signatures.entries, device->_indirect_signatures.capacity);
+	for (size_t i = 0; i < device->_indirect_signatures.count; ++i)
+		device->_indirect_signatures.data[i].signature->Release();
+	eq_array_free(&device->_indirect_signatures);
 	spudgpu_adapter_d3d12 *adapter = device->_adapter;
 	spud_string_free(&allocator, device->head.debug_name);
 	// The native device goes with the destructor, before the adapter is
@@ -486,7 +493,11 @@ SPUDRESULT spudgpu_create_device(
 	}
 	device                 = new (device) spudgpu_device_d3d12();
 	device->head.allocator = adapter->head.allocator;
-	device->_adapter       = adapter;
+	device->_eq_allocator  = spud_eq_allocator(&device->head.allocator);
+	eq_array_init(&device->_csv_heap.free_ranges, &device->_eq_allocator);
+	eq_array_init(&device->_sampler_heap.free_ranges, &device->_eq_allocator);
+	eq_array_init(&device->_indirect_signatures, &device->_eq_allocator);
+	device->_adapter = adapter;
 	device->_features      = desc->required_features;
 #if _DEBUG
 	if (!spudgpu___internal_live_init(&device->_live)) {

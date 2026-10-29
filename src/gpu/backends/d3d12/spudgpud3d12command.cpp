@@ -460,25 +460,25 @@ static ID3D12CommandSignature *spudgpu_d3d12___get_draw_indirect_signature(
 		return device->_tight_draw_indexed_signature;
 	std::lock_guard<std::mutex> lock(device->_indirect_signature_mutex);
 	spudgpu_d3d12_indirect_signatures &kept = device->_indirect_signatures;
-	for (uint32_t i = 0; i < kept.count; ++i)
-		if (kept.entries[i].indexed == indexed && kept.entries[i].stride == stride)
-			return kept.entries[i].signature;
+	for (size_t i = 0; i < kept.count; ++i)
+		if (kept.data[i].indexed == indexed && kept.data[i].stride == stride)
+			return kept.data[i].signature;
 
-	if (kept.count == kept.capacity) {
-		uint32_t capacity = kept.capacity ? kept.capacity * 2 : 4;
-		auto *grown       = SPUD_RESIZE_ARRAY(&device->head.allocator, spudgpu_d3d12_indirect_signature, kept.entries, kept.capacity, capacity);
-		// Out of memory: the old array is untouched and still the device's.
-		if (!grown)
-			return nullptr;
-		kept.entries  = grown;
-		kept.capacity = capacity;
-	}
-
+	// Room first, doubling from 4, so that a signature made is never one the
+	// array can't hold. Out of memory: the array is untouched and still the
+	// device's.
+	if (kept.count == kept.capacity && eq_array_reserve(&kept, kept.capacity ? kept.capacity * 2 : 4) != EQ_SUCCESS)
+		return nullptr;
 	ID3D12CommandSignature *signature =
 	    spudgpu_d3d12___create_draw_indirect_signature(device->_d3d_device.Get(), indexed, stride);
 	if (!signature)
 		return nullptr;
-	kept.entries[kept.count++] = {signature, stride, indexed};
+	const spudgpu_d3d12_indirect_signature added = {signature, stride, indexed};
+	// Room was made above, so the push can't fail; it is still checked.
+	if (eq_array_push(&kept, &added) != EQ_SUCCESS) {
+		signature->Release();
+		return nullptr;
+	}
 	return signature;
 }
 
@@ -582,8 +582,13 @@ void spudgpu_cmd_pipeline_barrier(
 	if (total == 0)
 		return;
 
-	std::vector<D3D12_RESOURCE_BARRIER> barriers;
-	barriers.reserve(total);
+	// Room for every barrier first, so that none of the pushes below can
+	// fail. Out of memory: nothing is recorded.
+	eq::array<D3D12_RESOURCE_BARRIER> barriers(&cmd->_allocator->_device->_eq_allocator);
+	if (barriers.reserve(total) != EQ_SUCCESS) {
+		printf("spudgpu: spudgpu_cmd_pipeline_barrier - out of memory building barriers; nothing recorded\n");
+		return;
+	}
 
 	for (uint32_t i = 0; i < buffer_barrier_count; i++) {
 		const spudgpu_buffer_barrier &b = buffer_barriers[i];
@@ -592,7 +597,7 @@ void spudgpu_cmd_pipeline_barrier(
 		// accesses after", which D3D12 has its own barrier type for.
 		if (b.state_before == SPUDGPU_RESOURCE_STATE_UNORDERED_ACCESS &&
 		    b.state_after == SPUDGPU_RESOURCE_STATE_UNORDERED_ACCESS) {
-			barriers.push_back(CD3DX12_RESOURCE_BARRIER::UAV(b.buffer->_d3d_resource.Get()));
+			(void)barriers.push(CD3DX12_RESOURCE_BARRIER::UAV(b.buffer->_d3d_resource.Get()));
 			continue;
 		}
 		D3D12_RESOURCE_STATES before = spudgpu_d3d12___resource_state(b.state_before);
@@ -600,7 +605,7 @@ void spudgpu_cmd_pipeline_barrier(
 		// Any other pair of equal states does nothing, as the header says.
 		if (before == after)
 			continue;
-		barriers.push_back(CD3DX12_RESOURCE_BARRIER::Transition(
+		(void)barriers.push(CD3DX12_RESOURCE_BARRIER::Transition(
 		    b.buffer->_d3d_resource.Get(), before, after));
 	}
 	for (uint32_t i = 0; i < image_barrier_count; i++) {
@@ -608,20 +613,20 @@ void spudgpu_cmd_pipeline_barrier(
 		// As for a buffer, above.
 		if (b.state_before == SPUDGPU_RESOURCE_STATE_UNORDERED_ACCESS &&
 		    b.state_after == SPUDGPU_RESOURCE_STATE_UNORDERED_ACCESS) {
-			barriers.push_back(CD3DX12_RESOURCE_BARRIER::UAV(b.image->_d3d_resource.Get()));
+			(void)barriers.push(CD3DX12_RESOURCE_BARRIER::UAV(b.image->_d3d_resource.Get()));
 			continue;
 		}
 		D3D12_RESOURCE_STATES before = spudgpu_d3d12___resource_state(b.state_before);
 		D3D12_RESOURCE_STATES after = spudgpu_d3d12___resource_state(b.state_after);
 		if (before == after)
 			continue;
-		barriers.push_back(CD3DX12_RESOURCE_BARRIER::Transition(
+		(void)barriers.push(CD3DX12_RESOURCE_BARRIER::Transition(
 		    b.image->_d3d_resource.Get(), before, after));
 	}
 
 	if (!barriers.empty())
 		cmd->_d3d_cmd_list->ResourceBarrier(
-		    static_cast<UINT>(barriers.size()), barriers.data());
+		    static_cast<UINT>(barriers.size()), barriers.data);
 }
 SPUDRESULT spudgpu_queue_submit(
     spudgpu_command_queue queue, const spudgpu_submit_desc *desc) {

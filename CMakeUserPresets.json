@@ -6,9 +6,6 @@
       "name": "my-spudlib-windows-vulkan",
       "inherits": "windows-vulkan",
       "cacheVariables": {
-        "Vulkan_INCLUDE_DIR": "C:/VulkanSDK/1.4.341.1/Include",
-        "Vulkan_LIBRARY": "C:/VulkanSDK/1.4.341.1/Lib/vulkan-1.lib",
-        "Vulkan_GLSLC_EXECUTABLE": "C:/VulkanSDK/1.4.341.1/Bin/glslc.exe",
         "SDL3_DIR": "C:/dev/SDL3-3.4.8/cmake"
       }
     },
@@ -16,9 +13,6 @@
       "name": "my-spudlib-windows-d3d12",
       "inherits": "windows-d3d12",
       "cacheVariables": {
-        "Vulkan_INCLUDE_DIR": "C:/VulkanSDK/1.4.341.1/Include",
-        "Vulkan_LIBRARY": "C:/VulkanSDK/1.4.341.1/Lib/vulkan-1.lib",
-        "Vulkan_GLSLC_EXECUTABLE": "C:/VulkanSDK/1.4.341.1/Bin/glslc.exe",
         "SDL3_DIR": "C:/dev/SDL3-3.4.8/cmake"
       }
     }

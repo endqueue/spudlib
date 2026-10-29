@@ -33,6 +33,7 @@
 
 #include "../../spudnetshared.h"
 #include "spudnet.h"
+#include "spudnetwinhttphead.h"
 #include "../../../spudstructbase.h"
 
 /* windows.h without the legacy winsock.h, which conflicts with the
@@ -771,16 +772,23 @@ static SPUDRESULT spudnet_win_read_headers(const SPUD_ALLOCATOR *allocator, HINT
 		spud_free(allocator, raw, raw_capacity, SPUD_ALIGNOF(wchar_t));
 		return SPUDRESULT_SPUDNET_HTTP_FAILED;
 	}
-	int   wide_count = (int)(raw_size / sizeof(wchar_t));
-	int   utf8_size  = WideCharToMultiByte(CP_UTF8, 0, raw, wide_count, NULL, 0, NULL, NULL);
-	char *utf8       = utf8_size > 0 ? (char *)spud_allocate(allocator, (size_t)utf8_size, 1) : NULL;
-	if (!utf8 || WideCharToMultiByte(CP_UTF8, 0, raw, wide_count, utf8, utf8_size, NULL, NULL) <= 0) {
+	const SPUDRESULT added = spudnet_win_add_raw_headers(allocator, raw, raw_size / sizeof(wchar_t), head);
+	spud_free(allocator, raw, raw_capacity, SPUD_ALIGNOF(wchar_t));
+	return added;
+}
+
+SPUDRESULT spudnet_win_add_raw_headers(const SPUD_ALLOCATOR *allocator, const wchar_t *raw, size_t wide_count, struct spudnet_http_head *head) {
+	if (wide_count == 0)
+		return SPUD_SUCCESS;
+	if (wide_count > INT_MAX)
+		return SPUDRESULT_SPUDNET_HTTP_FAILED;
+	int   utf8_size = WideCharToMultiByte(CP_UTF8, 0, raw, (int)wide_count, NULL, 0, NULL, NULL);
+	char *utf8      = utf8_size > 0 ? (char *)spud_allocate(allocator, (size_t)utf8_size, 1) : NULL;
+	if (!utf8 || WideCharToMultiByte(CP_UTF8, 0, raw, (int)wide_count, utf8, utf8_size, NULL, NULL) <= 0) {
 		if (utf8)
 			spud_free(allocator, utf8, (size_t)utf8_size, 1);
-		spud_free(allocator, raw, raw_capacity, SPUD_ALIGNOF(wchar_t));
 		return SPUDRESULT_OUT_OF_MEMORY;
 	}
-	spud_free(allocator, raw, raw_capacity, SPUD_ALIGNOF(wchar_t));
 
 	// Line by line, in the order sent; a name that repeats is joined onto
 	// its first value as each line is added.

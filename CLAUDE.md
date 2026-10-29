@@ -570,9 +570,16 @@ GameInput and evdev builds were not run.
   which allocates exactly that; otherwise `eq_array_push` grows by doubling
   from 4. Converted: SpudNet's response headers (`src/net/spudnethttp.c`)
   and the wait set's members and poll entries (`src/net/spudnetwaitset.c`).
-  Still `SPUD_RESIZE_ARRAY`, to convert when they can be compiled and tested
-  again: WASAPI's endpoints, GameInput's devices, evdev's gamepads and the
-  D3D12 backend's indirect signatures and heap free ranges. A size of 0 is asked for and freed as 1 by the helpers, so a
+  Converted 2026-10-29 and run on Windows: WASAPI's endpoints, GameInput's
+  devices, and the D3D12 backend's indirect signatures and heap free ranges
+  (the device keeps their `EQ_ALLOCATOR`); the D3D12 backend's
+  `std::vector`s too, as `eq::array` on the device's allocator (each image's
+  subresource states, the bindless free stacks, the barrier lists, the
+  adapter list), so none of them allocates outside the caller's allocator or
+  throws `std::bad_alloc` into a C caller any more. SPIRV-Cross's own
+  `std::vector` and `std::string` stay: its API takes and returns them.
+  Still `SPUD_RESIZE_ARRAY`, to convert when it can be compiled and tested
+  again: evdev's gamepads. A size of 0 is asked for and freed as 1 by the helpers, so a
   count that may be 0 needs no case of its own. `tests/spudtest_allocator.h`
   checks all of this in a test.
 - **Every handle starts with a `spud_object_head`** (`src/spudallocator.h`): its
@@ -777,6 +784,32 @@ compute pipeline state, 2026-10-18); the compute encoder keeps the
 argument buffer at each index (`_encoder_compute_sets`, cleared with the
 encoder) and sets it only when it differs. Run on Metal only; Vulkan and
 D3D12 rebind as asked, which both allow.
+
+On 2026-10-29 the Windows backlog ran on Windows 11 (ThinkPad P1 Gen 5:
+Intel Iris Xe, NVIDIA RTX A2000, and WARP under D3D12; MSVC 14.51, Vulkan
+SDK 1.4.363.0, which the build now finds through `VULKAN_SDK` rather than a
+hard-coded 1.4.341.1). Both presets built clean, Debug and Release, as did
+eqstd under MSVC (`/W4 /WX`, C11 and C++20/23). Every ctest passed on both
+backends in both configurations, and under the new `windows-<backend>-asan`
+presets (MSVC's AddressSanitizer, Debug); `spudnet_test` passed all 343
+checks, Debug, Release and ASan. `spudgpu_device_test` and
+`spudgpu_objects_test` ran on adapter 0 only (the Iris Xe; the tests take
+the first adapter), debug layer and validation layer silent. A caller's GPU
+tests ran on all three D3D12 adapters (debug layer, and GPU-based validation
+once) and both Vulkan devices (validation, synchronization and GPU-assisted
+validation): silent but GPU-based validation's `[942]` on the Iris Xe,
+which `../claude_made_decisions.md` (2026-10-29) takes as the validator's
+(a buffer barrier from COMMON after an ExecuteCommandLists, where D3D12
+decays buffers to COMMON; clean on the A2000 and WARP). Every
+`spudgpusamples` sample ran on the three D3D12 adapters (debug layer, and
+GPU-based validation) and both Vulkan devices (all three validation modes),
+clean; `SpudGPUMeshShaders` exits 1 on the Iris Xe, which has no mesh
+shading. The run found one thing here: on Windows `spud_system_allocate`
+handed a size no rounding can hold to `_aligned_malloc` and relied on the
+CRT to refuse it, which AddressSanitizer turns into an abort; the refusal
+is now SpudLib's, on every platform (`spudcore_test` under ASan is its
+test). The D3D12 backend's arrays then moved to eqstd (below) and all of
+the above ran again, as clean.
 
 - **Vulkan** — reference backend, plain C23, complete. Build against this first;
   D3D12 and Metal follow its shape.
@@ -1144,7 +1177,13 @@ D3D12 rebind as asked, which both allow.
   `linux-fuzz` builds them, and each also runs as a plain ctest,
   `<target>_replay`, over its seeds and every input kept in
   `tests/fuzz/regressions/<target>`, which is where a crashing input goes
-  once fixed. How to run them: `tests/fuzz/README.md`.
+  once fixed. How to run them: `tests/fuzz/README.md`. On Windows the
+  `windows-fuzz` preset (LLVM's clang through its GNU-style driver,
+  2026-10-29; `../claude_made_decisions.md` says why) builds them, and
+  `spudnet_fuzz_http_head` has a mode for WinHTTP's own split of its raw
+  header block (`spudnet_win_add_raw_headers`,
+  `src/net/backends/windows/spudnetwinhttphead.h`); each target ran 10
+  minutes there with nothing found.
 - SpudInput was written on 2026-10-13: the header, the front end and the
   GameController backend (`src/input/backends/apple/spudinputgamecontroller.m`).
   It builds with the `macos-metal` preset and `tests/spudinput_test` passes
@@ -1237,7 +1276,8 @@ D3D12 rebind as asked, which both allow.
   caps, a probe of the default output's own format followed to acceptance,
   a stream created stopped, read and destroyed, the device-event callback
   set and cleared, all through a counting allocator; passes with no device;
-  added 2026-10-22, macOS plain, ASan and TSan, syntax-checked for WASAPI),
+  added 2026-10-22, macOS plain, ASan and TSan; on Windows 11 over WASAPI,
+  Debug, Release and ASan, 2026-10-29),
   `spudinput_test`
   (above) and `spudperf_test` (the monotonic clocks,
   `spudperf_sleep_until_monotonic_ns` and `spudperf_sleep_until_monotonic_ms`,

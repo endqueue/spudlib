@@ -8,11 +8,16 @@
  * are the server's. The input is:
  *
  *   byte 0   bit 0: lines (0) or pairs (1); bit 1: each line handed over
- *            with its '\n' (libcurl's way) or without it (WinHTTP's)
+ *            with its '\n' (libcurl's way) or without it (WinHTTP's);
+ *            bit 2, on Windows: the block as WinHTTP's backend takes it
+ *            (spudnet_win_add_raw_headers), bits 0 and 1 unread
  *   byte 1   0xFF: no allocation refused; otherwise the allocations after
  *            which every one is refused
  *   rest     the block, lines split at '\n'; in pair mode each line is a
- *            name, the first ':', and a value, taken as they are
+ *            name, the first ':', and a value, taken as they are; in
+ *            WinHTTP's mode UTF-16LE code units (an odd last byte left
+ *            out), made UTF-8 and split by the backend, whose complete
+ *            lines the plain reading takes
  *
  * Checked: nothing is read outside a line, nothing leaks or is freed
  * wrongly (on the out-of-memory paths too), every entry is terminated at
@@ -25,6 +30,11 @@
 #include "spudfuzz.h"
 
 #include "net/spudnetshared.h"
+#if defined(_WIN32)
+#include "net/backends/windows/spudnetwinhttphead.h"
+
+#include <windows.h>
+#endif
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -196,6 +206,39 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
 	bool           stored = true;
 	const uint8_t *at     = reader.data;
 	const uint8_t *end    = reader.data + reader.size;
+#if defined(_WIN32)
+	if (mode & 4) {
+		// The code units in a block of their own size, as WinHTTP's is.
+		const size_t wide_count = reader.size / 2;
+		wchar_t     *raw        = (wchar_t *)malloc(wide_count ? wide_count * sizeof(wchar_t) : 1);
+		if (!raw)
+			abort();
+		for (size_t i = 0; i < wide_count; ++i)
+			raw[i] = (wchar_t)(reader.data[2 * i] | (reader.data[2 * i + 1] << 8));
+		const SPUDRESULT added = spudnet_win_add_raw_headers(&allocator, raw, wide_count, &head);
+		stored                 = added == SPUD_SUCCESS;
+		SPUDFUZZ_CHECK(stored || added == SPUDRESULT_OUT_OF_MEMORY);
+		check_entries(&head);
+		// The plain reading: the same conversion, the complete lines.
+		if (stored && wide_count > 0) {
+			const int utf8_size = WideCharToMultiByte(CP_UTF8, 0, raw, (int)wide_count, NULL, 0, NULL, NULL);
+			char     *utf8      = (char *)malloc(utf8_size > 0 ? (size_t)utf8_size : 1);
+			if (!utf8)
+				abort();
+			WideCharToMultiByte(CP_UTF8, 0, raw, (int)wide_count, utf8, utf8_size, NULL, NULL);
+			size_t line_start = 0;
+			for (size_t i = 0; i < (size_t)utf8_size; ++i) {
+				if (utf8[i] != '\n')
+					continue;
+				ref_add_line(&ref, utf8 + line_start, i - line_start);
+				line_start = i + 1;
+			}
+			free(utf8);
+		}
+		free(raw);
+		at = end;
+	}
+#endif
 	while (at < end && stored) {
 		const uint8_t *newline = (const uint8_t *)memchr(at, '\n', (size_t)(end - at));
 		size_t         length  = newline ? (size_t)(newline - at) : (size_t)(end - at);

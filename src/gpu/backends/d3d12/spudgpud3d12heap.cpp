@@ -329,8 +329,9 @@ SPUDRESULT spudgpu_create_placed_image(
 	spudgpu_image_d3d12 *image = SPUD_NEW(&heap->_device->head.allocator, spudgpu_image_d3d12);
 	if (!image)
 		return SPUDRESULT_OUT_OF_MEMORY;
-	image                     = new (image) spudgpu_image_d3d12();
-	image->head.allocator     = heap->_device->head.allocator;
+	image                      = new (image) spudgpu_image_d3d12();
+	image->head.allocator      = heap->_device->head.allocator;
+	image->_subresource_states = eq::array<D3D12_RESOURCE_STATES>(&heap->_device->_eq_allocator);
 	image->_device            = heap->_device;
 	image->_desc              = *desc;
 	image->_d3d_resource_desc = d3dDesc;
