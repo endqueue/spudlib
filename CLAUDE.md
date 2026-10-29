@@ -1104,7 +1104,14 @@ D3D12 rebind as asked, which both allow.
   all 261 checks three runs in a row in an iPhone 17 Pro simulator (iOS 26.5),
   its `websocket` part 46 of them; `spudperf_test` and `spudinput_test` pass
   there too. A device can't run a bare executable, so on a device SpudNet has
-  only been built (a caller's iOS build), not run.
+  only been built (a caller's iOS build), not run. SpudNet's own parsers of
+  network bytes (header blocks, certificate DER, UTF-8, error text, proxy
+  URLs) have libFuzzer targets in `tests/fuzz/` (2026-10-28): the
+  `macos-fuzz` preset (Homebrew LLVM's clang, `build-macos-fuzz`) or
+  `linux-fuzz` builds them, and each also runs as a plain ctest,
+  `<target>_replay`, over its seeds and every input kept in
+  `tests/fuzz/regressions/<target>`, which is where a crashing input goes
+  once fixed. How to run them: `tests/fuzz/README.md`.
 - SpudInput was written on 2026-10-13: the header, the front end and the
   GameController backend (`src/input/backends/apple/spudinputgamecontroller.m`).
   It builds with the `macos-metal` preset and `tests/spudinput_test` passes

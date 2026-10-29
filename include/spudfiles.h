@@ -17,17 +17,23 @@
  *   backend converts each to UTF-16. Nothing is normalised, joined or split:
  *   a path is the caller's.
  * - A NULL or empty path is refused with SPUDRESULT_SPUDFILE_NULL_PATH.
- * - There is no cursor: every read and write names its offset, so two
- *   threads may read one file at once. Writing to one file from two threads
- *   at once, or to a range another is reading, is the caller's to order.
+ * - There is no cursor: every read and write names its offset, so one
+ *   call on a file leaves nothing behind that the next depends on.
  * - New files and directories get the platform's default permissions, with
  *   the process's umask applied on POSIX (0666 and 0777 before it).
  * - What a failure was is one of the results below; the platform's own
  *   number is not kept (not yet).
  *
- * Every object of an instance is made through the instance's allocator. A
- * file, a mapping and the instance may each be used from any thread, as
- * long as one isn't destroyed while another thread uses it.
+ * Every object of an instance is made through the instance's allocator.
+ *
+ * @par Threads
+ * SpudFiles is the library rule's broadest exception (@ref spud_threads
+ * "Threads", spudcore.h): it keeps no state in a file, a mapping or an
+ * instance that a call changes, so calls on one of them may overlap, each
+ * marked `Thread:`. What stays the caller's: nothing is used while it is
+ * closed, released or destroyed, or while its debug name is set; and
+ * writes to one range at once, or a write to a range another call is
+ * reading, are the caller's to order. The path calls take no object.
  */
 
 #include "spudcore.h"
@@ -157,6 +163,9 @@ typedef struct spudfile_open_desc {
 /**
  * @brief Opens a file.
  *
+ * Thread: may overlap any call on the same instance but
+ * spudfile_instance_destroy().
+ *
  * @param[in]  instance The instance the file is made with.
  * @param[in]  desc     What the caller decides.
  * @param[out] out_file Receives the file; NULL on failure.
@@ -204,6 +213,10 @@ void spudfile_file_close(spudfile_file file);
  * @brief Reads from a file at an offset: pread, or ReadFile at an
  * OVERLAPPED offset.
  *
+ * Thread: may overlap any call on the same file but spudfile_file_close()
+ * and spud_debug_name_set(); a write to the range being read is the
+ * caller's to order.
+ *
  * @param[in]  file     The file, opened with read access.
  * @param[in]  offset   Where to start, in bytes from the file's start.
  * @param[out] buffer   Receives what was read.
@@ -231,6 +244,10 @@ SPUDRESULT spudfile_file_read_at(
  * its old end and `offset` read zero. Every byte is written, or the call
  * fails.
  *
+ * Thread: may overlap any call on the same file but spudfile_file_close()
+ * and spud_debug_name_set(); a second write to the same range, or a read
+ * of it, is the caller's to order.
+ *
  * @param[in] file   The file, opened with write access.
  * @param[in] offset Where to start, in bytes from the file's start.
  * @param[in] data   What to write.
@@ -252,6 +269,9 @@ SPUDRESULT spudfile_file_write_at(
 /**
  * @brief Reads a file's size.
  *
+ * Thread: may overlap any call on the same file but spudfile_file_close()
+ * and spud_debug_name_set().
+ *
  * @param[in]  file     The file.
  * @param[out] out_size Receives its size in bytes.
  *
@@ -267,6 +287,10 @@ SPUDRESULT spudfile_file_get_size(
 /**
  * @brief Sets a file's size: ftruncate, or SetFileInformationByHandle's
  * end of file. Growing it adds bytes that read zero.
+ *
+ * Thread: may overlap any call on the same file but spudfile_file_close()
+ * and spud_debug_name_set(); a read or write past the new end at the
+ * same time is the caller's to order.
  *
  * @param[in] file The file, opened with write access.
  * @param[in] size Its new size in bytes.
@@ -300,6 +324,9 @@ typedef enum SPUDFILE_FLUSH_LEVEL {
 /**
  * @brief Blocks until a file's written data and metadata reach a level.
  *
+ * Thread: may overlap any call on the same file but spudfile_file_close()
+ * and spud_debug_name_set().
+ *
  * @param[in] file  The file, opened with write access.
  * @param[in] level SPUDFILE_FLUSH_LEVEL_DEVICE or SPUDFILE_FLUSH_LEVEL_MEDIA.
  *
@@ -325,6 +352,9 @@ SPUDRESULT spudfile_file_flush(
  * cut pages fault (SIGBUS / EXCEPTION_IN_PAGE_ERROR): don't map a file
  * something else may truncate.
  *
+ * Thread: may overlap any call on the same file but spudfile_file_close()
+ * and spud_debug_name_set().
+ *
  * @param[in]  file        The file, opened with read access.
  * @param[in]  offset      The first byte to map.
  * @param[in]  size        How many bytes; the range lies inside the file.
@@ -347,12 +377,21 @@ SPUDRESULT spudfile_file_map(
 
 /**
  * @brief The first mapped byte: the file's byte at the mapping's offset.
+ *
+ * Thread: may overlap any call on the same mapping but
+ * spudfile_mapping_release() and spud_debug_name_set(); so may reading the
+ * mapped bytes.
+ *
  * @param[in] mapping The mapping.
  * @return The first byte, or NULL for a NULL mapping.
  */
 const void *spudfile_mapping_get_data(spudfile_mapping mapping);
 /**
  * @brief How many bytes are mapped.
+ *
+ * Thread: may overlap any call on the same mapping but
+ * spudfile_mapping_release() and spud_debug_name_set().
+ *
  * @param[in] mapping The mapping.
  * @return The size in bytes, or 0 for a NULL mapping.
  */

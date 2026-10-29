@@ -42,9 +42,10 @@ extern "C" {
  * SPUDRESULT_SPUDNET_UNSUPPORTED.
  *
  * On Linux all of SpudNet, the TCP sockets included, needs libcurl 7.84 or
- * later, built thread-safe: spudlib doesn't build against an older one, and
- * spudnet_instance_create() returns SPUDRESULT_SPUDNET_UNSUPPORTED on one
- * that isn't thread-safe (@ref spudnet_instances "Instance" has why).
+ * later, built with CURL_VERSION_THREADSAFE: spudlib doesn't build against
+ * an older one, and spudnet_instance_create() returns
+ * SPUDRESULT_SPUDNET_UNSUPPORTED on one built without it
+ * (@ref spudnet_instances "Instance" has why).
  *
  * Not every part is on every platform: SPUDNET_EXT_TCP and
  * SPUDNET_EXT_WEBSOCKET say which of the first and the last this build has
@@ -79,8 +80,9 @@ extern "C" {
  * - Every call returns at once or blocks the thread it was made on; SpudNet
  *   starts no thread and has no non-blocking mode
  *   (@ref spudnet_threads "Threads"). A call that can wait takes a time
- *   limit (@ref spudnet_time "Time limits") and can be ended from another
- *   thread by the object's `_abort` (@ref spudnet_aborting "Aborting").
+ *   limit (@ref spudnet_time "Time limits") and can be ended by the
+ *   object's `_abort`, called while the wait is in progress
+ *   (@ref spudnet_aborting "Aborting").
  * - Failures are SPUDRESULT values: the general ones, and the
  *   `SPUDRESULT_SPUDNET_*` group in spudcore.h. What the platform itself
  *   reported behind one is kept and can be read back
@@ -194,27 +196,32 @@ extern "C" {
  * @brief Every thread is the caller's: SpudNet starts none and calls nothing
  * back.
  *
+ * The library rule holds (@ref spud_threads "Threads", spudcore.h): every
+ * object is used by one caller at a time, from any thread and a different
+ * one each time. What is particular to SpudNet:
+ *
  * - SpudNet starts no thread. A call runs on the thread that made it, for
  *   as long as it takes or its time limit allows. Where work has to go on
  *   while the caller does something else, the caller brings the thread:
  *   how many there are, what they cost and when they end is not SpudNet's
- *   to decide. (The platform's HTTP stack has threads of its own. They are
- *   the stack's, and nothing of the caller's ever runs on them.)
+ *   to decide. (The platform's HTTP stack has threads and queues of its
+ *   own. They are the stack's, and nothing of the caller's, its allocator
+ *   included, is called on them.)
  * - Nothing here calls back. No function pointer is taken anywhere in this
  *   header, so no code of the caller's runs anywhere but where the caller
  *   called from.
- * - No object belongs to a thread. Any thread may use one, and a different
- *   thread next time; what each object limits is how many may be inside it
- *   at once, and its own section says so (one receiver and one sender on a
- *   socket, one thread on an HTTP transfer, one on a wait set).
- * - The calls that may come from any thread at any time are the ones that
- *   end a wait - every `_abort`, and spudnet_wait_set_wake() - and no others
- *   (@ref spudnet_aborting "Aborting", and @ref spudnet_wait "Wait set").
- * - Taking an object apart is always the same three steps: abort it, wait
- *   for the caller's own threads to come back out of it, destroy it. The
- *   one exception is the resolver, whose lookup can't be brought back and
- *   whose destroy is made not to need it
+ * - Waiting is what SpudNet's objects are for, so its exceptions are about
+ *   waits, each marked `Thread:` on the call: every `_abort`, and
+ *   spudnet_wait_set_wake(), may overlap any call on their object but its
+ *   destroy (@ref spudnet_aborting "Aborting", @ref spudnet_wait
+ *   "Wait set"); a TCP socket and a WebSocket take one receiving call and
+ *   one sending call at once; and a resolver's spudnet_resolver_run()
+ *   overlaps everything else on it, its destroy included
  *   (@ref spudnet_resolvers "Resolver").
+ * - Taking an object apart is always the same three steps: abort it, wait
+ *   for the caller's own calls on it to return, destroy it. The one
+ *   exception is the resolver, whose lookup can't be brought back and whose
+ *   destroy is made not to need it.
  */
 
 /**
@@ -244,12 +251,12 @@ extern "C" {
  * - `result` is the SPUDRESULT the recorded call returned. A caller that
  *   just got a failure compares the two to know the detail is that call's
  *   and not an older one's.
- * - A TCP socket and a WebSocket keep two records, because one thread may
- *   be sending while another receives: SPUDNET_ERROR_SIDE says which.
- * - `_get_error` is called under the same rule as the calls it reports on -
- *   by the thread that made the failed call, or one that knows that thread
- *   is not in such a call now. It never waits, and it takes NULL (the
- *   record comes back empty).
+ * - A TCP socket and a WebSocket keep two records, because a send and a
+ *   receive may overlap on one: SPUDNET_ERROR_SIDE says which.
+ * - `_get_error` is called under the same rule as the calls it reports on:
+ *   it is a call on that side of the object, after the failed call has
+ *   returned and not overlapping another call on that side. It never
+ *   waits, and it takes NULL (the record comes back empty).
  *
  * A call that fails without leaving an object to ask -
  * spudnet_instance_create(), spudnet_get_local_ipv4_addresses(),
@@ -362,10 +369,12 @@ typedef enum SPUDNET_ERROR_SIDE {
  *   starts and keeps its networking up until the last is given back;
  *   SpudNet itself keeps no count, and no state of its own beyond the
  *   Linux backend's lock named above.
- * - spudnet_instance_create() and spudnet_instance_destroy() may be called
- *   from any thread, at the same time as each other and as any other call
- *   in this header - on other instances. On one instance they are like any
- *   other object's: nothing else is in it while it is destroyed.
+ * - Thread: spudnet_instance_create() and spudnet_instance_destroy() may
+ *   overlap each other and any other call in this header on other
+ *   instances, although each starts or stops something of the process's
+ *   (Winsock's and libcurl's start counts, the Linux backend's lock). On
+ *   one instance they are like any other object's: nothing else is in it
+ *   while it is destroyed.
  * - An instance is destroyed after every object made with it. One
  *   destroyed sooner is the caller's mistake and isn't caught. The one
  *   object that may still be at work is a resolver whose lookup hasn't
@@ -379,14 +388,15 @@ typedef enum SPUDNET_ERROR_SIDE {
  *   SPUDRESULT_SPUDNET_INVALID_INSTANCE.
  *
  * libcurl. Its global init is only safe to make while other threads are
- * running since 7.84, and only in a libcurl built thread-safe (it says so
+ * running since 7.84, and only in a libcurl built for it (it says so
  * itself: CURL_VERSION_THREADSAFE). An instance that may be made at any
  * time, by a part of the program that doesn't know what the rest is doing,
  * needs exactly that, so SpudNet requires it rather than pass the old rule
  * on to its callers: spudlib builds against libcurl 7.84 or later only,
  * and spudnet_instance_create() returns SPUDRESULT_SPUDNET_UNSUPPORTED when
- * the libcurl it finds at run time isn't thread-safe. Nothing of SpudNet
- * works on Linux without an instance, so that includes the TCP sockets.
+ * the libcurl it finds at run time lacks CURL_VERSION_THREADSAFE. Nothing
+ * of SpudNet works on Linux without an instance, so that includes the TCP
+ * sockets.
  * @{
  */
 
@@ -414,11 +424,12 @@ typedef struct spudnet_instance_desc {
 
 /**
  * @brief Starts the platform's networking for this instance. Known problem:
- * on Linux it fails with SPUDRESULT_SPUDNET_UNSUPPORTED on a libcurl that
- * isn't thread-safe, which takes the TCP sockets with it although they need
- * no libcurl.
+ * on Linux it fails with SPUDRESULT_SPUDNET_UNSUPPORTED on a libcurl built
+ * without CURL_VERSION_THREADSAFE, which takes the TCP sockets with it
+ * although they need no libcurl.
  *
- * May be called from any thread, at any time.
+ * Thread: may overlap any call on any other instance, another create
+ * included (@ref spudnet_instances "Instance").
  *
  * @param[in]  desc         What the caller decides.
  * @param[out] out_instance Receives the new instance, the caller's to
@@ -437,7 +448,8 @@ typedef struct spudnet_instance_desc {
  * @retval SPUDRESULT_INVALID_ALLOCATOR `desc->allocator` lacks a function.
  * @retval SPUDRESULT_OUT_OF_MEMORY The instance could not be allocated.
  * @retval SPUDRESULT_SPUDNET_UNSUPPORTED Linux: the libcurl found at run
- *         time isn't thread-safe. Nothing is recorded in `out_error`.
+ *         time lacks CURL_VERSION_THREADSAFE. Nothing is recorded in
+ *         `out_error`.
  * @retval SPUDRESULT_SPUDNET_STARTUP_FAILED The platform's networking
  *         wouldn't start; `out_error` has its reason.
  */
@@ -566,15 +578,16 @@ void spudnet_instance_destroy(spudnet_instance instance);
 /**
  * @defgroup spudnet_aborting Aborting
  * @ingroup spudnet
- * @brief Ending a wait from another thread; the same for every object that
- * has an `_abort`.
+ * @brief Ending a wait while it is in progress; the same for every object
+ * that has an `_abort`.
  *
  * Those objects are spudnet_resolver, spudnet_tcp_socket,
  * spudnet_tcp_listener, spudnet_http_transfer, spudnet_websocket and
  * spudnet_wait_set.
  *
- * An `_abort` may be called from any thread, at any point after `_create`.
- * Whatever call is waiting on that object returns
+ * Thread: an `_abort` may be called at any point after `_create`, from any
+ * thread, overlapping any call on its object but `_destroy`. Whatever call
+ * is waiting on that object returns
  * SPUDRESULT_SPUDNET_ABORTED as soon as the platform lets go of it, and so
  * does every call made on it afterwards. It doesn't wear off - which is
  * what makes it safe against a call that was just about to start - so only
@@ -582,7 +595,7 @@ void spudnet_instance_destroy(spudnet_instance instance);
  * racing destroy: abort first, wait for the object's other calls to come
  * back, then destroy.
  *
- * This is how a thread waiting with SPUDNET_WAIT_FOREVER is brought back.
+ * This is how a call waiting with SPUDNET_WAIT_FOREVER is brought back.
  */
 
 #if SPUDNET_EXT_TCP
@@ -619,10 +632,13 @@ void spudnet_instance_destroy(spudnet_instance instance);
  * fewer bytes than asked for. A caller that wants "exactly N bytes or
  * nothing" loops on these itself; SpudNet won't do it for you.
  *
- * Threads: on one socket, one thread may be in spudnet_tcp_socket_recv()
- * while another is in spudnet_tcp_socket_send(). Two receivers at once or
- * two senders at once are the caller's to prevent, as is more than one
- * thread in spudnet_tcp_listener_accept() on one listener.
+ * Thread: on one socket, a receiving call (spudnet_tcp_socket_recv()) may
+ * overlap a sending call (spudnet_tcp_socket_send(),
+ * spudnet_tcp_socket_finish_sending()), and each may overlap
+ * spudnet_tcp_socket_abort(). Two receiving calls at once, two sending
+ * calls at once, or any other call on the socket during either, are the
+ * caller's to prevent. A listener is one caller at a time, as every object
+ * is, spudnet_tcp_listener_abort() aside.
  * @{
  */
 
@@ -654,8 +670,8 @@ typedef enum SPUDNET_ADDRESS_FAMILY {
  * usually milliseconds, up to its own give-up time when a name server
  * isn't answering - and on most platforms nothing can make it return
  * sooner. A time limit and an abort can therefore only be had by not being
- * the thread that is stuck in it. So a lookup here is two calls, meant for
- * two threads, and both threads are the caller's
+ * the call that is stuck in it. So a lookup here is two calls, meant to
+ * overlap on two of the caller's threads
  * (@ref spudnet_threads "Threads"):
  *
  * - spudnet_resolver_run() does the lookup. It blocks until the system has
@@ -700,12 +716,12 @@ typedef enum SPUDNET_ADDRESS_FAMILY {
  * and gives it back when it is freed. Destroying the instance after the
  * resolver is therefore in order whether or not the lookup has returned.
  *
- * @par Threads
- * One in spudnet_resolver_run(), ever. One at a time in
- * spudnet_resolver_wait() and spudnet_resolver_get_error(), and those have
- * come back before spudnet_resolver_destroy() - the thread in run is the
- * one destroy doesn't wait for. spudnet_resolver_abort() from any thread,
- * but not racing destroy.
+ * Thread: spudnet_resolver_run() is made once and overlaps every other call
+ * on the resolver, spudnet_resolver_destroy() included. The others -
+ * spudnet_resolver_wait(), spudnet_resolver_get_error() and destroy - are
+ * one caller at a time among themselves, and wait and get_error have
+ * returned before destroy is called. spudnet_resolver_abort() may overlap
+ * any call but destroy.
  * @{
  */
 
@@ -763,7 +779,7 @@ SPUDRESULT spudnet_resolver_create(
  * outside Windows nothing brings the calling thread back before the system's
  * resolver returns.
  *
- * Once per resolver. It takes the resolver and nothing else so that it can
+ * It takes the resolver and nothing else so that it can
  * be the whole of a thread's work, and its result is what
  * spudnet_resolver_wait() would return at that moment, for a caller that
  * runs and waits on one thread. A thread that was left behind has nobody to
@@ -772,6 +788,10 @@ SPUDRESULT spudnet_resolver_create(
  * The resolver may already have been destroyed by the time this returns,
  * and may be destroyed while it runs. Neither is a problem, and the caller
  * of run doesn't use the handle again.
+ *
+ * Thread: overlaps every other call on the resolver, destroy included: it
+ * is meant for a thread of the caller's that does nothing else. Once per
+ * resolver.
  *
  * @param[in] resolver The resolver to run.
  *
@@ -796,6 +816,8 @@ SPUDRESULT spudnet_resolver_run(spudnet_resolver resolver);
  * (which is its preference). Once the lookup has finished, every wait
  * returns the same answer at once. A wait on a resolver nobody runs just
  * uses up its time limit.
+ *
+ * Thread: may overlap spudnet_resolver_run() and spudnet_resolver_abort().
  *
  * @param[in]  resolver      The resolver to wait on.
  * @param[in]  timeout_ms    The longest to wait
@@ -839,6 +861,9 @@ SPUDRESULT spudnet_resolver_wait(
  * already finished. What it does to the lookup itself is under
  * spudnet_resolver_run().
  *
+ * Thread: may overlap any call on the resolver but
+ * spudnet_resolver_destroy().
+ *
  * @param[in] resolver The resolver to abort.
  */
 void spudnet_resolver_abort(spudnet_resolver resolver);
@@ -860,8 +885,9 @@ void spudnet_resolver_get_error(
  * other half is spudnet_resolver_run() returning, so a resolver that is
  * destroyed and never run is never freed.
  *
- * Safe while spudnet_resolver_run() is still out on another thread, which
- * is the point of it: the resolver is freed when that returns.
+ * Thread: may overlap spudnet_resolver_run(), which is the point of it:
+ * the resolver is freed when that returns. Not spudnet_resolver_abort(),
+ * wait or get_error.
  *
  * @param[in] resolver The resolver to destroy. NULL is taken and nothing is
  *                     done with it.
@@ -1022,6 +1048,8 @@ SPUDRESULT spudnet_tcp_listener_accept(
  *
  * See @ref spudnet_aborting "Aborting".
  *
+ * Thread: may overlap any call on the listener but its destroy.
+ *
  * @param[in] listener The listener to abort.
  */
 void spudnet_tcp_listener_abort(spudnet_tcp_listener listener);
@@ -1130,6 +1158,9 @@ SPUDRESULT spudnet_tcp_socket_connect(
  * A short write, same as a raw send(): the caller sends the rest with
  * another call.
  *
+ * Thread: may overlap spudnet_tcp_socket_recv() and
+ * spudnet_tcp_socket_abort() on the same socket.
+ *
  * @param[in]  socket     The connected socket to send on.
  * @param[in]  data       The bytes to send.
  * @param[in]  size       How many bytes `data` holds.
@@ -1160,6 +1191,10 @@ SPUDRESULT spudnet_tcp_socket_send(
 
 /**
  * @brief Waits for data and copies up to `size` bytes of it.
+ *
+ * Thread: may overlap spudnet_tcp_socket_send(),
+ * spudnet_tcp_socket_finish_sending() and spudnet_tcp_socket_abort() on
+ * the same socket.
  *
  * @param[in]  socket       The connected socket to receive on.
  * @param[out] data         Receives the bytes.
@@ -1197,6 +1232,9 @@ SPUDRESULT spudnet_tcp_socket_recv(
  *
  * A half-close; the peer's recv returns 0 bytes. Returns at once. Sending
  * after it fails.
+ *
+ * Thread: may overlap spudnet_tcp_socket_recv() and
+ * spudnet_tcp_socket_abort() on the same socket.
  *
  * @param[in] socket The connected socket.
  *
@@ -1254,6 +1292,8 @@ SPUDRESULT spudnet_tcp_socket_get_peer_address(
  * See @ref spudnet_aborting "Aborting". The connection is not closed until
  * destroy.
  *
+ * Thread: may overlap any call on the socket but its destroy.
+ *
  * @param[in] socket The socket to abort.
  */
 void spudnet_tcp_socket_abort(spudnet_tcp_socket socket);
@@ -1263,6 +1303,9 @@ void spudnet_tcp_socket_abort(spudnet_tcp_socket socket);
  * failure on one side.
  *
  * See @ref spudnet_error_detail "Error detail".
+ *
+ * Thread: a call on the side it reads: may overlap a call on the other
+ * side.
  *
  * @param[in]  socket    The socket to ask. NULL gives an empty record.
  * @param[in]  side      Which of the socket's two records to read.
@@ -1372,8 +1415,8 @@ SPUDRESULT spudnet_get_local_ipv4_addresses(
  *
  * The calls here that can wait are spudnet_http_transfer_start(), `_send`,
  * `_receive_response` and `_recv`, and spudnet_websocket_connect(), `_send`
- * and `_recv`; each takes a time limit and can be ended from another
- * thread, as @ref spudnet_time "Time limits" and
+ * and `_recv`; each takes a time limit and can be ended by the object's
+ * `_abort` while it waits, as @ref spudnet_time "Time limits" and
  * @ref spudnet_aborting "Aborting" describe. The rest return without
  * waiting on the network. No time limit has a default.
  *
@@ -1755,10 +1798,9 @@ typedef struct spudnet_proxy_desc {
  *   nobody wants the rest of is stopped.
  * - A transfer is destroyed before its client.
  *
- * Threads: one at a time in a transfer; it has no sending side and
- * receiving side to share out, since a request is sent before its response
- * is read. spudnet_http_transfer_abort() is the exception, as every
- * `_abort` is.
+ * A transfer is one caller at a time; it has no sending side and receiving
+ * side to share out, since a request is sent before its response is read.
+ * spudnet_http_transfer_abort() is the exception, as every `_abort` is.
  * @{
  */
 
@@ -2205,6 +2247,8 @@ SPUDRESULT spudnet_http_transfer_recv(
  * transfers, are untouched. A request that was aborted may or may not have
  * reached the server.
  *
+ * Thread: may overlap any call on the transfer but its destroy.
+ *
  * @param[in] transfer The transfer to abort.
  */
 void spudnet_http_transfer_abort(spudnet_http_transfer transfer);
@@ -2265,9 +2309,12 @@ void spudnet_http_transfer_destroy(spudnet_http_transfer transfer);
  * protocol's close frame, and the end of the connection as far as this side
  * is concerned, on a socket that stays the caller's to destroy.
  *
- * Threads: one thread may be in spudnet_websocket_recv() while another is
- * in spudnet_websocket_send() or spudnet_websocket_close(). Two receivers
- * at once or two senders at once are the caller's to prevent.
+ * Thread: on one socket, a receiving call (spudnet_websocket_recv()) may
+ * overlap a sending call (spudnet_websocket_send(),
+ * spudnet_websocket_close()), and each may overlap
+ * spudnet_websocket_abort(). Two receiving calls at once, two sending calls
+ * at once, or any other call on the socket during either, are the caller's
+ * to prevent.
  * @{
  */
 
@@ -2422,6 +2469,9 @@ SPUDRESULT spudnet_websocket_connect(
  * (other than with SPUDNET_NO_WAIT, which sends nothing) ends the
  * connection.
  *
+ * Thread: may overlap spudnet_websocket_recv() and
+ * spudnet_websocket_abort() on the same socket.
+ *
  * @param[in] socket     The connected socket to send on.
  * @param[in] type       Text or binary. A text message has to be valid
  *                       UTF-8.
@@ -2461,6 +2511,10 @@ SPUDRESULT spudnet_websocket_send(
  *
  * Pings are answered by the stack and never show up here. After any failure
  * other than SPUDRESULT_SPUDNET_TIMED_OUT, only destroy is left.
+ *
+ * Thread: may overlap spudnet_websocket_send(),
+ * spudnet_websocket_close() and spudnet_websocket_abort() on the same
+ * socket.
  *
  * @param[in]  socket               The connected socket to receive on.
  * @param[out] data                 Receives the bytes.
@@ -2518,7 +2572,7 @@ SPUDRESULT spudnet_websocket_recv(
  * Once it has succeeded the socket is finished, the same on every stack:
  *
  * - spudnet_websocket_recv() returns SPUDRESULT_SPUDNET_WS_CLOSED, at once
- *   and from then on - a receive that was waiting on another thread
+ *   and from then on - a receive already waiting when the close was made
  *   included. Nothing more is handed over: not what the peer sends
  *   afterwards, not its answer to the close, and not a message that had
  *   already arrived and wasn't received yet. A caller that wants what is
@@ -2534,6 +2588,9 @@ SPUDRESULT spudnet_websocket_recv(
  * The frame is handed to the stack, not seen off: a destroy straight after
  * may drop the connection before it has gone out, and no stack says when
  * it has. A peer that must be told sends and receives that in messages.
+ *
+ * Thread: may overlap spudnet_websocket_recv() and
+ * spudnet_websocket_abort() on the same socket.
  *
  * @param[in] socket The connected socket to close.
  * @param[in] code   The close code (RFC 6455, e.g. 1000).
@@ -2574,6 +2631,8 @@ uint16_t spudnet_websocket_get_close_code(spudnet_websocket socket);
  * See @ref spudnet_aborting "Aborting". The connection is dropped without a
  * close frame.
  *
+ * Thread: may overlap any call on the socket but its destroy.
+ *
  * @param[in] socket The socket to abort.
  */
 void spudnet_websocket_abort(spudnet_websocket socket);
@@ -2586,6 +2645,9 @@ void spudnet_websocket_abort(spudnet_websocket socket);
  * ended (SPUDRESULT_SPUDNET_WS_CLOSED) or the server declined to open
  * (SPUDRESULT_SPUDNET_WS_UPGRADE_REFUSED) is the protocol working, not the
  * platform failing, and records nothing.
+ *
+ * Thread: a call on the side it reads: may overlap a call on the other
+ * side.
  *
  * @param[in]  socket    The socket to ask. NULL gives an empty record.
  * @param[in]  side      Which of the socket's two records to read.
@@ -2615,7 +2677,7 @@ void spudnet_websocket_destroy(spudnet_websocket socket);
 /**
  * @defgroup spudnet_wait Wait set
  * @ingroup spudnet
- * @brief One thread waiting on many objects. Known problems: it is poll()
+ * @brief One call waiting on many objects. Known problems: it is poll()
  * and not epoll or kqueue, so each wait costs time in proportion to the
  * members - fine for hundreds, not for thousands; an object destroyed while
  * still in a set is not caught, and the set then polls a closed descriptor
@@ -2623,8 +2685,9 @@ void spudnet_websocket_destroy(spudnet_websocket socket);
  * WebSocket is not named for a close this side made.
  *
  * Every waiting call above waits on one object. A wait set is how one
- * thread waits on several - a server's listener and all its connections -
- * without a thread for each and without circling them with SPUDNET_NO_WAIT.
+ * call waits on several - a server's listener and all its connections -
+ * without a thread of the caller's for each and without circling them with
+ * SPUDNET_NO_WAIT.
  * It is the platform's poll() (WSAPoll on Windows) over the objects' own
  * sockets, and it does none of the receiving, accepting or sending itself:
  * spudnet_wait_set_wait() only says which objects are worth calling, and
@@ -2654,12 +2717,14 @@ void spudnet_websocket_destroy(spudnet_websocket socket);
  * - The set doesn't own its objects. An object is removed from its set
  *   before it is destroyed; destroying the set first removes whatever is
  *   still in it.
- * - One thread at a time in a set's add, remove, wait and destroy.
- *   spudnet_wait_set_abort() is the exception, as every `_abort` is, and so
- *   is spudnet_wait_set_wake().
- * - While an object is in a set, its receiving side is the waiting
- *   thread's: no other thread is in recv or accept on it. Sending from
- *   another thread carries on as before.
+ * - A set is one caller at a time in its add, remove, wait and destroy, as
+ *   every object is.
+ * - Thread: spudnet_wait_set_abort() and spudnet_wait_set_wake() may
+ *   overlap any call on the set but its destroy.
+ * - Thread: while an object is in a set, spudnet_wait_set_wait() counts as
+ *   a receiving call on it: no recv or accept on it may overlap a wait on
+ *   the set. A sending call on it may overlap the wait, as it may a
+ *   receive.
  * - An object goes in one set at a time.
  * @{
  */
@@ -2885,6 +2950,8 @@ SPUDRESULT spudnet_wait_set_wait(
  * See @ref spudnet_aborting "Aborting". Ends the wait, not the objects:
  * each of those still has its own `_abort`.
  *
+ * Thread: may overlap any call on the set but its destroy.
+ *
  * @param[in] set The set to abort.
  */
 void spudnet_wait_set_abort(spudnet_wait_set set);
@@ -2893,16 +2960,17 @@ void spudnet_wait_set_abort(spudnet_wait_set set);
  * @brief Ends one wait and leaves the set usable, which is what an abort
  * can't do.
  *
- * From any thread, at any point after `_create`, but like abort not racing
- * destroy. The spudnet_wait_set_wait() in progress - or, when none is, the
+ * Thread: at any point after `_create`, from any thread, overlapping any
+ * call on the set but its destroy, as an abort may. The
+ * spudnet_wait_set_wait() in progress - or, when none is, the
  * next one - returns SPUD_SUCCESS without waiting any further, with
  * whatever members happen to be ready and an `out_count` of 0 when none
  * is. Several wakes made before a wait has returned for them may end only
  * the one wait.
  *
- * For the thread that waits on a set and also has work handed to it by
- * other threads (something to send, a member to add): the other thread
- * puts the work wherever the two share it and then wakes the set. What a
+ * For a caller that waits on a set and also has work handed to it from
+ * elsewhere (something to send, a member to add): whoever hands the work
+ * over puts it wherever the two share it and then wakes the set. What a
  * wake means is the caller's; the set only stops waiting.
  *
  * @param[in] set The set to wake. NULL is taken and nothing is done with it.

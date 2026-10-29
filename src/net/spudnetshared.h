@@ -154,17 +154,33 @@ struct spudnet_http_header_entry {
 };
 
 /* Each name once: a value added under a name that is already there is
- * joined onto it with ", ", as spudnet.h promises on every stack. */
+ * joined onto it with ", ", as spudnet.h promises on every stack.
+ *
+ * A name is found through `slots`, a table of entry indices by a hash of
+ * the name without regard to case, and never by walking the entries: the
+ * server decides how many headers there are, and a walk for each one made
+ * a block of tens of thousands of short names cost seconds on the thread
+ * of the call that received it. */
+typedef EQ_ARRAY(struct spudnet_http_header_entry) spudnet_http_header_array;
+
 struct spudnet_http_head {
-	uint32_t                          status;
-	struct spudnet_http_header_entry *entries;
-	uint32_t                          count;
-	uint32_t                          capacity; // the entries `entries` was allocated with
+	uint32_t status;
+	// In the order their names first came. Grown through `allocator`.
+	spudnet_http_header_array entries;
+	// eqstd's view of the allocator the head's calls are given
+	// (spud_eq_allocator), which `entries` points at. Set again by every
+	// call that grows or frees, so a zeroed head is an empty one.
+	EQ_ALLOCATOR allocator;
+	// Twice `entries.capacity` (0 with it), each 0 for none or an entry's
+	// index + 1.
+	uint32_t *slots;
+	uint32_t  slot_count;
 };
 
 /* Every call that allocates or frees takes the allocator of the object
  * that holds the head (a transfer's head.allocator), the same one each
- * time. */
+ * time. A head is never copied while it holds entries: `entries` points
+ * into it. */
 
 /* Frees what a head holds and leaves it empty. */
 void spudnet_head_clear(const SPUD_ALLOCATOR *allocator, struct spudnet_http_head *head);

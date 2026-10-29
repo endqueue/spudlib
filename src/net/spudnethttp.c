@@ -42,24 +42,61 @@ static void spudnet_head_free_entry(const SPUD_ALLOCATOR *allocator, const struc
 	spud_free(allocator, entry->value, entry->value_length + 1, 1);
 }
 
+/* Points the entries at eqstd's view of `allocator`, kept in the head. */
+static void spudnet_head_bind(const SPUD_ALLOCATOR *allocator, struct spudnet_http_head *head) {
+	head->allocator         = spud_eq_allocator(allocator);
+	head->entries.allocator = &head->allocator;
+}
+
 void spudnet_head_clear(const SPUD_ALLOCATOR *allocator, struct spudnet_http_head *head) {
-	for (uint32_t i = 0; i < head->count; ++i)
-		spudnet_head_free_entry(allocator, &head->entries[i]);
-	SPUD_DELETE_ARRAY(allocator, struct spudnet_http_header_entry, head->entries, head->capacity);
+	for (size_t i = 0; i < head->entries.count; ++i)
+		spudnet_head_free_entry(allocator, &head->entries.data[i]);
+	spudnet_head_bind(allocator, head);
+	eq_array_free(&head->entries);
+	SPUD_DELETE_ARRAY(allocator, uint32_t, head->slots, head->slot_count);
 	memset(head, 0, sizeof(*head));
 }
 
 /* Drops the headers and keeps the room they were in. */
 static void spudnet_head_drop_headers(const SPUD_ALLOCATOR *allocator, struct spudnet_http_head *head) {
-	for (uint32_t i = 0; i < head->count; ++i)
-		spudnet_head_free_entry(allocator, &head->entries[i]);
-	head->count = 0;
+	for (size_t i = 0; i < head->entries.count; ++i)
+		spudnet_head_free_entry(allocator, &head->entries.data[i]);
+	eq_array_clear(&head->entries);
+	if (head->slots)
+		memset(head->slots, 0, head->slot_count * sizeof(head->slots[0]));
+}
+
+/* FNV-1a over the name with its letters made lower case, so that names
+ * that differ only in case land in the same slot. */
+static uint32_t spudnet_head_hash(const char *name, size_t length) {
+	uint32_t hash = 2166136261u;
+	for (size_t i = 0; i < length; ++i) {
+		unsigned char c = (unsigned char)name[i];
+		if (c >= 'A' && c <= 'Z')
+			c = (unsigned char)(c - 'A' + 'a');
+		hash = (hash ^ c) * 16777619u;
+	}
+	return hash;
+}
+
+/* Puts entry `index` in the first free slot from its name's own. The table
+ * is never more than half full, so there always is one. */
+static void spudnet_head_place(struct spudnet_http_head *head, uint32_t index) {
+	const uint32_t mask = head->slot_count - 1;
+	uint32_t       slot = spudnet_head_hash(head->entries.data[index].name, head->entries.data[index].name_length) & mask;
+	while (head->slots[slot] != 0)
+		slot = (slot + 1) & mask;
+	head->slots[slot] = index + 1;
 }
 
 static struct spudnet_http_header_entry *spudnet_head_find(const struct spudnet_http_head *head, const char *name, size_t name_length) {
-	for (uint32_t i = 0; i < head->count; ++i) {
-		if (head->entries[i].name_length == name_length && spudnet_ascii_equal_no_case(head->entries[i].name, name, name_length))
-			return &head->entries[i];
+	if (head->slot_count == 0)
+		return NULL;
+	const uint32_t mask = head->slot_count - 1;
+	for (uint32_t slot = spudnet_head_hash(name, name_length) & mask; head->slots[slot] != 0; slot = (slot + 1) & mask) {
+		struct spudnet_http_header_entry *entry = &head->entries.data[head->slots[slot] - 1];
+		if (entry->name_length == name_length && spudnet_ascii_equal_no_case(entry->name, name, name_length))
+			return entry;
 	}
 	return NULL;
 }
@@ -103,16 +140,28 @@ bool spudnet_head_add_header(
 		return true;
 	}
 
-	if (head->count == head->capacity) {
-		if (head->capacity > SPUD_UINT32_MAX / 2)
+	spudnet_head_bind(allocator, head);
+	if (head->entries.count == head->entries.capacity) {
+		// Room for twice as many entries, and a table twice that size (a
+		// power of two, as 16 doubled is), filled again from the entries.
+		// The entries are reserved exactly, not left to eqstd's own
+		// growth, so the table stays twice their capacity.
+		if (head->entries.capacity > SPUD_UINT32_MAX / 4)
 			return false;
-		uint32_t                          capacity = head->capacity ? head->capacity * 2 : 16;
-		struct spudnet_http_header_entry *moved =
-		    SPUD_RESIZE_ARRAY(allocator, struct spudnet_http_header_entry, head->entries, head->capacity, capacity);
-		if (!moved)
+		uint32_t  capacity   = head->entries.capacity ? (uint32_t)head->entries.capacity * 2 : 16;
+		uint32_t  slot_count = capacity * 2;
+		uint32_t *slots      = SPUD_NEW_ARRAY_ZEROED(allocator, uint32_t, slot_count);
+		if (!slots)
 			return false;
-		head->entries  = moved;
-		head->capacity = capacity;
+		if (eq_array_reserve(&head->entries, capacity) != EQ_SUCCESS) {
+			SPUD_DELETE_ARRAY(allocator, uint32_t, slots, slot_count);
+			return false;
+		}
+		SPUD_DELETE_ARRAY(allocator, uint32_t, head->slots, head->slot_count);
+		head->slots      = slots;
+		head->slot_count = slot_count;
+		for (uint32_t i = 0; i < head->entries.count; ++i)
+			spudnet_head_place(head, i);
 	}
 	char *name_copy  = spudnet_head_copy(allocator, name, name_length);
 	char *value_copy = spudnet_head_copy(allocator, value, value_length);
@@ -121,11 +170,14 @@ bool spudnet_head_add_header(
 		spud_free(allocator, value_copy, value_length + 1, 1);
 		return false;
 	}
-	head->entries[head->count].name         = name_copy;
-	head->entries[head->count].name_length  = name_length;
-	head->entries[head->count].value        = value_copy;
-	head->entries[head->count].value_length = value_length;
-	head->count++;
+	// Room was made above, so the push can't fail; it is still checked.
+	const struct spudnet_http_header_entry added = {name_copy, name_length, value_copy, value_length};
+	if (eq_array_push(&head->entries, &added) != EQ_SUCCESS) {
+		spud_free(allocator, name_copy, name_length + 1, 1);
+		spud_free(allocator, value_copy, value_length + 1, 1);
+		return false;
+	}
+	spudnet_head_place(head, (uint32_t)(head->entries.count - 1));
 	return true;
 }
 
@@ -413,7 +465,7 @@ const char *spudnet_http_transfer_get_header(
 }
 
 uint32_t spudnet_http_transfer_get_header_count(spudnet_http_transfer transfer) {
-	return transfer ? transfer->response.count : 0;
+	return transfer ? (uint32_t)transfer->response.entries.count : 0;
 }
 
 SPUDRESULT spudnet_http_transfer_get_header_at(
@@ -425,10 +477,10 @@ SPUDRESULT spudnet_http_transfer_get_header_at(
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
 	*out_name  = NULL;
 	*out_value = NULL;
-	if (!transfer || index >= transfer->response.count)
+	if (!transfer || index >= transfer->response.entries.count)
 		return SPUDRESULT_INDEX_OUT_OF_RANGE;
-	*out_name  = transfer->response.entries[index].name;
-	*out_value = transfer->response.entries[index].value;
+	*out_name  = transfer->response.entries.data[index].name;
+	*out_value = transfer->response.entries.data[index].value;
 	return SPUD_SUCCESS;
 }
 

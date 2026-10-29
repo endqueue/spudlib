@@ -8,7 +8,10 @@
  * spudperf_sleep_until_monotonic_ms(), hands the calling thread to the
  * operating system until a time. Nothing is measured, averaged or
  * kept between calls, and no call takes a handle: there is no state to own.
- * Every function may be called from any thread.
+ *
+ * @par Threads
+ * No call takes an object, so under the library rule (spudcore.h, "Threads")
+ * any call may overlap any other.
  *
  * No function here returns a SPUDRESULT. The clocks cannot fail, and
  * spudperf_get_ram_usage() reports a failed read as 0.

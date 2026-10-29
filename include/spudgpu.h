@@ -10,6 +10,16 @@
  * Every object is an opaque handle the caller creates, owns and destroys.
  * Functions that can fail return a SPUDRESULT (see spudcore.h); the
  * `spudgpu_cmd_*` functions record into a command list and return nothing.
+ *
+ * @par Threads
+ * The library rule holds (@ref spud_threads "Threads", spudcore.h): every
+ * handle - an instance, a device, a queue, a command allocator, a command
+ * list, a swap chain - is used by one caller at a time, on every backend,
+ * whatever the graphics API underneath would allow. A `spudgpu_cmd_*` call
+ * is a use of the command list it records into. What SpudGPU keeps behind
+ * the handles (an adapter's one device, a device's descriptor budget, the
+ * bindless table, D3D12's shared descriptor heaps) it guards itself. The
+ * calls that may overlap others on one object say so with `Thread:`.
  */
 
 #ifndef SPUDLIB_SPUDGPU_H
@@ -696,8 +706,8 @@ typedef struct SPUDGPU_ADAPTER_PROPERTIES {
 /**
  * @brief Lists the adapters an instance can create devices on.
  *
- * The list is read when the instance is created and never changes, so this
- * may be called from any thread. It is in the order the graphics API gives
+ * The list is read when the instance is created and never changes. It is
+ * in the order the graphics API gives
  * (Vulkan's loader, DXGI's `EnumAdapters1`, `MTLCopyAllDevices`): SpudGPU
  * neither sorts nor filters it by preference. An adapter is listed only if a
  * device can be created on it (Vulkan: the physical device's `apiVersion`
@@ -715,6 +725,9 @@ typedef struct SPUDGPU_ADAPTER_PROPERTIES {
  *
  * The adapters and the array belong to the instance and are released by
  * spudgpu_destroy_instance(); the caller frees neither.
+ *
+ * Thread: may overlap any call on the same instance, and on its adapters,
+ * except spudgpu_destroy_instance(). It only reads the list.
  *
  * @param[in]  instance           Instance to list adapters of.
  * @param[out] out_adapters       Receives a pointer to the instance's array,
@@ -734,7 +747,12 @@ SPUDRESULT spudgpu_enumerate_adapters(
 /**
  * @brief Reads what an adapter is and can do.
  *
- * May be called from any thread. Creates nothing on the adapter.
+ * Creates nothing on the adapter.
+ *
+ * Thread: may overlap any call on the same adapter or its instance,
+ * spudgpu_create_device() on it included, except
+ * spudgpu_destroy_instance(). The properties were read when the instance
+ * was created.
  *
  * @param[in]  adapter        Adapter to query.
  * @param[out] out_properties Receives its properties, and those of every
@@ -845,8 +863,12 @@ typedef struct spudgpu_device_desc {
  * One device per adapter at a time, on every backend: D3D12 hands back the
  * same device to a second `D3D12CreateDevice` on one adapter, and Metal has
  * one `MTLDevice` per GPU, so a second device would not be a separate one
- * there. Two threads creating on one adapter at once get one device and
- * SPUDRESULT_GPU_ADAPTER_IN_USE.
+ * there.
+ *
+ * Thread: may overlap any call on the same adapter, this one included,
+ * except spudgpu_destroy_instance(). Of two creates on one adapter at once,
+ * one gets the device and the other SPUDRESULT_GPU_ADAPTER_IN_USE (the
+ * claim is an atomic exchange on the adapter).
  *
  * The rule is one device per GPU in the process, across instances too, and
  * that part is the caller's: two instances list two adapters for one GPU,
@@ -915,8 +937,9 @@ SPUDRESULT spudgpu_create_device(
  *
  * @warning Every object created from the device must be destroyed first, and
  * every submission to its queues must have finished (or the device be lost).
- * No other thread may be using it. A debug build checks the first: it prints
- * the kinds of object still alive, with their counts, and asserts.
+ * Nothing else may be using the device or its queues: no call on either is
+ * in progress. A debug build checks the first: it prints the kinds of
+ * object still alive, with their counts, and asserts.
  *
  * @param[in] device Device to destroy. NULL does nothing.
  */
@@ -992,16 +1015,17 @@ SPUDRESULT spudgpu_get_command_queue(
  * spudgpu_submit_command_lists_synced() when rendering to one, or
  * spudgpu_queue_submit() to name the semaphores and fence yourself.
  *
- * A queue is the caller's to synchronize, on every backend: any thread may
- * use it, but no two at once. This, spudgpu_submit_command_lists_synced(),
+ * A queue is an object of its own, used by one caller at a time on every
+ * backend (@ref spud_threads "Threads"), and independent of its device and
+ * of the other queues. This, spudgpu_submit_command_lists_synced(),
  * spudgpu_queue_submit(), spudgpu_queue_wait_idle() and
  * spudgpu_swap_chain_present() on the swap chain's queue are each a use of
  * the queue, and so is any use of its native queue. Vulkan requires this
  * (its queue is externally synchronized) and SpudGPU takes no lock for it;
  * D3D12 and Metal would allow more, but the rule is the same everywhere so
  * that code written on one runs on all. Two different queues may be used
- * at once. A debug build asserts on every backend when two threads use one
- * queue at once.
+ * at once. A debug build asserts on every backend when two uses of one
+ * queue overlap.
  *
  * @param[in] queue          Queue to submit to.
  * @param[in] cmd_lists      Array of command lists, each closed with
@@ -1131,8 +1155,8 @@ SPUDRESULT spudgpu_queue_submit(
  * Equivalent to vkQueueWaitIdle. Prefer fence-based synchronization in hot
  * paths.
  *
- * A use of the queue: no other thread may use it until this returns (see
- * spudgpu_submit_command_lists()).
+ * A use of the queue: nothing else may use the queue until this returns
+ * (see spudgpu_submit_command_lists()).
  *
  * @param[in] queue Queue to wait on.
  */
@@ -1253,8 +1277,9 @@ void spudgpu_destroy_command_list(spudgpu_command_list cmd);
  * again: a Metal command buffer is committed once, and Vulkan's is begun as
  * a one-time submit.
  *
- * @warning A command list must not be recorded from more than one thread at a
- * time.
+ * @warning A command list is recorded by one caller at a time: no two calls
+ * on it, this one and every `spudgpu_cmd_*` call included, overlap
+ * (@ref spud_threads "Threads").
  *
  * @warning Submitting one recording a second time is undefined behavior.
  *
@@ -1337,7 +1362,7 @@ SPUDRESULT spudgpu_create_fence(
  * @brief Destroys a fence.
  *
  * @warning Every submission that signals the fence must have finished, and
- * no thread may be waiting on it.
+ * no spudgpu_wait_for_fences() may be waiting on it.
  *
  * @param[in] fence Fence to destroy.
  */
@@ -1350,6 +1375,9 @@ void spudgpu_destroy_fence(spudgpu_fence fence);
  * spudgpu_signal_fence(), not a value a submission still running has been
  * asked to signal.
  *
+ * Thread: may overlap any call on the fence and its device except
+ * spudgpu_destroy_fence() and destroying the device.
+ *
  * @param[in] fence Fence to read.
  *
  * @return The fence's value, or 0 if `fence` is NULL or the graphics API
@@ -1359,6 +1387,11 @@ uint64_t spudgpu_get_fence_value(spudgpu_fence fence);
 
 /**
  * @brief Signals a fence to a value from the CPU.
+ *
+ * Thread: may overlap spudgpu_wait_for_fences() and
+ * spudgpu_get_fence_value() on the same fence, and any call on the device
+ * except destroying it. Two signals of one fence at once are the caller's
+ * to prevent.
  *
  * @param[in] device Device that owns the fence.
  * @param[in] fence  Fence to signal.
@@ -1383,6 +1416,11 @@ SPUDRESULT spudgpu_signal_fence(
  *
  * `fences[i]` is waited on until its value is at least `values[i]`. A fence
  * already there counts at once, so a wait for a value of 0 never blocks.
+ *
+ * Thread: may overlap any call on the device and on the fences - another
+ * wait, spudgpu_get_fence_value(), spudgpu_signal_fence(), a submission
+ * that signals them - except destroying the device or one of the fences.
+ * Each wait has its own native wait object.
  *
  * @param[in] device      Device that owns the fences.
  * @param[in] fences      Array of fences to wait on. No entry may be NULL.
@@ -3486,8 +3524,8 @@ uint32_t spudgpu_swap_chain_acquire_next_image(spudgpu_swap_chain swap_chain);
  * queue's work, not against whichever queue was submitted on.
  *
  * A use of that queue like a submit, under the same rule (see
- * spudgpu_submit_command_lists()). The swap chain itself is used from one
- * thread at a time.
+ * spudgpu_submit_command_lists()). The swap chain itself is used by one
+ * caller at a time, as every object is.
  *
  * @param[in] swap_chain Swap chain holding the image to display.
  */

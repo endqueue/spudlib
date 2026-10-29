@@ -121,6 +121,42 @@
       "displayName": "SpudLib Linux TSan",
       "inherits": ["sanitize-tsan", "linux-vulkan"],
       "binaryDir": "${sourceDir}/build-linux-vulkan-tsan"
+    },
+    {
+      "name": "sanitize-fuzz",
+      "hidden": true,
+      "cacheVariables": {
+        "CMAKE_CONFIGURATION_TYPES": "Debug",
+        "SPUDLIB_BUILD_FUZZERS": "ON",
+        "CMAKE_C_FLAGS": "-fsanitize=fuzzer-no-link,address,undefined -fno-sanitize-recover=undefined -fno-omit-frame-pointer",
+        "CMAKE_CXX_FLAGS": "-fsanitize=fuzzer-no-link,address,undefined -fno-sanitize-recover=undefined -fno-omit-frame-pointer",
+        "CMAKE_OBJC_FLAGS": "-fsanitize=fuzzer-no-link,address,undefined -fno-sanitize-recover=undefined -fno-omit-frame-pointer",
+        "CMAKE_OBJCXX_FLAGS": "-fsanitize=fuzzer-no-link,address,undefined -fno-sanitize-recover=undefined -fno-omit-frame-pointer",
+        "CMAKE_EXE_LINKER_FLAGS": "-fsanitize=address,undefined",
+        "CMAKE_SHARED_LINKER_FLAGS": "-fsanitize=address,undefined",
+        "CMAKE_MODULE_LINKER_FLAGS": "-fsanitize=address,undefined"
+      }
+    },
+    {
+      "name": "macos-fuzz",
+      "displayName": "SpudLib macOS libFuzzer (Homebrew LLVM)",
+      "inherits": ["sanitize-fuzz", "macos-metal"],
+      "binaryDir": "${sourceDir}/build-macos-fuzz",
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "/opt/homebrew/opt/llvm/bin/clang",
+        "CMAKE_CXX_COMPILER": "/opt/homebrew/opt/llvm/bin/clang++",
+        "CMAKE_OBJC_COMPILER": "/opt/homebrew/opt/llvm/bin/clang"
+      }
+    },
+    {
+      "name": "linux-fuzz",
+      "displayName": "SpudLib Linux libFuzzer (clang)",
+      "inherits": ["sanitize-fuzz", "linux-vulkan"],
+      "binaryDir": "${sourceDir}/build-linux-fuzz",
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "clang",
+        "CMAKE_CXX_COMPILER": "clang++"
+      }
     }
   ],
   "buildPresets": [
@@ -255,6 +291,18 @@
       "displayName": "SpudLib Linux TSan (Debug)",
       "configurePreset": "linux-vulkan-tsan",
       "configuration": "Debug"
+    },
+    {
+      "name": "macos-fuzz-debug",
+      "displayName": "SpudLib macOS libFuzzer (Debug)",
+      "configurePreset": "macos-fuzz",
+      "configuration": "Debug"
+    },
+    {
+      "name": "linux-fuzz-debug",
+      "displayName": "SpudLib Linux libFuzzer (Debug)",
+      "configurePreset": "linux-fuzz",
+      "configuration": "Debug"
     }
   ],
   "testPresets": [
@@ -302,6 +350,30 @@
       },
       "environment": {
         "TSAN_OPTIONS": "halt_on_error=1:second_deadlock_stack=1"
+      }
+    },
+    {
+      "name": "macos-fuzz",
+      "configurePreset": "macos-fuzz",
+      "configuration": "Debug",
+      "output": {
+        "outputOnFailure": true
+      },
+      "environment": {
+        "ASAN_OPTIONS": "halt_on_error=1:detect_stack_use_after_return=1:check_initialization_order=1:strict_init_order=1",
+        "UBSAN_OPTIONS": "print_stacktrace=1:halt_on_error=1"
+      }
+    },
+    {
+      "name": "linux-fuzz",
+      "configurePreset": "linux-fuzz",
+      "configuration": "Debug",
+      "output": {
+        "outputOnFailure": true
+      },
+      "environment": {
+        "ASAN_OPTIONS": "halt_on_error=1:detect_stack_use_after_return=1:check_initialization_order=1:strict_init_order=1",
+        "UBSAN_OPTIONS": "print_stacktrace=1:halt_on_error=1"
       }
     }
   ]

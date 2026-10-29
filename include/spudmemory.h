@@ -29,8 +29,10 @@
  *   spudmem_reserve() returned. Anything else is undefined (Windows can't
  *   release part of a reservation).
  *
- * No call holds state, so any may be called from any thread. Two threads
- * changing the same pages at once is the caller's to prevent.
+ * @par Threads
+ * No call takes an object or holds state, so under the library rule
+ * (@ref spud_threads "Threads", spudcore.h) any call may overlap any other.
+ * Two calls changing the same pages at once are the caller's to prevent.
  */
 
 #include <spudcore.h>

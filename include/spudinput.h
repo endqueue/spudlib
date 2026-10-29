@@ -29,7 +29,8 @@ extern "C" {
  * Known problems: only the GameController, evdev and GameInput backends
  * are written.
  * GameController has read a gamepad held and used on macOS, through a
- * caller polling once a frame on the main thread: found when connected,
+ * caller polling once a frame (on the process's main thread, which
+ * GameController requires): found when connected,
  * both sticks and both triggers read in the directions and ranges stated
  * here, and a button (the left stick, pressed in) read down and up. Its
  * other buttons one by one, the rumble, battery, motion, touch surfaces,
@@ -71,9 +72,9 @@ extern "C" {
  *   way. There is no table of other devices' layouts here; a joystick or a
  *   wheel the platform shows only as raw buttons and axes is not listed.
  * - Never starts a thread and never calls back. Everything is read when the
- *   caller asks: spudinput_instance_poll() takes what the platform has, on
- *   the caller's thread, and the other calls answer from that until the
- *   next poll.
+ *   caller asks: spudinput_instance_poll() takes what the platform has,
+ *   within the call, and the other calls answer from that until the next
+ *   poll.
  *
  * The same shape as SpudNet's: names are `spudinput_<object>_<verb>`, an
  * instance is made by its `_create` and released by its `_destroy`, and a
@@ -97,6 +98,15 @@ extern "C" {
  * Not here: haptics beyond motor levels (resisting triggers, played
  * waveforms), a gamepad's speaker and microphone (those are audio
  * endpoints), and any picture of a button.
+ *
+ * @par Threads
+ * The library rule holds (@ref spud_threads "Threads", spudcore.h): an
+ * instance is used by one caller at a time, and every call on one of its
+ * gamepads is a use of the instance, since a spudinput_gamepad_id is a
+ * value and not an object of its own. What is particular to SpudInput is
+ * marked `Thread:` where it applies: GameController's poll is confined to
+ * the process's main thread, and GameInput may call the instance's
+ * allocator on a thread of its own.
  */
 
 /**
@@ -175,9 +185,11 @@ typedef struct SPUDINPUT_INSTANCE_DESC {
 	SPUD_STRUCT_BASE base;
 	/** Where the instance's memory comes from (SPUD_ALLOCATOR). Copied, so
 	 * the struct need not outlive the call; its functions and `user_data`
-	 * must outlive the instance. Called only while one of this module's
-	 * calls is running, though not always on that call's thread: GameInput
-	 * may run the device callback that allocates on a thread of its own. */
+	 * must outlive the instance.
+	 *
+	 * Thread: called only while one of this module's calls on the instance
+	 * is running, though not always on that call's thread: GameInput may
+	 * run the device callback that allocates on a thread of its own. */
 	const SPUD_ALLOCATOR *allocator;
 	/** The native input API to bind to. One this build has
 	 * (@ref spudinput_config "Compile-time configuration"). */
@@ -268,10 +280,15 @@ SPUDINPUT_NATIVE_API spudinput_instance_get_native_api(spudinput_instance instan
  * does not change between two of them, so a caller that polls once a frame
  * reads one consistent picture for that frame.
  *
- * Call it from one thread at a time, and not at the same time as any other
- * call on the same instance. With SPUDINPUT_NATIVE_API_GAMECONTROLLER a
- * device arrives only while the main thread's run loop is being run, which
- * is the caller's to do, and the poll must be made on the main thread.
+ * A use of the instance, like every other call on it
+ * (@ref spud_threads "Threads").
+ *
+ * Thread: with SPUDINPUT_NATIVE_API_GAMECONTROLLER, only on the process's
+ * main thread, which GameController requires: its list of controllers and
+ * its change handlers belong to the main thread, and a device arrives only
+ * while the main thread's run loop is being run, which is the caller's to
+ * do. A poll made on any other thread returns SPUDRESULT_GENERAL_FAILURE
+ * and reads nothing. Other native APIs take it from any thread.
  *
  * @param[in] instance The instance to poll.
  *

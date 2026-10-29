@@ -20,6 +20,7 @@
 
 #include "spudcore.h"
 #include <assert.h>
+#include <eqstd.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <string.h>
@@ -127,6 +128,21 @@ static inline char *spud_string_copy(const SPUD_ALLOCATOR *allocator, const char
 static inline void spud_string_free(const SPUD_ALLOCATOR *allocator, const char *string) {
 	if (string)
 		spud_free(allocator, string, strlen(string) + 1, 1);
+}
+
+// [allocator] as eqstd takes one, for an EQ_ARRAY (or an EQ_STRING) whose
+// memory is the caller's. SPUD_ALLOCATOR's three fields are EQ_ALLOCATOR's
+// first three, with the same function types, and eqstd grows a block by
+// allocating, copying and freeing when `resize` is NULL, as
+// spud_reallocate_array does. An array keeps a pointer to its EQ_ALLOCATOR,
+// so the result is stored beside the array, in the object that owns both
+// (never a local that the array outlives). eqstd keeps SPUD_ALLOCATOR's
+// contract: it never asks for 0 bytes, and frees each block with the size and
+// alignment it was allocated with (EQ_ARRAY_ALIGNMENT of the element's size
+// for an array, a multiple of the element's alignment).
+static inline EQ_ALLOCATOR spud_eq_allocator(const SPUD_ALLOCATOR *allocator) {
+	EQ_ALLOCATOR eq = {allocator->user_data, allocator->allocate, allocator->free, NULL};
+	return eq;
 }
 
 // One element of type T, or an array of [n], made and freed through [a].

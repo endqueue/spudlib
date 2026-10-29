@@ -46,6 +46,18 @@ extern "C" {
  *   platforms share natively (CoreAudio has no acquire/release buffer API).
  *   On WASAPI/ALSA the backend owns the event-wait thread that drives it -
  *   plumbing, not policy.
+ *
+ * @par Threads
+ * The library rule holds (@ref spud_threads "Threads", spudcore.h): an
+ * instance, a device handle and a stream are each used by one caller at a
+ * time. What is particular to SpudAudio is that two of the caller's
+ * functions run on threads that are not the caller's, each marked
+ * `Thread:` where it is declared: the stream callback
+ * (SPUDAUDIO_STREAM_CALLBACK), on a thread SpudAudio starts in
+ * spudaudio_stream_start() on WASAPI and ALSA and on CoreAudio's own
+ * real-time thread; and the device-event callback
+ * (SPUDAUDIO_DEVICE_EVENT_CALLBACK). spudaudio_stream_get_status() is the
+ * one call that may overlap the others on its stream.
  * - Spatialisation is rendering policy and so is the caller's. SpudAudio's
  *   only part in it is reporting which speaker each device channel feeds
  *   (SPUDAUDIO_FORMAT::positions, in a device's native format and in a
@@ -381,15 +393,20 @@ typedef struct SPUDAUDIO_INSTANCE_DESC {
 	/** Where the memory of the instance, and of every device handle and
 	 * stream made from it, comes from (SPUD_ALLOCATOR). Copied, so the
 	 * struct need not outlive the call; its functions and `user_data` must
-	 * outlive the instance and every stream made from it. A stream's
-	 * callback thread never calls it. While a device-event callback is set
-	 * (spudaudio_set_device_event_callback()), the thread or queue that
-	 * watches the device list does, at each change, so an allocator that is
-	 * safe on one thread only can't be used with one. Known problem: on
-	 * WASAPI the watch's last block may be freed on a Windows thread after
+	 * outlive the instance and every stream made from it. Known problem: on
+	 * WASAPI the watch's last block may be freed after
 	 * spudaudio_destroy_instance() has returned, if the system still holds
 	 * the watch then (not verified either way), so there the allocator has
-	 * to outlive that too. */
+	 * to outlive that too.
+	 *
+	 * Thread: never called from a stream's callback. While a device-event
+	 * callback is set (spudaudio_set_device_event_callback()), whatever
+	 * watches the device list calls it at each change, at the same time as
+	 * the caller's own calls: the system's notification thread on WASAPI
+	 * (which may also make that last free), a serial dispatch queue the
+	 * backend makes on CoreAudio, a thread the backend starts on ALSA. An
+	 * allocator that can't take overlapping calls can't be used with a
+	 * device-event callback. */
 	const SPUD_ALLOCATOR *allocator;
 	/** The native API to bind to. There is no "best available" value - the
 	 * caller chooses. */
@@ -783,7 +800,7 @@ enum {
 };
 
 /** @brief What a stream callback is told about the buffer it is given. */
-/* Frozen: handed to the data callback every period, on the audio thread. It never changes; a new need gets a new type. */
+/* Frozen: handed to the data callback every period. It never changes; a new need gets a new type. */
 typedef struct SPUDAUDIO_CALLBACK_INFO {
 	/** Glitch and timestamp flags for this buffer. */
 	SPUDAUDIO_CALLBACK_FLAGS flags;
@@ -811,8 +828,16 @@ typedef struct SPUDAUDIO_CALLBACK_INFO {
 /**
  * @brief The caller's function that fills or reads a stream's frames.
  *
- * Called on the platform's audio thread. Must not block or allocate -
- * that's the caller's contract, SpudAudio doesn't guard it.
+ * Must not block or allocate - that's the caller's contract, SpudAudio
+ * doesn't guard it.
+ *
+ * Thread: runs on a thread that is not the caller's, while the stream
+ * runs, at the same time as the caller's own calls: on WASAPI and ALSA a
+ * thread SpudAudio starts in spudaudio_stream_start() and ends in
+ * spudaudio_stream_stop(), which also runs the OUTPUT prefill calls (see
+ * spudaudio_stream_start()); on CoreAudio the HAL's real-time IOProc
+ * thread. Calls for one stream never overlap each other. From inside it,
+ * spudaudio_stream_get_status() is the only call on its stream allowed.
  *
  * @param[in]     stream      The stream the buffer belongs to.
  * @param[in,out] frames      The buffer. For OUTPUT, fill it; for INPUT,
@@ -875,7 +900,7 @@ enum {
 /** @brief Room for an MMCSS task name, with its terminator. */
 #define SPUDAUDIO_MAX_MMCSS_TASK_NAME 64
 
-/** @brief Which scheduling mechanism the callback thread uses, and its parameters. */
+/** @brief Which scheduling mechanism runs the stream callback, and its parameters. */
 /* Frozen: held by value in SPUDAUDIO_STREAM_DESC. It never changes; a new need gets a new type. */
 typedef struct SPUDAUDIO_THREAD_DESC {
 	/** The mechanism. Required; see SPUDAUDIO_THREAD_PRIORITY. */
@@ -922,7 +947,7 @@ typedef struct SPUDAUDIO_STREAM_DESC {
 	 * SPUDRESULT_SAUD_BUFFER_OUT_OF_RANGE rather than being ignored. */
 	uint32_t buffer_frames;
 	SPUDAUDIO_STREAM_FLAGS flags;       /**< Sharing mode and OS conversion. */
-	SPUDAUDIO_THREAD_DESC thread;       /**< Callback thread scheduling. Required - see SPUDAUDIO_THREAD_PRIORITY. */
+	SPUDAUDIO_THREAD_DESC thread;       /**< Scheduling for the stream callback. Required - see SPUDAUDIO_THREAD_PRIORITY. */
 	SPUDAUDIO_STREAM_CALLBACK callback; /**< The data callback. Required to create a stream; ignored by the probe. */
 	void *user_data;                    /**< Handed to `callback` unchanged. Never dereferenced. */
 } SPUDAUDIO_STREAM_DESC;
@@ -1097,6 +1122,10 @@ void spudaudio_destroy_stream(spudaudio_stream stream);
  * PLATFORM-thread backends (CoreAudio) it starts the device and the
  * platform's real-time thread pulls from the callback - no prefill.
  *
+ * Thread: on WASAPI and ALSA this starts a thread of SpudAudio's own,
+ * which runs the stream callback until spudaudio_stream_stop() or
+ * spudaudio_destroy_stream() ends it (see SPUDAUDIO_STREAM_CALLBACK).
+ *
  * A stream that couldn't start is left STOPPED (or in its terminal state).
  * Starting a RUNNING stream is a no-op.
  *
@@ -1105,8 +1134,8 @@ void spudaudio_destroy_stream(spudaudio_stream stream);
  * callback carries SPUDAUDIO_CALLBACK_FLAG_DISCONTINUITY.
  *
  * Start, stop and destroy must not be called from inside the stream's own
- * callback, and calls on one stream must not race each other - the caller
- * serializes them.
+ * callback. Calls on one stream are one caller at a time, as for every
+ * object (@ref spud_threads "Threads").
  *
  * @param[in] stream The stream to start.
  *
@@ -1129,8 +1158,7 @@ SPUDRESULT spudaudio_stream_start(spudaudio_stream stream);
  *
  * Stops the device and ends the thread; the stream can be started again.
  * On a stream that already ended in DEVICE_LOST/ERROR it just reaps the
- * thread. Must not be called from inside the stream's own callback, and
- * must not race another call on the same stream.
+ * thread. Must not be called from inside the stream's own callback.
  *
  * @param[in] stream The stream to stop.
  *
@@ -1189,12 +1217,16 @@ SPUDRESULT spudaudio_stream_get_latency_frames(
  * @ingroup spudaudio
  * @brief A stream's state and glitch counts - polled, not pushed.
  *
- * A dying device stops the audio thread, so the stream callback can never
- * deliver its own failure, and a failure listener would run on a different
- * platform thread per backend (COM notification thread / CoreAudio
- * listener thread / PipeWire loop / SpudAudio's own thread). Instead the
+ * A dying device stops the stream callback, so the callback can never
+ * deliver its own failure, and a failure listener would run somewhere
+ * different per backend (COM's notification thread, a CoreAudio listener
+ * queue, the PipeWire loop, SpudAudio's own stream thread). Instead the
  * backend records failures atomically and the caller reads them whenever
  * it likes, e.g. once per frame.
+ *
+ * Thread: the backend writes a stream's status from those places while
+ * the caller's calls run; spudaudio_stream_get_status() reads it without
+ * a lock.
  *
  * Nothing is lost between polls: DEVICE_LOST and ERROR are terminal and
  * stay set until the stream is destroyed, and glitches are monotonic
@@ -1230,7 +1262,9 @@ typedef struct SPUDAUDIO_STREAM_STATUS {
 /**
  * @brief Reads a stream's status.
  *
- * Lock-free; safe from any thread, including inside the stream callback.
+ * Thread: may overlap any other call on the same stream except
+ * spudaudio_destroy_stream(), and may be called from inside the stream
+ * callback. Lock-free.
  *
  * @param[in]  stream     The stream to ask.
  * @param[out] out_status Receives the status.
@@ -1284,7 +1318,7 @@ SPUDRESULT spudaudio_stream_get_status(
  * An event only says that something changed. To get a handle for an added
  * endpoint, enumerate again: endpoints that are still there keep the handles
  * they had. Enumerations of one instance are not synchronized with each
- * other, so do that on the thread that enumerates, not inside the callback.
+ * other, so do that where the caller enumerates, not inside the callback.
  *
  * Events and streams are independent. A stream on a removed device moves to
  * SPUDAUDIO_STREAM_STATE_DEVICE_LOST by itself (see
@@ -1305,15 +1339,18 @@ enum {
 /**
  * @brief The caller's function that is told of a device change.
  *
- * Runs on a thread that is not the caller's - the platform's notification
- * thread on WASAPI and CoreAudio, a thread the backend starts for it on
- * ALSA - and not necessarily the same one each time. Don't block in it.
+ * Thread: runs on a thread that is not the caller's, at the same time as
+ * the caller's own calls - the system's notification thread on WASAPI, a
+ * serial dispatch queue the backend makes on CoreAudio, a thread the
+ * backend starts for it on ALSA - and not necessarily the same thread
+ * each time. Calls for one instance never overlap each other. Don't block
+ * in it.
  *
  * It must not call spudaudio_set_device_event_callback() or
  * spudaudio_destroy_instance() on its own instance, which wait for it to
  * return, and must not call spudaudio_enumerate_devices(), which is not
- * synchronized with the caller's own enumerations. Hand the event to a
- * thread of the caller's and return.
+ * synchronized with the caller's own enumerations. Hand the event to the
+ * caller's own code and return.
  *
  * @param[in] event         What happened.
  * @param[in] persistent_id The endpoint's
@@ -1349,9 +1386,13 @@ typedef void (*SPUDAUDIO_DEVICE_EVENT_CALLBACK)(
  * Returns once the callback it replaced or cleared is not running and will
  * not run again, so the caller may then free whatever its `user_data`
  * pointed at. Because it waits, it must not be called from inside the
- * instance's device-event callback. It must not race another call to itself
- * or to spudaudio_destroy_instance() on the same instance - the caller
- * serializes them. If it fails, the callback that was set stays set.
+ * instance's device-event callback. If it fails, the callback that was set
+ * stays set.
+ *
+ * Thread: a non-NULL `callback` starts the watch of the device list that
+ * calls it (see SPUDAUDIO_DEVICE_EVENT_CALLBACK); on ALSA that is a thread
+ * the backend starts here and ends when the callback is cleared or the
+ * instance destroyed.
  *
  * @param[in] instance  The instance whose devices to be told about.
  * @param[in] callback  The function to call, or NULL to stop being told.

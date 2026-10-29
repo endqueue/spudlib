@@ -103,6 +103,39 @@ uint32_t spud_get_version(void);
 /** @} */
 
 /**
+ * @defgroup spud_threads Threads
+ * @brief Every SpudLib object is used by one caller at a time.
+ *
+ * The rule for every module, stated here once:
+ *
+ * - Every object (an instance, a device, a queue, a stream, a socket, a
+ *   file, any handle a `_create` gives) is used by one caller at a time.
+ *   A use is any call that takes the object, or an object it hands out
+ *   that is not an object of its own, from the moment the call is made
+ *   until it returns. Vulkan calls this "externally synchronized".
+ * - The rule is serialization, not thread identity. No object belongs to
+ *   a thread: it may be called from any thread, and from a different one
+ *   each time (a Swift actor, a C# continuation), so long as no two calls
+ *   on it overlap. Ordering the calls is the caller's, by whatever means
+ *   it has; SpudLib takes no lock for it.
+ * - Different objects are independent: calls on two objects may overlap,
+ *   wherever each was made from. What SpudLib keeps for itself behind the
+ *   handles (a shared table, an adapter's one device) it guards itself.
+ * - A call that takes no object (SpudPerf's and SpudMemory's calls, and
+ *   SpudFiles' path calls) has nothing to order and may overlap any call.
+ * - The exceptions are few and each is marked on the call itself, by a
+ *   line that begins `Thread:` - a call that may overlap others on the
+ *   same object (an abort, a status read), a function of the caller's
+ *   that SpudLib or the platform calls on a thread of its own, and a call
+ *   the platform confines to one thread. A module's `@par Threads`
+ *   paragraph says only what is particular to that module.
+ *
+ * Checking it: a Debug build asserts when two calls overlap on one
+ * SpudGPU queue (spudgpu_submit_command_lists()). Not yet for any other
+ * object.
+ */
+
+/**
  * @brief The result of a SpudLib call, shared by every module.
  *
  * SPUD_SUCCESS is 0 and the only success value; every other enumerator names
@@ -663,10 +696,15 @@ typedef struct SPUD_STRUCT_BASE_OUT {
  * - `free` is called once for each block, with the same `size` and
  *   `alignment` the block was allocated with, so an allocator need not
  *   record either. It is never called with NULL, and it can't fail.
- * - Either function may be called from any thread, and from several
- *   threads at once, unless a module's header says otherwise for one of its
- *   calls. An allocator that is safe on one thread only is a choice the
- *   caller keeps to itself, by calling that instance from one thread.
+ * - Thread: either function may be called on any thread, and by calls
+ *   that overlap: different objects of one instance are independent
+ *   (@ref spud_threads "Threads"), so their calls may allocate at once,
+ *   and a few calls allocate on a thread that is not the caller's, each
+ *   marked so in its module's header (SpudAudio's device-event watch,
+ *   SpudInput's GameInput device callback). An allocator that can't take
+ *   overlapping calls is the caller's to keep to itself, by using that
+ *   instance and everything made from it one call at a time and leaving
+ *   those calls out.
  * - Neither function may call SpudLib.
  * - SpudLib copies the SPUD_ALLOCATOR when the instance is made, so the
  *   caller's struct need not outlive the call. The functions and
@@ -722,9 +760,12 @@ typedef struct SPUD_ALLOCATOR {
  * @brief Returns an allocator over the system heap.
  *
  * Exists so that a caller choosing the system heap says so by name. It is
- * the C library's heap (the CRT's aligned functions on Windows), safe
- * from any thread at once, with a NULL `user_data`. Calling it allocates
- * nothing; it only fills in the struct.
+ * the C library's heap (the CRT's aligned functions on Windows), with a
+ * NULL `user_data`. Calling it allocates nothing; it only fills in the
+ * struct.
+ *
+ * Thread: the allocator it returns takes overlapping calls from any
+ * threads, as the C library's heap does.
  *
  * @return The allocator, by value.
  */

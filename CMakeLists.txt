@@ -58,6 +58,30 @@ function(spud_declare_vendored_or_fetch name dir repo tag)
     FetchContent_Declare(${name} GIT_REPOSITORY "${repo}" GIT_TAG "${tag}")
 endfunction()
 
+# --- workspace-or-fetched dependency ----------------------------------------
+# For an Endqueue repository that sits beside this one in the workspace
+# (eqdev/<dir>): use that checkout when it is there, whatever is checked out
+# and edits included, so a change made on both sides at once builds as one;
+# otherwise fetch <repo> at <commit>, a commit hash, never a branch, so a
+# standalone clone of this repo still configures and builds what was tested.
+# Adds the target <name> unless something already added it (a workspace
+# build that added the checkout first). The project's own tests are left to
+# its top-level build: added here, PROJECT_IS_TOP_LEVEL is false there.
+function(spud_add_workspace_or_fetch name dir repo commit)
+    if(TARGET ${name})
+        return()
+    endif()
+    set(_sibling "${CMAKE_CURRENT_SOURCE_DIR}/../${dir}")
+    if(EXISTS "${_sibling}/CMakeLists.txt")
+        message(STATUS "${name}: using the workspace's ${_sibling}")
+        add_subdirectory("${_sibling}" "${CMAKE_CURRENT_BINARY_DIR}/${dir}")
+    else()
+        message(STATUS "${name}: no ../${dir} beside spudlib, fetching ${repo}@${commit}")
+        FetchContent_Declare(${name} GIT_REPOSITORY "${repo}" GIT_TAG "${commit}")
+        FetchContent_MakeAvailable(${name})
+    endif()
+endfunction()
+
 # Don't do anything if another library/application is already compiling SpudLib
 if(NOT TARGET spudlib)
     # Set initial SpudLib sources
@@ -270,6 +294,15 @@ if(NOT TARGET spudlib)
 
     # After determing source backends, add_library to SpudLib target.
     add_library(spudlib STATIC ${SPUDLIB_SOURCES})
+
+    # eqstd: the containers SpudLib's sources grow their arrays with
+    # (EQ_ARRAY, through the instance's SPUD_ALLOCATOR; src/spudallocator.h).
+    # Header-only, and PRIVATE: no public header includes it, so no caller
+    # sees its types and SpudLib's ABI never depends on their layout.
+    spud_add_workspace_or_fetch(eqstd eqstd
+        https://github.com/endqueue/eqstd.git
+        b302f96b6aa644ab59a8b9cd23d88aaa4aa5b2dd) # eqstd 0.1.0
+    target_link_libraries(spudlib PRIVATE eqstd)
 
     # _DEBUG in a Debug build, for every compiler. MSVC's debug CRT defines it
     # already (CMAKE_MSVC_RUNTIME_LIBRARY pairs the two per config); GCC and
@@ -550,6 +583,14 @@ if(NOT TARGET spudlib)
 
     # Hardware tests: each needs a real device (and spudaudio_sine a
     # listener), so they're built but not registered with ctest.
+    # SpudNet's fuzz targets (tests/fuzz), replayed as ctests below and
+    # built for libFuzzer under SPUDLIB_BUILD_FUZZERS.
+    set(SPUDLIB_FUZZ_TARGETS
+        spudnet_fuzz_http_head
+        spudnet_fuzz_certificate
+        spudnet_fuzz_text
+        spudnet_fuzz_proxy)
+
     option(SPUDLIB_BUILD_TESTS "Build SpudLib's hardware tests" ON)
     if(SPUDLIB_BUILD_TESTS)
         # SpudPerf's clocks and its wait. No hardware and nobody watching, so
@@ -643,5 +684,40 @@ if(NOT TARGET spudlib)
             find_package(Threads REQUIRED)
             target_link_libraries(spudnet_test PRIVATE Threads::Threads)
         endif()
+
+        # SpudNet's parsers of the network's bytes, each fuzz target in
+        # tests/fuzz run over its seed corpus and every input the fuzzer
+        # once crashed on (tests/fuzz/regressions/<target>), with an
+        # ordinary main instead of libFuzzer's: no network, so ctests, and
+        # on every compiler. The targets reach SpudNet's internal functions
+        # (src/net/spudnetshared.h, which includes eqstd) in the static
+        # library.
+        foreach(_fuzz IN LISTS SPUDLIB_FUZZ_TARGETS)
+            add_executable(${_fuzz}_replay tests/fuzz/${_fuzz}.c tests/fuzz/spudfuzz_replay.c)
+            target_include_directories(${_fuzz}_replay PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+            target_link_libraries(${_fuzz}_replay PRIVATE spudlib eqstd)
+            add_test(NAME ${_fuzz}_replay COMMAND ${_fuzz}_replay
+                ${CMAKE_CURRENT_SOURCE_DIR}/tests/fuzz/corpus/${_fuzz}
+                ${CMAKE_CURRENT_SOURCE_DIR}/tests/fuzz/regressions/${_fuzz})
+        endforeach()
+    endif()
+
+    # The same targets under libFuzzer, for the macos-fuzz and linux-fuzz
+    # presets (clang only; Apple's has no libFuzzer, Homebrew's LLVM does).
+    # The presets build the whole library with -fsanitize=fuzzer-no-link and
+    # AddressSanitizer + UndefinedBehaviorSanitizer; here each target adds
+    # libFuzzer's main. How to run them: tests/fuzz/README.md.
+    option(SPUDLIB_BUILD_FUZZERS "Build SpudNet's libFuzzer targets (clang)" OFF)
+    if(SPUDLIB_BUILD_FUZZERS)
+        if(NOT CMAKE_C_COMPILER_ID MATCHES "Clang")
+            message(FATAL_ERROR "SPUDLIB_BUILD_FUZZERS needs clang with libFuzzer (-fsanitize=fuzzer)")
+        endif()
+        foreach(_fuzz IN LISTS SPUDLIB_FUZZ_TARGETS)
+            add_executable(${_fuzz} tests/fuzz/${_fuzz}.c)
+            target_include_directories(${_fuzz} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+            target_compile_options(${_fuzz} PRIVATE -fsanitize=fuzzer)
+            target_link_options(${_fuzz} PRIVATE -fsanitize=fuzzer)
+            target_link_libraries(${_fuzz} PRIVATE spudlib eqstd)
+        endforeach()
     endif()
 endif()

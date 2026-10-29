@@ -138,6 +138,22 @@ To confirm on a machine:
   Python 3 and Git's own `openssl`.
 - **Callers:** every part of SpudNet (TCP, the resolver, the wait set, HTTP
   and WebSocket) has a caller outside this repo (2026-10-22).
+- **Fuzzed (2026-10-28):** libFuzzer targets in `tests/fuzz/` over what
+  SpudNet itself parses of bytes it doesn't control - a response's header
+  block, a server certificate's DER walked to its public key, the UTF-8
+  check, an error record's cut, a proxy URL - each checked against a
+  plainer second reading, with the caller's allocator tracked and refusing
+  part way. HTTP and WebSocket framing themselves are the stacks' and are
+  not SpudLib's to fuzz. `macos-fuzz` / `linux-fuzz` presets; each target is
+  also a ctest (`<target>_replay`) over its seeds and
+  `tests/fuzz/regressions/`. See `tests/fuzz/README.md`. Found: looking a
+  header name up walked every header, so a block of tens of thousands of
+  short names (a hostile server's, ~300 KB, within libcurl's limit) took
+  ~4 s on the receiving call, outside its time limit; names are now found
+  through a hash table (`struct spudnet_http_head`'s `slots`). No crash or
+  sanitizer report in 20 minutes per target on macOS. Not fuzzed: the
+  backends' glue over each stack (libcurl's close-code read, WinHTTP's
+  header split), which needs the stack to drive it.
 
 
 ## First run on macOS (2026-10-08)
