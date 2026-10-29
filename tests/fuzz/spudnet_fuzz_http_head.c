@@ -150,10 +150,11 @@ static void ref_add_line(ref_head *head, const char *line, size_t length) {
 
 /* Every entry is a name and a value, each terminated at its length. */
 static void check_entries(const struct spudnet_http_head *head) {
-	SPUDFUZZ_CHECK(head->count <= head->capacity);
-	SPUDFUZZ_CHECK(head->capacity == 0 || head->entries);
-	for (uint32_t i = 0; i < head->count; ++i) {
-		const struct spudnet_http_header_entry *entry = &head->entries[i];
+	SPUDFUZZ_CHECK(head->entries.count <= head->entries.capacity);
+	SPUDFUZZ_CHECK(head->entries.capacity == 0 || head->entries.data);
+	SPUDFUZZ_CHECK(head->slot_count == 2 * head->entries.capacity);
+	for (size_t i = 0; i < head->entries.count; ++i) {
+		const struct spudnet_http_header_entry *entry = &head->entries.data[i];
 		SPUDFUZZ_CHECK(entry->name && entry->value);
 		SPUDFUZZ_CHECK(entry->name[entry->name_length] == '\0');
 		SPUDFUZZ_CHECK(entry->value[entry->value_length] == '\0');
@@ -222,9 +223,9 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
 	SPUDFUZZ_CHECK(stored || refuse_after != SIZE_MAX);
 
 	if (stored) {
-		SPUDFUZZ_CHECK(head.count == ref.count);
+		SPUDFUZZ_CHECK(head.entries.count == ref.count);
 		for (size_t i = 0; i < ref.count; ++i) {
-			const struct spudnet_http_header_entry *entry = &head.entries[i];
+			const struct spudnet_http_header_entry *entry = &head.entries.data[i];
 			SPUDFUZZ_CHECK(entry->name_length == ref.entries[i].name.length);
 			SPUDFUZZ_CHECK(memcmp(entry->name, ref.entries[i].name.data, entry->name_length) == 0);
 			SPUDFUZZ_CHECK(entry->value_length == ref.entries[i].value.length);
@@ -242,7 +243,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
 	}
 
 	spudnet_head_clear(&allocator, &head);
-	SPUDFUZZ_CHECK(head.count == 0 && head.capacity == 0 && head.entries == NULL);
+	SPUDFUZZ_CHECK(head.entries.count == 0 && head.entries.capacity == 0 && head.entries.data == NULL);
 	SPUDFUZZ_CHECK(spudtest_allocator_clean(&tracker));
 	ref_clear(&ref);
 	free(ref.entries);

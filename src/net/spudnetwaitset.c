@@ -101,17 +101,21 @@ struct spudnet_wait_member {
 	bool report_once;
 };
 
+typedef EQ_ARRAY(struct spudnet_wait_member) spudnet_wait_member_array;
+typedef EQ_ARRAY(spudnet_poll_entry) spudnet_poll_entry_array;
+
 struct spudnet_wait_set_t {
 	spud_object_head head;
 	// The one it was made with, and every member's.
-	spudnet_instance            instance;
-	struct spudnet_wait_member *members;
-	uint32_t                    member_count;
-	uint32_t                    member_capacity;
+	spudnet_instance instance;
+	// eqstd's view of head.allocator (spud_eq_allocator), which both arrays
+	// below point at.
+	EQ_ALLOCATOR             allocator;
+	spudnet_wait_member_array members;
 	// What poll() is handed: the wake socket, then a member's socket each.
-	// Kept between waits so a wait allocates only when the set has grown.
-	spudnet_poll_entry *entries;
-	uint32_t            entry_capacity;
+	// One more than the members' capacity, kept between waits so a wait
+	// allocates only when the set has grown.
+	spudnet_poll_entry_array entries;
 
 #if SPUDLIB_PLATFORM_WIN32
 	SOCKET             wake; // INVALID_SOCKET until made
@@ -305,7 +309,10 @@ SPUDRESULT spudnet_wait_set_create(
 	if (!set)
 		return SPUDRESULT_OUT_OF_MEMORY;
 	set->head.allocator = instance->head.allocator;
-	set->instance       = instance;
+	set->allocator      = spud_eq_allocator(&set->head.allocator);
+	eq_array_init(&set->members, &set->allocator);
+	eq_array_init(&set->entries, &set->allocator);
+	set->instance = instance;
 	spudnet_wait_wake_reset(set);
 	if (!spudnet_wait_wake_create(set)) {
 		// Recorded before the cleanup that could replace the system's error.
@@ -325,15 +332,15 @@ void spudnet_wait_set_destroy(spudnet_wait_set set) {
 	// A WebSocket that notifies holds this set; each lets go before the
 	// wake socket it would write to is closed.
 #if SPUDNET_EXT_WEBSOCKET
-	for (uint32_t i = 0; i < set->member_count; ++i) {
-		if (set->members[i].kind == SPUDNET_WAIT_KIND_WEBSOCKET)
-			spudnet_websocket_wait_detach((spudnet_websocket)set->members[i].object);
+	for (size_t i = 0; i < set->members.count; ++i) {
+		if (set->members.data[i].kind == SPUDNET_WAIT_KIND_WEBSOCKET)
+			spudnet_websocket_wait_detach((spudnet_websocket)set->members.data[i].object);
 	}
 #endif
 	spudnet_wait_wake_destroy(set);
+	eq_array_free(&set->members);
+	eq_array_free(&set->entries);
 	const SPUD_ALLOCATOR allocator = set->head.allocator;
-	SPUD_DELETE_ARRAY(&allocator, struct spudnet_wait_member, set->members, set->member_capacity);
-	SPUD_DELETE_ARRAY(&allocator, spudnet_poll_entry, set->entries, set->entry_capacity);
 	spud_string_free(&allocator, set->head.debug_name);
 	SPUD_DELETE(&allocator, struct spudnet_wait_set_t, set);
 }
@@ -369,9 +376,9 @@ void spudnet_wait_set_get_error(
 // --------------------------------------------------------------------------
 
 static struct spudnet_wait_member *spudnet_wait_find(struct spudnet_wait_set_t *set, enum spudnet_wait_kind kind, void *object) {
-	for (uint32_t i = 0; i < set->member_count; ++i) {
-		if (set->members[i].kind == kind && set->members[i].object == object)
-			return &set->members[i];
+	for (size_t i = 0; i < set->members.count; ++i) {
+		if (set->members.data[i].kind == kind && set->members.data[i].object == object)
+			return &set->members.data[i];
 	}
 	return NULL;
 }
@@ -379,26 +386,27 @@ static struct spudnet_wait_member *spudnet_wait_find(struct spudnet_wait_set_t *
 /* Room for one more member. NULL when out of memory; the set is untouched
  * then. The member returned is not counted until the caller counts it. */
 static struct spudnet_wait_member *spudnet_wait_grow(struct spudnet_wait_set_t *set) {
-	if (set->member_count == set->member_capacity) {
-		if (set->member_capacity > SPUD_UINT32_MAX / 2)
+	if (set->members.count == set->members.capacity) {
+		// 16, then twice as many, reserved exactly rather than left to
+		// eqstd's growth, so the count fits the uint32_t a wait counts its
+		// poll entries in.
+		if (set->members.capacity > SPUD_UINT32_MAX / 2)
 			return NULL;
-		uint32_t                    capacity = set->member_capacity ? set->member_capacity * 2 : 16;
-		struct spudnet_wait_member *moved =
-		    SPUD_RESIZE_ARRAY(&set->head.allocator, struct spudnet_wait_member, set->members, set->member_capacity, capacity);
-		if (!moved)
+		size_t capacity = set->members.capacity ? set->members.capacity * 2 : 16;
+		if (eq_array_reserve(&set->members, capacity) != EQ_SUCCESS)
 			return NULL;
-		set->members         = moved;
-		set->member_capacity = capacity;
 	}
-	struct spudnet_wait_member *member = &set->members[set->member_count];
+	struct spudnet_wait_member *member = &set->members.data[set->members.count];
 	memset(member, 0, sizeof(*member));
 	return member;
 }
 
 static void spudnet_wait_remove(struct spudnet_wait_set_t *set, struct spudnet_wait_member *member) {
-	// Order isn't promised, so the last one fills the gap.
-	*member = set->members[set->member_count - 1];
-	set->member_count--;
+	// Order isn't promised, so the last one fills the gap. The member is
+	// one of the set's, so the index is in range and nothing can fail.
+	EQ_RESULT removed = eq_array_remove_swap(&set->members, (size_t)(member - set->members.data));
+	assert(removed == EQ_SUCCESS);
+	(void)removed;
 }
 
 #if SPUDNET_EXT_TCP
@@ -429,7 +437,7 @@ SPUDRESULT spudnet_wait_set_add_tcp_socket(
 	member->wait_for   = wait_for;
 	member->has_native = true;
 	member->native     = native;
-	set->member_count++;
+	set->members.count++;
 	return SPUD_SUCCESS;
 }
 
@@ -456,7 +464,7 @@ SPUDRESULT spudnet_wait_set_add_tcp_listener(
 	member->wait_for   = SPUDNET_WAIT_FOR_INCOMING;
 	member->has_native = true;
 	member->native     = native;
-	set->member_count++;
+	set->members.count++;
 	return SPUD_SUCCESS;
 }
 
@@ -501,7 +509,7 @@ SPUDRESULT spudnet_wait_set_add_websocket(
 	member->object   = socket;
 	member->user     = user;
 	member->wait_for = SPUDNET_WAIT_FOR_INCOMING;
-	set->member_count++;
+	set->members.count++;
 	return SPUD_SUCCESS;
 }
 
@@ -549,13 +557,9 @@ SPUDRESULT spudnet_wait_set_wait(
 	uint64_t start = spudnet_wait_now_ms();
 
 	// One entry for the wake socket and one for each member at most.
-	if (set->entry_capacity < set->member_count + 1) {
-		uint32_t            needed = set->member_capacity + 1;
-		spudnet_poll_entry *moved  = SPUD_RESIZE_ARRAY(&set->head.allocator, spudnet_poll_entry, set->entries, set->entry_capacity, needed);
-		if (!moved)
+	if (set->entries.count < set->members.count + 1) {
+		if (eq_array_resize(&set->entries, set->members.capacity + 1) != EQ_SUCCESS)
 			return SPUDRESULT_OUT_OF_MEMORY;
-		set->entries        = moved;
-		set->entry_capacity = needed;
 	}
 
 	// A wake that came before this wait, or comes during it. Once taken it
@@ -572,7 +576,7 @@ SPUDRESULT spudnet_wait_set_wait(
 		// asking or still in the wake socket to end the poll.
 		spudnet_wait_wake_drain(set);
 
-		spudnet_poll_entry *entries = set->entries;
+		spudnet_poll_entry *entries = set->entries.data;
 		memset(&entries[0], 0, sizeof(entries[0]));
 		entries[0].fd     = spudnet_wait_wake_socket(set);
 		entries[0].events = SPUDNET_POLL_INCOMING;
@@ -581,8 +585,8 @@ SPUDRESULT spudnet_wait_set_wait(
 		// Members that are ready without poll() saying so mean the poll
 		// only looks; it still runs, so the rest are reported with them.
 		bool ready_already = false;
-		for (uint32_t i = 0; i < set->member_count; ++i) {
-			struct spudnet_wait_member *member = &set->members[i];
+		for (size_t i = 0; i < set->members.count; ++i) {
+			struct spudnet_wait_member *member = &set->members.data[i];
 			if (member->has_native) {
 				spudnet_poll_entry *entry = &entries[entry_count++];
 				memset(entry, 0, sizeof(*entry));
@@ -617,8 +621,8 @@ SPUDRESULT spudnet_wait_set_wait(
 		// The members are walked in the order the entries were made.
 		uint32_t count = 0;
 		uint32_t entry = 1;
-		for (uint32_t i = 0; i < set->member_count && count < capacity; ++i) {
-			struct spudnet_wait_member *member = &set->members[i];
+		for (size_t i = 0; i < set->members.count && count < capacity; ++i) {
+			struct spudnet_wait_member *member = &set->members.data[i];
 			uint32_t                    bits   = 0;
 			if (member->has_native) {
 				short happened = entries[entry++].revents;
