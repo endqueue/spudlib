@@ -1227,6 +1227,16 @@ D3D12 rebind as asked, which both allow.
   once already is the zero-cost path there). Needs reconciling two different points in
   the object hierarchy: Vulkan's immutable samplers live on the descriptor-set-layout
   binding, D3D12's static samplers live on the pipeline/root-signature.
+  **Decided 2026-10-28 with the user (card S7):** immutable samplers go on the
+  set-layout binding, in the core API (not an `EXT`: every backend meets the
+  contract): native on Vulkan, folded into the root signature D3D12 builds
+  from the layout as static samplers, bound by the Metal backend whenever the
+  set is bound. The immutable sampler's desc has a struct base, so a YCbCr
+  conversion can chain onto it: if ever built,
+  `SPUDGPU_EXT_SAMPLER_YCBCR_CONVERSION` (Vulkan only, an optional feature
+  there, with its `_NOT_SUPPORTED` result; D3D12 and Metal have none). Video
+  doesn't need it: per-plane views (card S11) and conversion in the shader
+  work on every backend. Built when a caller asks.
 - `SPUDGPU_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER` works on Metal since
   2026-10-22. Before, Metal's `spudgpumetaldescriptors.m` wrote only the
   texture half into the argument buffer, and under SpudGPU's

@@ -1,7 +1,9 @@
 # SpudAudio
 
 Thin audio endpoint I/O: WASAPI (Windows), ALSA (Linux; PipeWire planned), CoreAudio
-(macOS); a stub on iOS and watchOS. The public API and its per-backend mappings are documented in
+(macOS); a stub on iOS and watchOS (an iOS backend, AVAudioSession and an
+audio unit, is wanted: decided 2026-10-28, card L11; every caller on iPad and
+iPhone is silent until then). The public API and its per-backend mappings are documented in
 `include/spudaudio.h`; this file holds design notes that don't belong in the header.
 
 ## Future intent: positional (spatialized) audio
@@ -65,6 +67,24 @@ is a decision the backend currently makes, or a fact it currently keeps to itsel
 **Where this should go:** SpudAudio reports every one of these differences between
 what was asked for and what the device does, and the caller makes every choice among
 them. Nothing below should stay a built-in default.
+
+**Decided 2026-10-28 with the user (card S4), for every backend** (CoreAudio's
+converter, WASAPI's shared-mode conversion and its quality flag, ALSA's `plug`
+layer and rate converter):
+- **Reporting:** a chained output struct on the stream config, filled once the
+  stream is open: whether it is converted, the device-side format, the
+  channel routing in use, the device period granted, how the callback is
+  driven (direct or re-chunked, and the device frames per I/O cycle), and the
+  converter's delay. Periods and delays are in frames at a stated rate, so a
+  caller can place audio against presentation time.
+- **Control:** a chained input struct giving the channel map (or a mix) and
+  the converter quality, **required** whenever `ALLOW_OS_CONVERSION` is set.
+  No default routing, so mono into stereo is the caller's choice.
+- What a backend can't see is reported as unknown, never guessed. A device
+  rate change still ends the stream, reported; the caller opens another.
+- A caller that opens its stream in the device's `native_format` without the
+  flag has nothing converted at all, and needs none of this.
+Not started; needs Windows and Linux runs.
 
 - [ ] **Whether a stream is converted at all.** A format that already is the device's
   is not converted, flag or no flag, and `SPUDAUDIO_STREAM_CONFIG` doesn't say which

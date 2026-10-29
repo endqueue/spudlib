@@ -89,7 +89,11 @@ converted" is the record of what changed and what was run. The nine
 native API built in will start on this machine (GameInput's runtime may be
 missing), such as `spudinput_native_api_is_available(api)`, so the caller can
 choose before `spudinput_instance_create` fails with
-`SPUDRESULT_API_SPECIFIC_FAILURE`. Not agreed yet; propose it first.
+`SPUDRESULT_API_SPECIFIC_FAILURE`. **Decided 2026-10-28 with the user
+(card S8): add it.** It reports whether the platform will start that API
+on this machine (GameInput's runtime present or not), as adapter listing
+reports what is there, and never picks a fallback: which API to use is the
+caller's. Its own change; needs a Windows run. Not started.
 
 ## 3. What every module shares: version, result names, allocator, policy
 

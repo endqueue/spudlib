@@ -1062,6 +1062,194 @@ touches the frame loop of every caller.
     backends (`ROADMAP.md`'s misuse harness, extended to the `void`
     calls).
 
+- **Dynamic uniform offsets. Decided 2026-10-28 with the user (card A3):**
+  binding a uniform buffer from a byte offset given per draw, so a caller
+  can write per-draw data into one buffer and point each draw at its part:
+  Vulkan's dynamic offsets, a root CBV's GPU address on D3D12, a buffer
+  offset on Metal. A translation, its own change, with a sample or test on
+  all three backends. Within the rules because it only translates:
+  SpudGPU keeps no ring buffer and hands out no offsets (that is the
+  caller's memory policy); it reports the offset alignment the device
+  requires and the most dynamic bindings a layout may have (D3D12's root
+  signature is small), and refuses a misaligned offset or one too many,
+  reported through S2's callback, never rounding.
+- **MSAA and resolve. Decided 2026-10-28 with the user (card A4):** a
+  translation of what all three APIs have. Not started.
+
+  ```c
+  /* Which sample counts a format supports: sample_count_mask in
+   * spudgpu_format_properties (card A13, below), bit 0 = 1 sample,
+   * bit 1 = 2, bit 2 = 4, bit 3 = 8. Translates
+   * vkGetPhysicalDeviceImageFormatProperties, D3D12's
+   * CheckFeatureSupport(MULTISAMPLE_QUALITY_LEVELS) and Metal's
+   * supportsTextureSampleCount:. Never picks one. */
+
+  typedef struct spudgpu_image_desc {
+      /* ...existing fields... */
+      uint32_t sample_count;          /* 1, 2, 4 or 8; one the query reported */
+  } spudgpu_image_desc;
+
+  /* New usage bit: the image lives only within a render pass and is never
+   * stored (Metal memoryless, Vulkan TRANSIENT_ATTACHMENT with lazily
+   * allocated memory, D3D12: an ordinary texture). */
+  SPUDGPU_IMAGE_USAGE_TRANSIENT_ATTACHMENT
+
+  typedef struct spudgpu_color_attachment_desc {
+      /* ...existing view, load_op, store_op, clear... */
+      spudgpu_image_view   resolve_view;   /* NULL: no resolve */
+      SPUDGPU_RESOLVE_MODE resolve_mode;   /* AVERAGE for color */
+  } spudgpu_color_attachment_desc;
+
+  typedef struct spudgpu_graphics_pipeline_desc {
+      /* ...existing... */
+      uint32_t sample_count;          /* must match the pass's targets */
+      bool     alpha_to_coverage;     /* soft edges for foliage, cutouts */
+  } spudgpu_graphics_pipeline_desc;
+  ```
+
+  The depth attachment takes a resolve view and a mode too (SAMPLE_ZERO,
+  MIN, MAX: Vulkan's depth resolve, D3D12's `ResolveSubresourceRegion`
+  modes, Metal's depth resolve filter), each reported per device. Names
+  are illustrative; the field placement follows the headers when built.
+  A sample per backend, its readback checked.
+- **Stencil test state. Decided 2026-10-28 with the user (card A5):**
+  `spudgpu_graphics_pipeline_desc` takes a stencil state - enable, compare
+  function, pass, fail and depth-fail operations for front and back faces,
+  read and write masks - and `spudgpu_cmd_set_stencil_reference()` sets
+  the reference per draw (`vkCmdSetStencilReference`,
+  `OMSetStencilRef`, `setStencilReferenceValue:`). Depth-stencil formats
+  supported are reported per device, never chosen (no D24_S8 on Apple
+  GPUs; D32_FLOAT_S8 is). A translation; not started. A sample per
+  backend, its readback checked.
+- **Read-only depth layouts. Decided 2026-10-28 with the user (card
+  A11):** `SPUDGPU_IMAGE_LAYOUT` gains read-only depth and depth-stencil
+  layouts (and the mixed ones: depth read-only with stencil written, and
+  the reverse), so a pass can test against a depth image and sample it:
+  Vulkan's `DEPTH_READ_ONLY_OPTIMAL` and its stencil variants, D3D12's
+  `DEPTH_READ` combined with shader-resource, and on Metal, which has no
+  layouts, what Metal's own rules require. A translation; not started.
+- **What a format supports. Decided 2026-10-28 with the user (card
+  A13):** one query per device and format, taking in A4's sample counts.
+  Not started.
+
+  ```c
+  typedef struct spudgpu_format_properties {
+      bool     sampled, filterable, color_target, blendable,
+               depth_stencil_target, storage_read, storage_write;
+      uint32_t sample_count_mask;   /* card A4's bit mask */
+  } spudgpu_format_properties;
+
+  SPUDRESULT spudgpu_get_format_properties(spudgpu_device device,
+                                           SPUDGPU_FORMAT format,
+                                           spudgpu_format_properties *out);
+  ```
+
+  Vulkan's `vkGetPhysicalDeviceFormatProperties` and image format
+  properties, D3D12's `CheckFeatureSupport(FORMAT_SUPPORT)` and
+  multisample levels, and on Metal the GPU family's format table (Metal
+  has no query, so the backend carries Apple's published table per
+  family). A struct base when written, as SpudGPU's other structs.
+- **Indirect dispatch. Decided 2026-10-28 with the user (card A15):**
+  compute dispatch (and mesh-shader dispatch where the device has mesh
+  shading) with the group counts read from a buffer:
+  `vkCmdDispatchIndirect` / `vkCmdDrawMeshTasksIndirectEXT`, D3D12's
+  `ExecuteIndirect` with a dispatch signature, Metal's
+  `dispatchThreadgroupsWithIndirectBuffer:`. A translation; not started.
+- **Bindless on Metal. Decided 2026-10-28 with the user (card A15):**
+  `SPUDGPU_EXT_BINDLESS` on the Metal backend through argument buffers
+  tier 2 (Apple Silicon), reported per device as the other backends'; then
+  it is no longer compiled out on Metal. Not started.
+- **Each API's own shader format; no compiler in SpudLib. Decided
+  2026-10-28 with the user** (challenging card A9's "SPIR-V only").
+  Today the D3D12 backend converts SPIR-V with SPIRV-Cross to HLSL and
+  compiles it with DXC at run time, and the Metal backend converts it to
+  Metal source and has Metal compile it: two compiles per pipeline at run
+  time, DXC and SPIRV-Cross shipped in every application, options chosen
+  inside SpudLib (a shader model, a register mapping) that are hidden
+  policy (card S2's wording), native features SPIR-V can't express out of
+  reach, and generated code in the platform's shader debugger.
+  - `spudgpu_shader_module_desc` names its format: SPIR-V (Vulkan), DXIL
+    (D3D12), a `.metallib` or Metal source (Metal). A device reports the
+    formats it takes and refuses another. SpudGPU compiles nothing:
+    SPIRV-Cross and DXC leave its backends.
+  - Cross-compilation is the caller's, at build time or with a runtime
+    module of its own. As Unreal and bgfx ship native binaries.
+  - Reflection the backends do today (D3D12's register mapping from
+    SPIR-V) comes from the caller with the module, or from the native
+    format's own reflection.
+  - Every caller changes in the same change, before 1.0. Not started; the
+    source language is card A29.
+- **Specialization constants. Decided 2026-10-28 with the user (card
+  A9):** a pipeline desc takes (constant id, value) pairs for its shader
+  modules: Vulkan's `VkSpecializationInfo`; Metal's function constants;
+  D3D12 has none, so with native formats a variant is a DXIL the caller
+  compiled for it (as Unreal's permutations are), and the EXT is reported
+  unsupported there. To be settled with the native formats. A
+  translation; not started.
+- **Pipeline caches, later (card A9):** `VkPipelineCache`, D3D12's
+  `ID3D12PipelineLibrary`, Metal's `MTLBinaryArchive`, as bytes the caller
+  is handed to keep and gives back; SpudGPU writes no file.
+- **Hardware ray tracing. Decided 2026-10-28 with the user (card S12).**
+  Not started.
+  0. **First, a test:** that the shader path carries ray queries - GLSL
+     `GL_EXT_ray_query` to SPIR-V, and SPIRV-Cross to HLSL (`RayQuery`,
+     DXR 1.1) and to Metal (`intersector`), each run. If a target fails, the
+     shader route for these shaders is decided before anything else.
+  1. **`SPUDGPU_EXT_RAY_QUERY`**, paired with a device feature bit (card
+     S3's), the narrow island `CLAUDE.md` expects: acceleration structures
+     (bottom level per mesh, top level of instances) created, built,
+     refitted and compacted; one as a shader binding; ray queries in
+     compute and fragment shaders. Vulkan `VK_KHR_acceleration_structure`
+     and `VK_KHR_ray_query`; D3D12 DXR 1.1; Metal acceleration structures
+     and intersectors (hardware from Apple's M3). The caller's fallback on
+     a GPU without it (an Iris Xe).
+  - **Ray tracing pipelines are not part of it** (asked 2026-10-28). Vulkan's
+    and D3D12's map nearly one to one (the same stages - ray generation,
+    miss, closest-hit, any-hit, intersection, callable - shader tables of
+    32-byte handles, recursion to a limit; they differ in per-record
+    resources, D3D12's local root signatures against Vulkan's record data,
+    in table alignment, and in adding shaders to a pipeline). Metal has no
+    such pipeline: a compute kernel intersects and decides, with
+    intersection and visible function tables for the swappable parts and
+    no recursion, so carrying Vulkan's model onto Metal would be SpudLib
+    inventing one. **The planned shape, if inline queries prove not
+    enough** (measured on an Apple M5 Pro; alpha-tested geometry and a path
+    tracer, card T16, are the likely cases), is **two sibling EXTs, each a
+    straight translation:**
+    - `SPUDGPU_EXT_RAY_TRACING_PIPELINE`, Vulkan and D3D12 only, compiled
+      out on Metal as `SPUDGPU_EXT_BUNDLES` is on the other side;
+    - an Apple EXT (`SPUDGPU_EXT_METAL_RAY_FUNCTIONS`, name to settle),
+      Metal only, translating Metal's own model: intersection function
+      tables and Metal 4's intersection function buffers (alpha-tested and
+      custom geometry), visible function tables (a material's function by
+      index), linked into compute pipelines. Its shaders can't be SPIR-V
+      (the attributes have no SPIR-V form); with native shader formats
+      (below, 2026-10-28) a `.metallib` is an ordinary input on Metal, so
+      this is no exception.
+    A caller writes its pipeline work once per EXT and hides the
+    difference from its own callers.
+    **Metal 4, checked 2026-10-28:** it has *intersection function buffers*
+    (`MTLIntersectionFunctionBufferArguments`: a buffer of
+    intersection-function handles with a stride, 8-byte aligned, and a
+    user-data pointer; functions declared for them), with an intersection
+    function table offset per geometry and instance summed into the index,
+    as a shader table's hit records are. Apple presents them, with Metal
+    Shader Converter, as the way to map an existing shader binding table
+    onto Metal (WWDC25 "Level up your games" and "Go further with Metal 4
+    games"; the sample "Ray tracing with Intersection Function Buffer"
+    emulates a DXR shader table). But they cover the **intersection side**
+    (any-hit, intersection); closest-hit, miss and callable still go
+    through visible function tables called from the kernel, and there is
+    still no recursion - MoltenVK's work in progress (PR 2771, not merged
+    when checked) splits it exactly so. So Metal 4 sits closer to the
+    other two than older Metal, not close enough for one pipeline EXT on
+    all three; the two-EXT shape stands, its Apple half built on Metal 4's
+    buffers where available.
+- **A room check before SpudLib's 1.0** (card A15, in the workspace's
+  `DECISIONS.md`): every deferred SpudGPU item with the
+  way it would be added after 1.0, and the ones whose shape needs a field
+  taken before the freeze. Card S11 started it for video.
+
 ## Breaks
 
 Every caller: listing devices and taking the graphics queue both change,

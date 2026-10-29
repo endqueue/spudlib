@@ -210,6 +210,13 @@ list their assumptions as open; for Apple, this is what the run settles.
   Linux is still to be looked at.
 - **A POST with `SPUDNET_HTTP_BODY_NONE`** gets a `Content-Length` added by the
   stack. A GET with none does not.
+- **Decided 2026-10-28 with the user (card S6):** `spudnet.h` gets a table, a
+  row per backend (NSURLSession, WinHTTP, libcurl), of the headers each stack
+  adds, filled from the runs (Linux's still to look at): a choice the stack
+  makes, made visible (card S2's "no hidden policy"). A header the caller sets
+  is sent in place of the stack's own value of the same name on every backend.
+  A header a stack adds and won't let go of (NSURLSession's `Host`, and the
+  `Accept-Encoding` it may add) is said to be so, per header. Not started.
 - **A connect failure** is reported from `spudnet_http_transfer_receive_response`,
   never from `_start`, as expected.
 - **A TLS connection to `localhost` does not go through an explicit proxy**; a
@@ -750,6 +757,15 @@ SpudLib's rule is that it never decides on the caller's behalf. These do:
 - **Interfaces:** `spudnet_get_local_ipv4_addresses` is IPv4-only, goes through
   the resolver, and doesn't follow the `spudnet_<object>_<verb>` pattern. A real
   interface enumeration should replace it.
+  **Decided 2026-10-28 with the user (card S9): replaced now** (no caller
+  outside spudlib), by an interface listing in SpudNet's pattern (such as
+  `spudnet_interface_enumerate`): per interface its name and index, flags
+  (up, loopback, point-to-point), and every address, IPv4 and IPv6, with its
+  prefix length; from `getifaddrs` (Apple, Linux) and
+  `GetAdaptersAddresses` (Windows), so it never blocks and never touches the
+  resolver. It reports; which interface to advertise is the caller's. The
+  other missing pieces wait for a caller. Not started; needs Windows and
+  Linux runs.
 
 ## Naming and contract leftovers
 
@@ -763,6 +779,20 @@ SpudLib's rule is that it never decides on the caller's behalf. These do:
 - `spudnet_header` is a generic name for something only HTTP and WebSocket use.
 - A WebSocket text message handed over in parts can be split in the middle of a
   UTF-8 character.
+
+**Decided 2026-10-28 with the user (card S5):**
+- Renamed: `SPUDRESULT_SPUDNET_WS_*` to `SPUDRESULT_SPUDNET_WEBSOCKET_*`,
+  `SPUDNET_WEBSOCKET_MESSAGE` to `SPUDNET_WEBSOCKET_MESSAGE_TYPE`,
+  `spudnet_header` to `spudnet_http_header`. Every caller renamed in the
+  same change, as card X1b's renames were.
+- A bad argument (NULL data, a close reason over 123 bytes) returns an
+  invalid-argument result, never `SPUDRESULT_SPUDNET_SEND_FAILED`.
+- Each transport keeps its own `send` (partial on TCP, whole messages on
+  WebSocket) and its own end of connection (0 bytes on TCP, a result on
+  WebSocket), as the protocols are; each object's header states its rule.
+- A text message's parts are bytes; reassembling text, characters split
+  across parts included, is the caller's, said in the header.
+Not started.
 
 ## Order to do it in
 
