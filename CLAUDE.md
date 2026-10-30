@@ -840,7 +840,55 @@ its own (card S13 asks whether it should honour the caller's at all). The
 day (a drawn grid read back, every draw kind, placed resources, compute, a
 swap chain on a hidden window, the surface callback on Vulkan), on Windows
 only; Metal, ALSA, CoreAudio, curl, POSIX, evdev, GameController and
-URLSession files touched by X16 are written, not compiled.
+URLSession files touched by X16 were written there, not compiled.
+
+On 2026-10-30 the Mac (Apple M5 Pro, macOS 27) compiled and ran them:
+`macos-metal` Debug and Release, `-asan` and `-tsan`, every ctest passing
+in all four (14), `spudnet_test` 343 of 343 plain, Release and ASan,
+`spud_misuse_tests` ten runs in Debug (206 calls with a destroyed handle,
+no failure), and `spudgpu_objects_test` and `spud_noalloc_tests` under
+Metal API and shader validation with warnings fatal. Found and fixed:
+- `spudgpu_objects_test`'s mesh shader drew nothing on Metal: Metal's
+  `setDepthTestMinBound:maxBound:` is encoder state with no pipeline
+  switch, so the bounds set for the depth-bounded draw before it clipped
+  the mesh pipeline, created without the test. `spudgpu.h` stated the
+  difference per backend ("on Metal this call alone turns the test on");
+  it now states one rule (set the range after binding a pipeline with
+  `depth_bounds_test_enable`; a bind leaves it undefined; a pipeline
+  without the test is never tested), and Metal keeps it: a bind of a
+  pipeline without the test sets the encoder's bounds to [0, 1], and
+  `spudgpu_cmd_set_depth_bounds` sets them only while a pipeline with it
+  is bound (`_encoder_depth_bounds`). Vulkan and D3D12 kept it already.
+- Metal's validation, with warnings fatal, refused the same vertex buffer
+  set again between two draws, and a descriptor set's argument buffer set
+  again for a second pipeline in a pass (the compute side was fixed so on
+  2026-10-24): the render encoder now keeps each vertex buffer slot's
+  buffer and offset (`setVertexBufferOffset:` where only the offset
+  changes) and each stage's argument buffer per set, and sets only what
+  changes.
+- `spudgpu_cmd_begin_rendering` made a new `MTLRenderPassDescriptor` (and
+  its attachment descriptors) every pass: 5 of Metal's 10 allocations of
+  an offscreen frame. The list keeps one (`_pass_desc_mtl`), every field
+  set or cleared at each begin and its textures cleared once the encoder
+  is made: 6 a frame now, the command buffer's and encoders' own.
+- The iOS SpudAudio stub (`spudaudiostub.c`) didn't compile: X16's
+  `SPUD_STALE` without `spudallocator.h`.
+- `tests/alloctrace.h` counted nothing in Release on macOS: clang takes
+  `malloc` to read no global of the program's, so the store of
+  `malloc_logger` before the counted code looked dead and was dropped.
+  Both stores are volatile now; a planted malloc and calloc count 2 of 2
+  in Debug and Release. Its table holds 16,384 stacks (1,024 before),
+  since Metal's debug layer fills 1,024 in a frame and what has no room
+  is counted as ours.
+- `spud_noalloc_tests` asked Core Audio for `SPUDAUDIO_THREAD_PRIORITY_NORMAL`,
+  which it refuses, so its SpudAudio scenario was skipped; it asks for
+  `PLATFORM` there, as the other tests do, and the callback runs.
+`spud_noalloc_tests` then: none of ours in SpudGPU's offscreen frame (6 a
+frame of Metal's: command buffer, encoder, residency), its present loop
+(about 24 a frame of Metal's and Core Animation's, most under
+`nextDrawable`), SpudAudio's Core Audio callback (none at all), SpudNet's
+idle round (none) and SpudInput's poll (2 of GameController's,
+`[GCController controllers]`).
 
 - **Vulkan** — reference backend, plain C23, complete. Build against this first;
   D3D12 and Metal follow its shape.

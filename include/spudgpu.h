@@ -4861,12 +4861,12 @@ typedef struct spudgpu_shader_pipeline_desc {
 	 * spudgpu_cmd_set_depth_bounds' [min, max] range. Independent of
 	 * depth_test_enable/depth_compare_op above — the two mechanisms compose
 	 * (both run when both are enabled) rather than one replacing the other.
-	 * Ignored on Metal, which has no pipeline-level depth-bounds toggle at
-	 * all — there, spudgpu_cmd_set_depth_bounds alone both enables and
-	 * configures it per draw (see its own doc comment). On Vulkan/D3D12, a
-	 * no-op on a device created without SPUDGPU_FEATURE_DEPTH_BOUNDS_TEST
-	 * (see SPUDGPU_EXT_DEPTH_BOUNDS_TEST) — the pipeline behaves as if this
-	 * is false.
+	 * The range is set by spudgpu_cmd_set_depth_bounds after the pipeline
+	 * is bound; only a draw with a pipeline created with this true is
+	 * tested, on every backend. On a device
+	 * created without SPUDGPU_FEATURE_DEPTH_BOUNDS_TEST (see
+	 * SPUDGPU_EXT_DEPTH_BOUNDS_TEST) the pipeline behaves as if this is
+	 * false.
 	 */
 	bool depth_bounds_test_enable;
 
@@ -5449,9 +5449,9 @@ void spudgpu_cmd_dispatch_mesh(
  * device's features.
  *
  * spudgpu_shader_pipeline_desc::depth_bounds_test_enable is declared whether
- * or not this macro is 1. Vulkan and D3D12 need it when the pipeline is
- * created; Metal has no pipeline-level switch, and there
- * spudgpu_cmd_set_depth_bounds() alone turns the test on and sets its range.
+ * or not this macro is 1: a draw with a pipeline created with it is tested
+ * against the range spudgpu_cmd_set_depth_bounds() set after the pipeline was
+ * bound, and a draw with one created without it is not, on every backend.
  */
 #if SPUDGPU_COMPILE_VULKAN_API || SPUDGPU_COMPILE_D3D12_API || SPUDGPU_COMPILE_METAL_API
 #define SPUDGPU_EXT_DEPTH_BOUNDS_TEST 1
@@ -5465,16 +5465,16 @@ void spudgpu_cmd_dispatch_mesh(
  * @brief Sets the [min, max] depth-attachment-value range the depth bounds
  * test clips against for subsequent draws.
  *
- * On Vulkan/D3D12, call after binding a pipeline created with
- * depth_bounds_test_enable=true, before any draw that should be clipped by it.
- * Metal has no pipeline-level toggle: depth_bounds_test_enable is ignored
- * there, and this call alone both enables and configures the test for
- * subsequent draws on `cmd`. Passing (0, 1), the default, disables it;
- * anything else enables it. Calling this with (0, 1) on Vulkan/D3D12 is
- * harmless too (a bounds window spanning the whole depth range), so a caller
- * that wants one code path across all three backends can always call this
- * rather than branching on whether the bound pipeline requested
- * depth_bounds_test_enable.
+ * Two rules hold on every backend, whatever the graphics API underneath
+ * keeps:
+ *
+ * - Call after spudgpu_cmd_bind_pipeline() of a pipeline created with
+ *   spudgpu_shader_pipeline_desc::depth_bounds_test_enable, and before the
+ *   draws it should clip. A pipeline bind leaves the range undefined until
+ *   this is called again.
+ * - A draw with a pipeline created without depth_bounds_test_enable is not
+ *   tested, whatever range was set; calling this while one is bound has no
+ *   effect on its draws.
  *
  * Does nothing on a device created without SPUDGPU_FEATURE_DEPTH_BOUNDS_TEST
  * (and a debug build asserts then).

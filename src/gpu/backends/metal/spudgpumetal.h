@@ -258,6 +258,11 @@ typedef struct spudgpu_command_list_t {
 	// way Vulkan/D3D12 do - everything is a method on the render encoder
 	// itself, which only exists between begin/end_rendering.
 	id<MTLRenderCommandEncoder> _active_render_encoder;
+	// The pass descriptor spudgpu_cmd_begin_rendering fills, made with the
+	// list and kept (retained) so a pass makes no descriptor or attachment
+	// descriptor of its own: every field a pass may set is set or cleared
+	// at each begin, and the textures cleared once the encoder is made.
+	MTLRenderPassDescriptor *_pass_desc_mtl;
 	// What spudgpu_cmd_bind_pipeline last set on _active_render_encoder,
 	// cleared when a render encoder is made. Not retained. Metal's
 	// validation refuses setting a state the encoder already has, and two
@@ -272,6 +277,25 @@ typedef struct spudgpu_command_list_t {
 	MTLWinding _encoder_winding;
 	MTLTriangleFillMode _encoder_fill_mode;
 	float _encoder_depth_bias[3];
+	// The depth bounds _active_render_encoder tests against, {0, 1} (no
+	// test) for a new encoder. Metal has no pipeline switch for the test,
+	// so spudgpu_cmd_bind_pipeline sets {0, 1} for a pipeline created
+	// without depth_bounds_test_enable, and spudgpu_cmd_set_depth_bounds
+	// sets the caller's range only while one created with it is bound.
+	float _encoder_depth_bounds[2];
+	// The buffer and offset _active_render_encoder has at each vertex
+	// buffer slot, nil for none: Metal's validation refuses setting the same
+	// buffer again, so spudgpu_cmd_set_vertex_buffers sets a slot only when
+	// it changes, and only the offset when the buffer is the same. Cleared
+	// with the encoder.
+	id<MTLBuffer> _encoder_vertex_buffers[SPUDGPU_MAX_VERTEX_BINDINGS];
+	NSUInteger _encoder_vertex_offsets[SPUDGPU_MAX_VERTEX_BINDINGS];
+	// The argument buffer _active_render_encoder has at each descriptor
+	// set's index, per stage (vertex, mesh, fragment), nil for none, as
+	// _encoder_compute_sets is for compute. Cleared with the encoder.
+	id<MTLBuffer> _encoder_vertex_sets[SPUDGPU_MAX_DESCRIPTOR_SET_LAYOUTS];
+	id<MTLBuffer> _encoder_mesh_sets[SPUDGPU_MAX_DESCRIPTOR_SET_LAYOUTS];
+	id<MTLBuffer> _encoder_fragment_sets[SPUDGPU_MAX_DESCRIPTOR_SET_LAYOUTS];
 
 	// Persistent viewport/scissor state - see SPUDGPU_METAL_MAX_VIEWPORTS.
 	SPUDGPU_VIEWPORT _viewports[SPUDGPU_METAL_MAX_VIEWPORTS];

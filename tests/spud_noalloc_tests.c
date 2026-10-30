@@ -566,8 +566,14 @@ static void test_audio(void) {
 		desc.format.channel_count = 2;
 		desc.format.interleaved   = true;
 	}
-	desc.flags           = SPUDAUDIO_STREAM_FLAG_NONE;
+	desc.flags = SPUDAUDIO_STREAM_FLAG_NONE;
+	/* Core Audio's callback runs on its own thread, the only mechanism it
+	 * has; the others have a thread of SpudAudio's at the OS's default. */
+#if SPUDAUDIO_COMPILE_COREAUDIO
+	desc.thread.priority = SPUDAUDIO_THREAD_PRIORITY_PLATFORM;
+#else
 	desc.thread.priority = SPUDAUDIO_THREAD_PRIORITY_NORMAL;
+#endif
 	desc.callback        = silence_callback;
 	SPUDAUDIO_TIMING_CAPS caps;
 	memset(&caps, 0, sizeof(caps));

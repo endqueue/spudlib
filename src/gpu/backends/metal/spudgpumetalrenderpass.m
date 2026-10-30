@@ -364,7 +364,15 @@ void spudgpu_cmd_begin_rendering(
 	spudgpumetal___internal_end_active_compute_encoder(cmd_metal);
 	spudgpumetal___internal_end_active_blit_encoder(cmd_metal);
 
-	MTLRenderPassDescriptor *pass_desc = [MTLRenderPassDescriptor renderPassDescriptor];
+	// The list's own descriptor, every field this call sets cleared first:
+	// an attachment a pass doesn't name has no texture, and no sample buffer
+	// is attached unless the pass asks for timestamps.
+	MTLRenderPassDescriptor *pass_desc = cmd_metal->_pass_desc_mtl;
+	for (uint32_t i = 0; i < SPUDGPU_MAX_COLOR_ATTACHMENTS; i++)
+		pass_desc.colorAttachments[i].texture = nil;
+	pass_desc.depthAttachment.texture                  = nil;
+	pass_desc.stencilAttachment.texture                = nil;
+	pass_desc.sampleBufferAttachments[0].sampleBuffer = nil;
 
 	uint32_t color_count = desc->color_attachment_count;
 	if (color_count > SPUDGPU_MAX_COLOR_ATTACHMENTS)
@@ -432,9 +440,22 @@ void spudgpu_cmd_begin_rendering(
 	// survives past this call, to be released in spudgpu_cmd_end_rendering.
 	id<MTLRenderCommandEncoder> encoder = [cmd_metal->_command_buffer_mtl renderCommandEncoderWithDescriptor:pass_desc];
 	cmd_metal->_active_render_encoder   = [encoder retain];
+	// The encoder has what it needs; the kept descriptor holds no texture
+	// past the pass.
+	for (uint32_t i = 0; i < color_count; i++)
+		pass_desc.colorAttachments[i].texture = nil;
+	pass_desc.depthAttachment.texture                  = nil;
+	pass_desc.stencilAttachment.texture                = nil;
+	pass_desc.sampleBufferAttachments[0].sampleBuffer = nil;
 	cmd_metal->_encoder_pipeline_state_mtl      = nil;
 	cmd_metal->_encoder_depth_stencil_state_mtl = nil;
 	cmd_metal->_encoder_rasterizer_set          = false;
+	cmd_metal->_encoder_depth_bounds[0]         = 0.0f;
+	cmd_metal->_encoder_depth_bounds[1]         = 1.0f;
+	memset(cmd_metal->_encoder_vertex_buffers, 0, sizeof(cmd_metal->_encoder_vertex_buffers));
+	memset(cmd_metal->_encoder_vertex_sets, 0, sizeof(cmd_metal->_encoder_vertex_sets));
+	memset(cmd_metal->_encoder_mesh_sets, 0, sizeof(cmd_metal->_encoder_mesh_sets));
+	memset(cmd_metal->_encoder_fragment_sets, 0, sizeof(cmd_metal->_encoder_fragment_sets));
 }
 
 void spudgpu_cmd_end_rendering(spudgpu_command_list cmd) {

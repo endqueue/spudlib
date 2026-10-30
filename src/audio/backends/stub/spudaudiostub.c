@@ -3,6 +3,7 @@
 
 #include "../../spudaudiointernal.h"
 #include <stddef.h>
+#include "../../../spudallocator.h"
 #include "../../../spudstructbase.h"
 
 /* Placeholder backend for platforms with no native API compiled in yet

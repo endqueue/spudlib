@@ -591,16 +591,27 @@ void spudgpu_cmd_bind_descriptor_sets(
 		if (!to_non_fragment && !to_fragment)
 			continue;
 
-		uint32_t buffer_index = SPUDGPU_METAL_DESCRIPTOR_SET_BUFFER_INDEX_BASE + first_set + i;
+		// Set only where the stage doesn't have it already: Metal's
+		// validation refuses setting the same buffer again, and a caller
+		// binding one set for several pipelines in a pass is ordinary.
+		const uint32_t set_index  = first_set + i;
+		uint32_t buffer_index     = SPUDGPU_METAL_DESCRIPTOR_SET_BUFFER_INDEX_BASE + set_index;
+		id<MTLBuffer> argument_mtl = set_metal->_argument_buffer_mtl;
 		if (to_non_fragment) {
 			if (is_mesh_pipeline) {
-				[cmd_metal->_active_render_encoder setMeshBuffer:set_metal->_argument_buffer_mtl offset:0 atIndex:buffer_index];
-			} else {
-				[cmd_metal->_active_render_encoder setVertexBuffer:set_metal->_argument_buffer_mtl offset:0 atIndex:buffer_index];
+				if (cmd_metal->_encoder_mesh_sets[set_index] != argument_mtl) {
+					[cmd_metal->_active_render_encoder setMeshBuffer:argument_mtl offset:0 atIndex:buffer_index];
+					cmd_metal->_encoder_mesh_sets[set_index] = argument_mtl;
+				}
+			} else if (cmd_metal->_encoder_vertex_sets[set_index] != argument_mtl) {
+				[cmd_metal->_active_render_encoder setVertexBuffer:argument_mtl offset:0 atIndex:buffer_index];
+				cmd_metal->_encoder_vertex_sets[set_index] = argument_mtl;
 			}
 		}
-		if (to_fragment)
-			[cmd_metal->_active_render_encoder setFragmentBuffer:set_metal->_argument_buffer_mtl offset:0 atIndex:buffer_index];
+		if (to_fragment && cmd_metal->_encoder_fragment_sets[set_index] != argument_mtl) {
+			[cmd_metal->_active_render_encoder setFragmentBuffer:argument_mtl offset:0 atIndex:buffer_index];
+			cmd_metal->_encoder_fragment_sets[set_index] = argument_mtl;
+		}
 		MTLRenderStages resident_stages = (to_non_fragment ? non_fragment_stage : 0) | (to_fragment ? MTLRenderStageFragment : 0);
 
 		// Every resource reached only indirectly through this argument

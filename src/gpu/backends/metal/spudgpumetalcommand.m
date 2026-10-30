@@ -252,6 +252,14 @@ SPUDRESULT spudgpu_create_command_list(
 	SPUD_BIRTH(cmd_list_metal);
 	cmd_list_metal->_parent_allocator = (spudgpu_command_allocator_metal *)allocator;
 
+	cmd_list_metal->_pass_desc_mtl = [[MTLRenderPassDescriptor alloc] init];
+	if (!cmd_list_metal->_pass_desc_mtl) {
+		const SPUD_ALLOCATOR list_allocator = cmd_list_metal->head.allocator;
+		SPUD_KILL(cmd_list_metal);
+		SPUD_DELETE(&list_allocator, spudgpu_command_list_metal, cmd_list_metal);
+		sr = SPUDRESULT_OUT_OF_MEMORY;
+		goto failedattempt;
+	}
 	spudgpumetal___internal_acquire_command_buffer(cmd_list_metal);
 
 	SPUDGPU___LIVE_ADD(&cmd_list_metal->_parent_allocator->_parent_device->_live, SPUDGPU___OBJECT_COMMAND_LIST);
@@ -271,6 +279,7 @@ void spudgpu_destroy_command_list(spudgpu_command_list cmd) {
 		if (cmd_list_metal->_command_buffer_mtl) {
 			[cmd_list_metal->_command_buffer_mtl release];
 		}
+		[cmd_list_metal->_pass_desc_mtl release];
 #if _DEBUG
 		// A list destroyed open is not open any more.
 		if (cmd_list_metal->_parent_allocator->_open_list == cmd)
@@ -497,20 +506,30 @@ void spudgpu_cmd_set_vertex_buffers(
 	if (!cmd_list_metal->_active_render_encoder)
 		return;
 
-	// Unlike viewports/scissors, -setVertexBuffers:offsets:withRange: takes
-	// an explicit NSRange, so start_slot needs no persistent state here.
-	id<MTLBuffer> buffers[view_count];
-	NSUInteger offsets[view_count];
+	// Each slot set on its own, and only where it changes: Metal's validation
+	// refuses setting a buffer the encoder already has at that index, and a
+	// caller rebinding the same buffer between draws is ordinary.
+	id<MTLRenderCommandEncoder> encoder = cmd_list_metal->_active_render_encoder;
 	for (uint32_t i = 0; i < view_count; i++) {
 		spudgpu_buffer_view_metal *view_metal = (spudgpu_buffer_view_metal *)buffer_views[i];
 		spudgpu_buffer_metal *parent_buffer_metal =
 		    view_metal ? (spudgpu_buffer_metal *)view_metal->_desc.parent_buffer : NULL;
-		buffers[i] = parent_buffer_metal ? parent_buffer_metal->_buffer_mtl : nil;
-		offsets[i] = view_metal ? (NSUInteger)view_metal->_desc.offset_from_parent_buffer : 0;
+		id<MTLBuffer> buffer   = parent_buffer_metal ? parent_buffer_metal->_buffer_mtl : nil;
+		NSUInteger offset      = view_metal ? (NSUInteger)view_metal->_desc.offset_from_parent_buffer : 0;
+		const uint32_t slot    = start_slot + i;
+		if (slot >= SPUDGPU_MAX_VERTEX_BINDINGS) {
+			[encoder setVertexBuffer:buffer offset:offset atIndex:slot];
+			continue;
+		}
+		if (buffer && buffer == cmd_list_metal->_encoder_vertex_buffers[slot]) {
+			if (offset != cmd_list_metal->_encoder_vertex_offsets[slot])
+				[encoder setVertexBufferOffset:offset atIndex:slot];
+		} else {
+			[encoder setVertexBuffer:buffer offset:offset atIndex:slot];
+		}
+		cmd_list_metal->_encoder_vertex_buffers[slot] = buffer;
+		cmd_list_metal->_encoder_vertex_offsets[slot] = offset;
 	}
-	[cmd_list_metal->_active_render_encoder setVertexBuffers:buffers
-	                                                  offsets:offsets
-	                                                withRange:NSMakeRange(start_slot, view_count)];
 }
 
 void spudgpu_cmd_set_index_buffer(
@@ -734,6 +753,22 @@ static MTLCullMode spudgpumetal___internal_cull_mode(SPUDGPU_CULL_MODE mode) {
 	}
 }
 
+#if SPUDGPU_EXT_DEPTH_BOUNDS_TEST
+// Sets the render encoder's depth bounds to [min, max] where they differ
+// from what it has, on a device created with the test.
+static void spudgpumetal___internal_set_encoder_depth_bounds(spudgpu_command_list_metal *cmd_list_metal, float min_bound, float max_bound) {
+	if ((cmd_list_metal->_parent_allocator->_parent_device->_features & SPUDGPU_FEATURE_DEPTH_BOUNDS_TEST) == 0)
+		return;
+	if (cmd_list_metal->_encoder_depth_bounds[0] == min_bound && cmd_list_metal->_encoder_depth_bounds[1] == max_bound)
+		return;
+	if (@available(macOS 26.0, iOS 26.0, *)) {
+		[cmd_list_metal->_active_render_encoder setDepthTestMinBound:min_bound maxBound:max_bound];
+		cmd_list_metal->_encoder_depth_bounds[0] = min_bound;
+		cmd_list_metal->_encoder_depth_bounds[1] = max_bound;
+	}
+}
+#endif
+
 void spudgpu_cmd_bind_pipeline(
     spudgpu_command_list cmd,
     spudgpu_shader_pipeline pipeline) {
@@ -787,6 +822,14 @@ void spudgpu_cmd_bind_pipeline(
 		if (!known || memcmp(cmd_list_metal->_encoder_depth_bias, depth_bias, sizeof(depth_bias)) != 0)
 			[cmd_list_metal->_active_render_encoder setDepthBias:depth_bias[0] slopeScale:depth_bias[1] clamp:depth_bias[2]];
 		cmd_list_metal->_encoder_rasterizer_set = true;
+#if SPUDGPU_EXT_DEPTH_BOUNDS_TEST
+		// No pipeline switch for the depth bounds test on Metal: a pipeline
+		// without it gets the whole range, so the last one's bounds don't
+		// clip its draws. One with it gets its range from
+		// spudgpu_cmd_set_depth_bounds after this bind (spudgpu.h).
+		if (!pipeline_metal->_desc.depth_bounds_test_enable)
+			spudgpumetal___internal_set_encoder_depth_bounds(cmd_list_metal, 0.0f, 1.0f);
+#endif
 		cmd_list_metal->_encoder_cull_mode      = cull_mode;
 		cmd_list_metal->_encoder_winding        = winding;
 		cmd_list_metal->_encoder_fill_mode      = fill;
@@ -901,18 +944,17 @@ void spudgpu_cmd_set_depth_bounds(
 		return;
 
 	// Without the feature, setDepthTestMinBound:maxBound: may be invalid on
-	// this GPU (MTLGPUFamilyApple10 only), and Metal has no pipeline-level
-	// toggle to fall back to a harmless no-op against (see spudgpu.h's
-	// spudgpu_cmd_set_depth_bounds doc comment).
+	// this GPU (MTLGPUFamilyApple10 only).
 	const bool enabled = (cmd_list_metal->_parent_allocator->_parent_device->_features & SPUDGPU_FEATURE_DEPTH_BOUNDS_TEST) != 0;
 	assert(enabled && "spudgpu_cmd_set_depth_bounds: the device was created without SPUDGPU_FEATURE_DEPTH_BOUNDS_TEST");
 	if (!enabled)
 		return;
 
-	if (@available(macOS 26.0, iOS 26.0, *)) {
-		[cmd_list_metal->_active_render_encoder setDepthTestMinBound:min_depth_bounds
-		                                                     maxBound:max_depth_bounds];
-	}
+	// A pipeline created without the test isn't tested (spudgpu.h).
+	spudgpu_shader_pipeline_metal *pipeline_metal = (spudgpu_shader_pipeline_metal *)cmd_list_metal->_bound_pipeline;
+	if (!pipeline_metal || !pipeline_metal->_desc.depth_bounds_test_enable)
+		return;
+	spudgpumetal___internal_set_encoder_depth_bounds(cmd_list_metal, min_depth_bounds, max_depth_bounds);
 }
 #endif // SPUDGPU_EXT_DEPTH_BOUNDS_TEST
 
