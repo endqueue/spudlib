@@ -180,6 +180,10 @@ void spudgpu_cmd_image_barrier(
     SPUDGPU_IMAGE_LAYOUT new_layout) {
 	if (!cmd || !image)
 		return;
+	if (SPUD_STALE(cmd, "spudgpu_cmd_image_barrier", "cmd"))
+		return;
+	if (SPUD_STALE(image, "spudgpu_cmd_image_barrier", "image"))
+		return;
 
 	VkImageLayout vk_old = spud_layout_to_vk(old_layout);
 	VkImageLayout vk_new = spud_layout_to_vk(new_layout);
@@ -206,6 +210,10 @@ void spudgpu_cmd_image_barrier_view(
     SPUDGPU_IMAGE_LAYOUT old_layout,
     SPUDGPU_IMAGE_LAYOUT new_layout) {
 	if (!cmd || !image_view)
+		return;
+	if (SPUD_STALE(cmd, "spudgpu_cmd_image_barrier_view", "cmd"))
+		return;
+	if (SPUD_STALE(image_view, "spudgpu_cmd_image_barrier_view", "image_view"))
 		return;
 	spudgpu_command_list_vulkan *cl = (spudgpu_command_list_vulkan *)cmd;
 	spudgpu_image_view_vulkan *view = (spudgpu_image_view_vulkan *)image_view;
@@ -236,6 +244,10 @@ void spudgpu_cmd_image_barrier_subresource(
     SPUDGPU_IMAGE_LAYOUT old_layout,
     SPUDGPU_IMAGE_LAYOUT new_layout) {
 	if (!cmd || !image || !range)
+		return;
+	if (SPUD_STALE(cmd, "spudgpu_cmd_image_barrier_subresource", "cmd"))
+		return;
+	if (SPUD_STALE(image, "spudgpu_cmd_image_barrier_subresource", "image"))
 		return;
 
 	VkImageLayout vk_old = spud_layout_to_vk(old_layout);
@@ -284,6 +296,12 @@ void spudgpu_cmd_copy_buffer(
     uint64_t size) {
 	if (!cmd || !src_buffer || !dst_buffer)
 		return;
+	if (SPUD_STALE(cmd, "spudgpu_cmd_copy_buffer", "cmd"))
+		return;
+	if (SPUD_STALE(src_buffer, "spudgpu_cmd_copy_buffer", "src_buffer"))
+		return;
+	if (SPUD_STALE(dst_buffer, "spudgpu_cmd_copy_buffer", "dst_buffer"))
+		return;
 	VkBufferCopy region = {0};
 	region.srcOffset    = (VkDeviceSize)src_offset;
 	region.dstOffset    = (VkDeviceSize)dst_offset;
@@ -298,6 +316,12 @@ void spudgpu_cmd_copy_image_to_buffer(
     const spudgpu_image_buffer_copy_desc *desc) {
 	if (!cmd || !src_image || !dst_buffer || !desc)
 		return;
+	if (SPUD_STALE(cmd, "spudgpu_cmd_copy_image_to_buffer", "cmd"))
+		return;
+	if (SPUD_STALE(src_image, "spudgpu_cmd_copy_image_to_buffer", "src_image"))
+		return;
+	if (SPUD_STALE(dst_buffer, "spudgpu_cmd_copy_image_to_buffer", "dst_buffer"))
+		return;
 
 	VkBufferImageCopy region = spudgpuvulkan___make_buffer_image_copy(spud_format_aspect(src_image->_format_vk), desc);
 
@@ -310,6 +334,12 @@ void spudgpu_cmd_copy_buffer_to_image(
     spudgpu_image dst_image,
     const spudgpu_image_buffer_copy_desc *desc) {
 	if (!cmd || !src_buffer || !dst_image || !desc)
+		return;
+	if (SPUD_STALE(cmd, "spudgpu_cmd_copy_buffer_to_image", "cmd"))
+		return;
+	if (SPUD_STALE(src_buffer, "spudgpu_cmd_copy_buffer_to_image", "src_buffer"))
+		return;
+	if (SPUD_STALE(dst_image, "spudgpu_cmd_copy_buffer_to_image", "dst_image"))
 		return;
 
 	VkBufferImageCopy region = spudgpuvulkan___make_buffer_image_copy(spud_format_aspect(dst_image->_format_vk), desc);
@@ -330,6 +360,8 @@ void spudgpu_get_image_buffer_copy_size(
     uint64_t *out_row_pitch,
     uint64_t *out_total_size) {
 	if (!image)
+		return;
+	if (SPUD_STALE(image, "spudgpu_get_image_buffer_copy_size", "image"))
 		return;
 
 	uint32_t mip_width  = image->_desc.width >> mip_level;
@@ -354,6 +386,8 @@ SPUDRESULT spudgpu_get_image_buffer_copy_offset_alignment(
     spudgpu_image image,
     uint64_t *out_alignment) {
 	if (!image)
+		return SPUDRESULT_GPU_INVALID_IMAGE;
+	if (SPUD_STALE(image, "spudgpu_get_image_buffer_copy_offset_alignment", "image"))
 		return SPUDRESULT_GPU_INVALID_IMAGE;
 	if (!out_alignment)
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
@@ -384,6 +418,12 @@ void spudgpu_cmd_blit_image(
     spudgpu_image dst_image,
     const spudgpu_image_blit_desc *desc) {
 	if (!cmd || !src_image || !dst_image || !desc)
+		return;
+	if (SPUD_STALE(cmd, "spudgpu_cmd_blit_image", "cmd"))
+		return;
+	if (SPUD_STALE(src_image, "spudgpu_cmd_blit_image", "src_image"))
+		return;
+	if (SPUD_STALE(dst_image, "spudgpu_cmd_blit_image", "dst_image"))
 		return;
 
 	VkImageBlit region                   = {0};
@@ -452,6 +492,8 @@ void spudgpu_cmd_begin_rendering(
     spudgpu_command_list cmd,
     const spudgpu_rendering_begin_desc *desc) {
 	if (!cmd || !desc)
+		return;
+	if (SPUD_STALE(cmd, "spudgpu_cmd_begin_rendering", "cmd"))
 		return;
 	if (spud_struct_check(&desc->base, SPUD_STRUCT_TYPE_GPU_RENDERING_BEGIN_DESC) != SPUD_SUCCESS)
 		return;
@@ -551,6 +593,8 @@ void spudgpu_cmd_begin_rendering(
 void spudgpu_cmd_end_rendering(spudgpu_command_list cmd) {
     if (!cmd)
         return;
+    if (SPUD_STALE(cmd, "spudgpu_cmd_end_rendering", "cmd"))
+        return;
     vkCmdEndRendering(cmd->_command_buffer_vk);
     // The pass's end: once all of its work has left the pipe.
     if (cmd->_end_timestamp_pool_vk) {
@@ -578,6 +622,8 @@ void spudgpu_cmd_end_rendering(spudgpu_command_list cmd) {
 void spudgpu_begin_bundle_command_list(
     spudgpu_command_list bundle, const spudgpu_bundle_inheritance_desc *desc) {
     if (!bundle || !desc)
+        return;
+    if (SPUD_STALE(bundle, "spudgpu_begin_bundle_command_list", "bundle"))
         return;
     if (spud_struct_check(&desc->base, SPUD_STRUCT_TYPE_GPU_BUNDLE_INHERITANCE_DESC) != SPUD_SUCCESS)
         return;
@@ -636,6 +682,10 @@ void spudgpu_begin_bundle_command_list(
 void spudgpu_cmd_execute_bundle(spudgpu_command_list cmd, spudgpu_command_list bundle) {
     if (!cmd || !bundle)
         return;
+    if (SPUD_STALE(cmd, "spudgpu_cmd_execute_bundle", "cmd"))
+        return;
+    if (SPUD_STALE(bundle, "spudgpu_cmd_execute_bundle", "bundle"))
+        return;
     vkCmdExecuteCommands(cmd->_command_buffer_vk, 1, &bundle->_command_buffer_vk);
 }
 #endif // SPUDGPU_EXT_BUNDLES
@@ -663,6 +713,10 @@ void spudgpu_cmd_clear_color_attachment(
     uint32_t width,
     uint32_t height) {
     if (!cmd || !attachment)
+        return;
+    if (SPUD_STALE(cmd, "spudgpu_cmd_clear_color_attachment", "cmd"))
+        return;
+    if (SPUD_STALE(attachment, "spudgpu_cmd_clear_color_attachment", "attachment"))
         return;
 
     spudgpu_image_view_vulkan *view = (spudgpu_image_view_vulkan *) attachment;
@@ -727,6 +781,10 @@ void spudgpu_cmd_clear_depth_attachment(
     uint32_t width,
     uint32_t height) {
     if (!cmd || !attachment)
+        return;
+    if (SPUD_STALE(cmd, "spudgpu_cmd_clear_depth_attachment", "cmd"))
+        return;
+    if (SPUD_STALE(attachment, "spudgpu_cmd_clear_depth_attachment", "attachment"))
         return;
     if (!clear_depth && !clear_stencil)
         return;

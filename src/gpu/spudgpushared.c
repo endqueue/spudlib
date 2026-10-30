@@ -149,6 +149,9 @@ SPUDRESULT spudgpu___internal_check_surface_present_scalings(
     const uint32_t *out_scalings) {
 	if (!surface)
 		return SPUDRESULT_GPU_INVALID_SURFACE;
+	// The surface's struct is the backend's; its head is first in every one.
+	if (SPUD_STALE_HEAD((const spud_object_head *)surface, "spudgpu_get_surface_present_scalings", "surface"))
+		return SPUDRESULT_GPU_INVALID_SURFACE;
 	if (!out_scalings)
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
 	if (!(features & SPUDGPU_FEATURE_PRESENT))

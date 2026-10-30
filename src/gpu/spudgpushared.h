@@ -101,7 +101,8 @@ SPUDRESULT spudgpu___internal_check_swap_chain_desc(
     const spudgpu_swap_chain *out_swap_chain);
 
 /* The checks of spudgpu_get_surface_present_scalings() after its device
- * check: SPUDRESULT_GPU_INVALID_SURFACE, SPUDRESULT_NULL_OUTPUT_PARAMETER,
+ * check: SPUDRESULT_GPU_INVALID_SURFACE (also for a destroyed surface, in a
+ * Debug build), SPUDRESULT_NULL_OUTPUT_PARAMETER,
  * SPUDRESULT_GPU_FEATURE_NOT_SUPPORTED. */
 SPUDRESULT spudgpu___internal_check_surface_present_scalings(
     SPUDGPU_FEATURES features,

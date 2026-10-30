@@ -601,6 +601,29 @@ if(NOT TARGET spudlib)
             SPUDCORE_TEST_CMAKE_VERSION="${PROJECT_VERSION}")
         add_test(NAME spudcore_test COMMAND spudcore_test)
 
+        # Every public function called with every argument zeroed: written
+        # by tests/misuse/make_misuse_tests.py from abi.txt, never by hand.
+        add_executable(spud_misuse_tests tests/spud_misuse_tests.c)
+        target_link_libraries(spud_misuse_tests PRIVATE spudlib)
+        add_test(NAME spud_misuse_tests COMMAND spud_misuse_tests)
+
+        # No allocation of SpudLib's per frame (ROADMAP.md in the workspace,
+        # section 3.1): each module's hot path counted after a warm-up,
+        # through tests/alloctrace.h. Needs a GPU, an output device and a
+        # loopback connection for the parts that use them, each skipped with
+        # its reason when missing, and nothing heard (it writes silence), so
+        # a ctest. --adapter N runs SpudGPU's part on another adapter.
+        add_executable(spud_noalloc_tests tests/spud_noalloc_tests.c)
+        target_link_libraries(spud_noalloc_tests PRIVATE spudlib)
+        if(APPLE AND GRAPHICS_BACKEND STREQUAL "Metal")
+            target_sources(spud_noalloc_tests PRIVATE tests/spudgpu_test_metal_layer.m)
+            target_link_libraries(spud_noalloc_tests PRIVATE "-framework QuartzCore" "-framework Foundation")
+        endif()
+        if(UNIX AND NOT APPLE)
+            target_link_libraries(spud_noalloc_tests PRIVATE ${CMAKE_DL_LIBS})
+        endif()
+        add_test(NAME spud_noalloc_tests COMMAND spud_noalloc_tests)
+
         # SpudGPU's adapters and devices: needs a GPU, no window and nobody
         # watching, so a ctest. With no adapter it exits 77, reported as
         # skipped.
@@ -613,7 +636,9 @@ if(NOT TARGET spudlib)
         # a CPU-signalled fence, semaphores, buffer, view and heap descs, a
         # pool reset). Needs a GPU, no window; 77, skipped, with no adapter.
         add_executable(spudgpu_objects_test tests/spudgpu_objects_test.c)
-        target_link_libraries(spudgpu_objects_test PRIVATE spudlib)
+        # eqstd for src/spudallocator.h, whose spud_object_head the test
+        # makes a surface of for the checks before a surface is read.
+        target_link_libraries(spudgpu_objects_test PRIVATE spudlib eqstd)
         # On Metal a surface is a CAMetalLayer, which needs no window, so the
         # test makes swap chains on one.
         if(APPLE AND GRAPHICS_BACKEND STREQUAL "Metal")
@@ -642,7 +667,9 @@ if(NOT TARGET spudlib)
         # SpudInput's front end, and whatever gamepads happen to be plugged
         # in. It passes with none, so it is a ctest too.
         add_executable(spudinput_test tests/spudinput_test.c)
-        target_link_libraries(spudinput_test PRIVATE spudlib)
+        # eqstd for src/input/spudinputshared.h, whose instance starts with
+        # a spud_object_head (src/spudallocator.h, which includes eqstd).
+        target_link_libraries(spudinput_test PRIVATE spudlib eqstd)
         if(APPLE)
             # The test runs the main run loop itself, which is how
             # GameController's devices arrive.

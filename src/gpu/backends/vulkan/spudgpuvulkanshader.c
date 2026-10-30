@@ -143,6 +143,8 @@ SPUDRESULT spudgpu_create_shader_module(
     spudgpu_shader_module *out_module) {
 	if (!device)
 		return SPUDRESULT_GPU_INVALID_DEVICE;
+	if (SPUD_STALE(device, "spudgpu_create_shader_module", "device"))
+		return SPUDRESULT_GPU_INVALID_DEVICE;
 	if (!desc)
 		return SPUDRESULT_NULL_DESC;
 	const SPUDRESULT base_sr = spud_struct_check(&desc->base, SPUD_STRUCT_TYPE_GPU_SHADER_MODULE_DESC);
@@ -163,6 +165,7 @@ SPUDRESULT spudgpu_create_shader_module(
 
 	spudgpu_shader_module_vulkan result = {0};
 	result.head.allocator               = device->head.allocator;
+	SPUD_BIRTH(&result);
 	result._device                      = *((spudgpu_device_vulkan *)device);
 	result._stage_vk = spudgpuvulkan___shader_stage_flag_internal(desc->stage);
 
@@ -198,10 +201,13 @@ SPUDRESULT spudgpu_create_shader_module(
 void spudgpu_destroy_shader_module(spudgpu_shader_module shader_module) {
 	if (!shader_module)
 		return;
+	if (SPUD_STALE(shader_module, "spudgpu_destroy_shader_module", "shader_module"))
+		return;
 	vkDestroyShaderModule(
 	    shader_module->_device._logical_device_vk,
 	    shader_module->_shader_module_vk, NULL);
 	SPUDGPU___LIVE_REMOVE(&shader_module->_device._shared->live, SPUDGPU___OBJECT_SHADER_MODULE);
+	SPUD_KILL(shader_module);
 	const SPUD_ALLOCATOR allocator = shader_module->head.allocator;
 	spud_string_free(&allocator, shader_module->head.debug_name);
 	SPUD_DELETE(&allocator, spudgpu_shader_module_vulkan, shader_module);
@@ -212,6 +218,8 @@ SPUDRESULT spudgpu_create_shader_pipeline(
     const spudgpu_shader_pipeline_desc *desc,
     spudgpu_shader_pipeline *out_pipeline) {
 	if (!device)
+		return SPUDRESULT_GPU_INVALID_DEVICE;
+	if (SPUD_STALE(device, "spudgpu_create_shader_pipeline", "device"))
 		return SPUDRESULT_GPU_INVALID_DEVICE;
 	if (!desc)
 		return SPUDRESULT_NULL_DESC;
@@ -237,6 +245,7 @@ SPUDRESULT spudgpu_create_shader_pipeline(
 
 	spudgpu_shader_pipeline_vulkan result = {0};
 	result.head.allocator                 = device->head.allocator;
+	SPUD_BIRTH(&result);
 	result._device                        = *device;
 	result._desc                          = *desc;
 
@@ -616,12 +625,15 @@ SPUDRESULT spudgpu_create_shader_pipeline(
 void spudgpu_destroy_shader_pipeline(spudgpu_shader_pipeline pipeline) {
 	if (!pipeline)
 		return;
+	if (SPUD_STALE(pipeline, "spudgpu_destroy_shader_pipeline", "pipeline"))
+		return;
 	spudgpu_shader_pipeline_vulkan *vkPipeline =
 	    (spudgpu_shader_pipeline_vulkan *)pipeline;
 	VkDevice vk_device = vkPipeline->_device._logical_device_vk;
 	vkDestroyPipeline(vk_device, vkPipeline->_pipeline_vk, NULL);
 	vkDestroyPipelineLayout(vk_device, vkPipeline->_pipeline_layout_vk, NULL);
 	SPUDGPU___LIVE_REMOVE(&vkPipeline->_device._shared->live, SPUDGPU___OBJECT_SHADER_PIPELINE);
+	SPUD_KILL(pipeline);
 	const SPUD_ALLOCATOR allocator = vkPipeline->head.allocator;
 	spud_string_free(&allocator, vkPipeline->head.debug_name);
 	SPUD_DELETE(&allocator, spudgpu_shader_pipeline_vulkan, vkPipeline);
@@ -644,6 +656,8 @@ SPUDRESULT spudgpu_create_compute_pipeline(
     spudgpu_compute_pipeline *out_pipeline) {
 	if (!device)
 		return SPUDRESULT_GPU_INVALID_DEVICE;
+	if (SPUD_STALE(device, "spudgpu_create_compute_pipeline", "device"))
+		return SPUDRESULT_GPU_INVALID_DEVICE;
 	if (!desc)
 		return SPUDRESULT_NULL_DESC;
 	const SPUDRESULT base_sr = spud_struct_check(&desc->base, SPUD_STRUCT_TYPE_GPU_COMPUTE_PIPELINE_DESC);
@@ -656,6 +670,7 @@ SPUDRESULT spudgpu_create_compute_pipeline(
 
 	spudgpu_compute_pipeline_vulkan result = {0};
 	result.head.allocator                  = device->head.allocator;
+	SPUD_BIRTH(&result);
 	result._device                         = *device;
 	result._desc                           = *desc;
 
@@ -734,12 +749,15 @@ SPUDRESULT spudgpu_create_compute_pipeline(
 void spudgpu_destroy_compute_pipeline(spudgpu_compute_pipeline pipeline) {
 	if (!pipeline)
 		return;
+	if (SPUD_STALE(pipeline, "spudgpu_destroy_compute_pipeline", "pipeline"))
+		return;
 	spudgpu_compute_pipeline_vulkan *vkPipeline =
 	    (spudgpu_compute_pipeline_vulkan *)pipeline;
 	VkDevice vk_device = vkPipeline->_device._logical_device_vk;
 	vkDestroyPipeline(vk_device, vkPipeline->_pipeline_vk, NULL);
 	vkDestroyPipelineLayout(vk_device, vkPipeline->_pipeline_layout_vk, NULL);
 	SPUDGPU___LIVE_REMOVE(&vkPipeline->_device._shared->live, SPUDGPU___OBJECT_COMPUTE_PIPELINE);
+	SPUD_KILL(pipeline);
 	const SPUD_ALLOCATOR allocator = vkPipeline->head.allocator;
 	spud_string_free(&allocator, vkPipeline->head.debug_name);
 	SPUD_DELETE(&allocator, spudgpu_compute_pipeline_vulkan, vkPipeline);
@@ -749,6 +767,7 @@ SPUDRESULT spudgpu_get_compute_pipeline_desc(
     spudgpu_compute_pipeline pipeline,
     spudgpu_compute_pipeline_desc *out_desc) {
     if (!pipeline) return SPUDRESULT_GPU_INVALID_COMPUTE_PIPELINE;
+    if (SPUD_STALE(pipeline, "spudgpu_get_compute_pipeline_desc", "pipeline")) return SPUDRESULT_GPU_INVALID_COMPUTE_PIPELINE;
     if (!out_desc) return SPUDRESULT_NULL_OUTPUT_PARAMETER;
     *out_desc = pipeline->_desc;
     out_desc->base = spud_struct_base(SPUD_STRUCT_TYPE_GPU_COMPUTE_PIPELINE_DESC);

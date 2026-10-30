@@ -582,6 +582,17 @@ GameInput and evdev builds were not run.
   again: evdev's gamepads. A size of 0 is asked for and freed as 1 by the helpers, so a
   count that may be 0 needs no case of its own. `tests/spudtest_allocator.h`
   checks all of this in a test.
+- **A destroyed handle is refused in Debug** (card X16, 2026-10-30;
+  `src/spudstale.h`). A Debug build's `spud_object_head` holds a tag:
+  `SPUD_BIRTH` sets it where a create fills the head, `SPUD_KILL` writes
+  it dead at every destroy and owner release, before the allocator is
+  copied out, and every public call checks each handle right after its
+  null check, its own `if`, refusing as the null check does
+  (`if (SPUD_STALE(x, "call", "x")) return ...;`, one line printed), the
+  same checks in the same order in every backend. Release has no tag.
+  Best effort: reading a destroyed handle can fault where the caller's
+  allocator has given its page back. A new handle type gets a factory in
+  `tests/misuse/make_misuse_tests.py`.
 - **Every handle starts with a `spud_object_head`** (`src/spudallocator.h`): its
   debug name, then its copy of the allocator. A handle is freed by copying the
   allocator out of its head first, since the head is inside the memory being
@@ -810,6 +821,26 @@ CRT to refuse it, which AddressSanitizer turns into an abort; the refusal
 is now SpudLib's, on every platform (`spudcore_test` under ASan is its
 test). The D3D12 backend's arrays then moved to eqstd (below) and all of
 the above ran again, as clean.
+
+On 2026-10-30 the same machine ran 2026-10-30's work: both presets
+built clean, Debug and Release; every ctest passed on both backends (14
+since that day: `spud_misuse_tests`, every public function with zeroes and,
+in Debug, with each handle destroyed, and `spud_noalloc_tests`, which holds
+SpudGPU's submit and present loop, SpudAudio's callback, SpudNet's idle
+connection and SpudInput's poll to no allocation of SpudLib's own), on both
+adapters, Vulkan under validation; `spudnet_test` 343 of 343. Found and
+fixed that day: D3D12 never defined `spudgpu_create_surface_from_callback`
+or the two swap chain semaphore getters, so a caller naming one didn't link
+there (they now refuse, as the header says); a recording call and a
+submission allocated their converted arrays every time (now kept on the
+command list or queue: one allocation a submit on D3D12, six on Vulkan,
+before); Vulkan's swap chain desc reported the caller's image count, not
+its own (card S13 asks whether it should honour the caller's at all). The
+75 SpudGPU calls no test made are made by `spudgpu_objects_test` since that
+day (a drawn grid read back, every draw kind, placed resources, compute, a
+swap chain on a hidden window, the surface callback on Vulkan), on Windows
+only; Metal, ALSA, CoreAudio, curl, POSIX, evdev, GameController and
+URLSession files touched by X16 are written, not compiled.
 
 - **Vulkan** — reference backend, plain C23, complete. Build against this first;
   D3D12 and Metal follow its shape.

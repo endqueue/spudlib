@@ -49,6 +49,7 @@ SPUDRESULT spudgpu_create_sampler(
     const spudgpu_sampler_desc *desc,
     spudgpu_sampler *out_sampler) {
     if (!device) return SPUDRESULT_GPU_INVALID_DEVICE;
+    if (SPUD_STALE(device, "spudgpu_create_sampler", "device")) return SPUDRESULT_GPU_INVALID_DEVICE;
     if (!desc) return SPUDRESULT_NULL_DESC;
     const SPUDRESULT base_sr = spud_struct_check(&desc->base, SPUD_STRUCT_TYPE_GPU_SAMPLER_DESC);
     if (base_sr != SPUD_SUCCESS) return base_sr;
@@ -75,6 +76,7 @@ SPUDRESULT spudgpu_create_sampler(
     spudgpu_sampler_vulkan *pResult = SPUD_NEW_ZEROED(&device->head.allocator, spudgpu_sampler_vulkan);
     if (!pResult) return SPUDRESULT_OUT_OF_MEMORY;
     pResult->head.allocator = device->head.allocator;
+    SPUD_BIRTH(pResult);
     pResult->_device = *device;
 
     if (vkCreateSampler(device->_logical_device_vk, &info, NULL, &pResult->_sampler_vk) != VK_SUCCESS) {
@@ -95,8 +97,10 @@ SPUDRESULT spudgpu_create_sampler(
 
 void spudgpu_destroy_sampler(spudgpu_sampler sampler) {
     if (!sampler) return;
+    if (SPUD_STALE(sampler, "spudgpu_destroy_sampler", "sampler")) return;
     vkDestroySampler(sampler->_device._logical_device_vk, sampler->_sampler_vk, NULL);
     SPUDGPU___LIVE_REMOVE(&sampler->_device._shared->live, SPUDGPU___OBJECT_SAMPLER);
+    SPUD_KILL(sampler);
     const SPUD_ALLOCATOR allocator = sampler->head.allocator;
     spud_string_free(&allocator, sampler->head.debug_name);
     SPUD_DELETE(&allocator, spudgpu_sampler_vulkan, sampler);
@@ -107,6 +111,7 @@ SPUDRESULT spudgpu_create_descriptor_set_layout(
     const spudgpu_descriptor_set_layout_desc *desc,
 	spudgpu_descriptor_set_layout *out_layout) {
     if (!device) return SPUDRESULT_GPU_INVALID_DEVICE;
+    if (SPUD_STALE(device, "spudgpu_create_descriptor_set_layout", "device")) return SPUDRESULT_GPU_INVALID_DEVICE;
     if (!desc) return SPUDRESULT_NULL_DESC;
     const SPUDRESULT base_sr = spud_struct_check(&desc->base, SPUD_STRUCT_TYPE_GPU_DESCRIPTOR_SET_LAYOUT_DESC);
     if (base_sr != SPUD_SUCCESS) return base_sr;
@@ -115,6 +120,7 @@ SPUDRESULT spudgpu_create_descriptor_set_layout(
 
     spudgpu_descriptor_set_layout_vulkan result = {0};
     result.head.allocator = device->head.allocator;
+    SPUD_BIRTH(&result);
     result._device = *device;
     result._desc = *desc;
 
@@ -188,11 +194,13 @@ SPUDRESULT spudgpu_create_descriptor_set_layout(
 void spudgpu_destroy_descriptor_set_layout(
     spudgpu_descriptor_set_layout layout) {
     if (!layout) return;
+    if (SPUD_STALE(layout, "spudgpu_destroy_descriptor_set_layout", "layout")) return;
     vkDestroyDescriptorSetLayout(
         layout->_device._logical_device_vk,
         layout->_layout_vk,
         NULL);
     SPUDGPU___LIVE_REMOVE(&layout->_device._shared->live, SPUDGPU___OBJECT_DESCRIPTOR_SET_LAYOUT);
+    SPUD_KILL(layout);
     const SPUD_ALLOCATOR allocator = layout->head.allocator;
     spud_string_free(&allocator, layout->head.debug_name);
     SPUD_DELETE(&allocator, spudgpu_descriptor_set_layout_vulkan, layout);
@@ -203,6 +211,7 @@ SPUDRESULT spudgpu_create_descriptor_pool(
     const spudgpu_descriptor_pool_desc *desc,
 	spudgpu_descriptor_pool *out_pool) {
     if (!device) return SPUDRESULT_GPU_INVALID_DEVICE;
+    if (SPUD_STALE(device, "spudgpu_create_descriptor_pool", "device")) return SPUDRESULT_GPU_INVALID_DEVICE;
     if (!desc) return SPUDRESULT_NULL_DESC;
     const SPUDRESULT base_sr = spud_struct_check(&desc->base, SPUD_STRUCT_TYPE_GPU_DESCRIPTOR_POOL_DESC);
     if (base_sr != SPUD_SUCCESS) return base_sr;
@@ -211,6 +220,7 @@ SPUDRESULT spudgpu_create_descriptor_pool(
 
     spudgpu_descriptor_pool_vulkan result = {0};
     result.head.allocator = device->head.allocator;
+    SPUD_BIRTH(&result);
     result._device = *device;
     result._desc = *desc;
 
@@ -296,6 +306,7 @@ static void spudgpuvulkan___release_descriptor_sets(spudgpu_descriptor_pool_vulk
     spudgpu_descriptor_set_vulkan *set = pool->_sets;
     while (set) {
         spudgpu_descriptor_set_vulkan *next = set->_next;
+        SPUD_KILL(set);
         const SPUD_ALLOCATOR allocator = set->head.allocator;
         spud_string_free(&allocator, set->head.debug_name);
         SPUD_DELETE(&allocator, spudgpu_descriptor_set_vulkan, set);
@@ -307,6 +318,7 @@ static void spudgpuvulkan___release_descriptor_sets(spudgpu_descriptor_pool_vulk
 void spudgpu_reset_descriptor_pool(
     spudgpu_descriptor_pool pool) {
     if (!pool) return;
+    if (SPUD_STALE(pool, "spudgpu_reset_descriptor_pool", "pool")) return;
     // Bulk-free all sets allocated from this pool. The 'flags' parameter is reserved and must be 0.
 	vkResetDescriptorPool(pool->_device._logical_device_vk, pool->_pool_vk, 0);
 	spudgpuvulkan___release_descriptor_sets(pool);
@@ -315,6 +327,7 @@ void spudgpu_reset_descriptor_pool(
 void spudgpu_destroy_descriptor_pool(
     spudgpu_descriptor_pool pool) {
     if (!pool) return;
+    if (SPUD_STALE(pool, "spudgpu_destroy_descriptor_pool", "pool")) return;
     // vkDestroyDescriptorPool implicitly frees all descriptor sets allocated from it.
     vkDestroyDescriptorPool(
         pool->_device._logical_device_vk,
@@ -323,6 +336,7 @@ void spudgpu_destroy_descriptor_pool(
     spudgpuvulkan___release_descriptor_sets(pool);
     spudgpu___internal_budget_give_back(&pool->_device._shared->budget, pool->_budget_descriptors, pool->_budget_samplers);
     SPUDGPU___LIVE_REMOVE(&pool->_device._shared->live, SPUDGPU___OBJECT_DESCRIPTOR_POOL);
+    SPUD_KILL(pool);
     const SPUD_ALLOCATOR allocator = pool->head.allocator;
     spud_string_free(&allocator, pool->head.debug_name);
     SPUD_DELETE(&allocator, spudgpu_descriptor_pool_vulkan, pool);
@@ -333,6 +347,7 @@ SPUDRESULT spudgpu_create_descriptor_sets(
     const spudgpu_descriptor_set_desc *desc,
     spudgpu_descriptor_set *out_sets) {
     if (!device) return SPUDRESULT_GPU_INVALID_DEVICE;
+    if (SPUD_STALE(device, "spudgpu_create_descriptor_sets", "device")) return SPUDRESULT_GPU_INVALID_DEVICE;
     if (!desc) return SPUDRESULT_NULL_DESC;
     const SPUDRESULT base_sr = spud_struct_check(&desc->base, SPUD_STRUCT_TYPE_GPU_DESCRIPTOR_SET_DESC);
     if (base_sr != SPUD_SUCCESS) return base_sr;
@@ -379,6 +394,7 @@ SPUDRESULT spudgpu_create_descriptor_sets(
         }
         pSet->head.debug_name = NULL;
         pSet->head.allocator = desc->pool->head.allocator;
+        SPUD_BIRTH(pSet);
         pSet->_pool = *desc->pool;
         pSet->_set_vk = vk_sets[i];
         pSet->_next = desc->pool->_sets;
@@ -395,6 +411,7 @@ void spudgpu_update_descriptor_sets(
     const spudgpu_write_descriptor_set *writes,
     uint32_t write_count) {
     if (!device || !writes || !write_count) return;
+    if (SPUD_STALE(device, "spudgpu_update_descriptor_sets", "device")) return;
     for (uint32_t writes_i = 0; writes_i < write_count; ++writes_i)
         if (spud_struct_check(&writes[writes_i].base, SPUD_STRUCT_TYPE_GPU_WRITE_DESCRIPTOR_SET) != SPUD_SUCCESS)
             return;
@@ -467,6 +484,8 @@ void spudgpu_cmd_bind_descriptor_sets(
     const spudgpu_descriptor_set *sets,
     uint32_t set_count) {
     if (!cmd || !pipeline || !sets || !set_count) return;
+    if (SPUD_STALE(cmd, "spudgpu_cmd_bind_descriptor_sets", "cmd")) return;
+    if (SPUD_STALE(pipeline, "spudgpu_cmd_bind_descriptor_sets", "pipeline")) return;
     if (set_count > SPUDGPU_MAX_DESCRIPTOR_SET_LAYOUTS) return;
     if (first_set > SPUDGPU_MAX_DESCRIPTOR_SET_LAYOUTS - set_count) return;
 
@@ -501,6 +520,8 @@ void spudgpu_cmd_bind_descriptor_sets_compute(
     const spudgpu_descriptor_set *sets,
     uint32_t set_count) {
     if (!cmd || !pipeline || !sets || !set_count) return;
+    if (SPUD_STALE(cmd, "spudgpu_cmd_bind_descriptor_sets_compute", "cmd")) return;
+    if (SPUD_STALE(pipeline, "spudgpu_cmd_bind_descriptor_sets_compute", "pipeline")) return;
     if (set_count > SPUDGPU_MAX_DESCRIPTOR_SET_LAYOUTS) return;
     if (first_set > SPUDGPU_MAX_DESCRIPTOR_SET_LAYOUTS - set_count) return;
 
@@ -584,6 +605,7 @@ SPUDRESULT spudgpuvulkan___create_bindless_state(spudgpu_device device) {
         return SPUDRESULT_API_SPECIFIC_FAILURE;
     }
     layoutWrapper->head.allocator = device->head.allocator;
+    SPUD_BIRTH(layoutWrapper);
     layoutWrapper->_device = *device;
 
     if (vkCreateDescriptorSetLayout(
@@ -654,6 +676,7 @@ void spudgpuvulkan___destroy_bindless_state(spudgpu_device device) {
     vkDestroyDescriptorPool(device->_logical_device_vk, state->pool_vk, NULL);
     spudgpu_descriptor_set_layout_vulkan *layoutWrapper = (spudgpu_descriptor_set_layout_vulkan *) state->layout;
     if (layoutWrapper) {
+        SPUD_KILL(layoutWrapper);
         vkDestroyDescriptorSetLayout(device->_logical_device_vk, layoutWrapper->_layout_vk, NULL);
         spud_string_free(&allocator, layoutWrapper->head.debug_name);
         SPUD_DELETE(&allocator, spudgpu_descriptor_set_layout_vulkan, layoutWrapper);
@@ -680,6 +703,7 @@ static SPUDRESULT spudgpuvulkan___bindless_alloc_index(
 
 spudgpu_descriptor_set_layout spudgpu_get_bindless_descriptor_set_layout(spudgpu_device device) {
     if (!device) return NULL;
+    if (SPUD_STALE(device, "spudgpu_get_bindless_descriptor_set_layout", "device")) return NULL;
     if (!device->_bindless) return NULL;
     return device->_bindless->layout;
 }
@@ -689,7 +713,9 @@ SPUDRESULT spudgpu_bindless_register_sampled_image(
         spudgpu_image_view view,
         uint32_t *out_index) {
     if (!device) return SPUDRESULT_GPU_INVALID_DEVICE;
+    if (SPUD_STALE(device, "spudgpu_bindless_register_sampled_image", "device")) return SPUDRESULT_GPU_INVALID_DEVICE;
     if (!view) return SPUDRESULT_GPU_INVALID_IMAGE_VIEW;
+    if (SPUD_STALE(view, "spudgpu_bindless_register_sampled_image", "view")) return SPUDRESULT_GPU_INVALID_IMAGE_VIEW;
     if (!out_index) return SPUDRESULT_NULL_OUTPUT_PARAMETER;
 
     spudgpu_bindless_state_vulkan *state = device->_bindless;
@@ -727,7 +753,9 @@ SPUDRESULT spudgpu_bindless_register_sampled_image(
 }
 
 void spudgpu_bindless_unregister_sampled_image(spudgpu_device device, uint32_t index) {
-    if (!device || !device->_bindless) return;
+    if (!device) return;
+    if (SPUD_STALE(device, "spudgpu_bindless_unregister_sampled_image", "device")) return;
+    if (!device->_bindless) return;
     if (index == SPUDGPU_BINDLESS_INVALID_INDEX) return;
     spudgpu_bindless_state_vulkan *state = device->_bindless;
     spud_mutex_lock(&state->lock);
@@ -741,7 +769,9 @@ SPUDRESULT spudgpu_bindless_register_storage_image(
         spudgpu_image_view view,
         uint32_t *out_index) {
     if (!device) return SPUDRESULT_GPU_INVALID_DEVICE;
+    if (SPUD_STALE(device, "spudgpu_bindless_register_storage_image", "device")) return SPUDRESULT_GPU_INVALID_DEVICE;
     if (!view) return SPUDRESULT_GPU_INVALID_IMAGE_VIEW;
+    if (SPUD_STALE(view, "spudgpu_bindless_register_storage_image", "view")) return SPUDRESULT_GPU_INVALID_IMAGE_VIEW;
     if (!out_index) return SPUDRESULT_NULL_OUTPUT_PARAMETER;
 
     spudgpu_bindless_state_vulkan *state = device->_bindless;
@@ -779,7 +809,9 @@ SPUDRESULT spudgpu_bindless_register_storage_image(
 }
 
 void spudgpu_bindless_unregister_storage_image(spudgpu_device device, uint32_t index) {
-    if (!device || !device->_bindless) return;
+    if (!device) return;
+    if (SPUD_STALE(device, "spudgpu_bindless_unregister_storage_image", "device")) return;
+    if (!device->_bindless) return;
     if (index == SPUDGPU_BINDLESS_INVALID_INDEX) return;
     spudgpu_bindless_state_vulkan *state = device->_bindless;
     spud_mutex_lock(&state->lock);
@@ -793,7 +825,9 @@ SPUDRESULT spudgpu_bindless_register_storage_buffer(
         spudgpu_buffer_view view,
         uint32_t *out_index) {
     if (!device) return SPUDRESULT_GPU_INVALID_DEVICE;
+    if (SPUD_STALE(device, "spudgpu_bindless_register_storage_buffer", "device")) return SPUDRESULT_GPU_INVALID_DEVICE;
     if (!view) return SPUDRESULT_GPU_INVALID_BUFFER_VIEW;
+    if (SPUD_STALE(view, "spudgpu_bindless_register_storage_buffer", "view")) return SPUDRESULT_GPU_INVALID_BUFFER_VIEW;
     if (!out_index) return SPUDRESULT_NULL_OUTPUT_PARAMETER;
 
     spudgpu_bindless_state_vulkan *state = device->_bindless;
@@ -840,7 +874,9 @@ SPUDRESULT spudgpu_bindless_register_storage_buffer(
 }
 
 void spudgpu_bindless_unregister_storage_buffer(spudgpu_device device, uint32_t index) {
-    if (!device || !device->_bindless) return;
+    if (!device) return;
+    if (SPUD_STALE(device, "spudgpu_bindless_unregister_storage_buffer", "device")) return;
+    if (!device->_bindless) return;
     if (index == SPUDGPU_BINDLESS_INVALID_INDEX) return;
     spudgpu_bindless_state_vulkan *state = device->_bindless;
     spud_mutex_lock(&state->lock);

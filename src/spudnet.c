@@ -117,6 +117,8 @@ SPUDRESULT spudnet_get_local_ipv4_addresses(
 	*out_count = 0;
 	if (!instance)
 		return SPUDRESULT_SPUDNET_INVALID_INSTANCE;
+	if (SPUD_STALE(instance, "spudnet_get_local_ipv4_addresses", "instance"))
+		return SPUDRESULT_SPUDNET_INVALID_INSTANCE;
 	if (out_capacity == 0)
 		return SPUD_SUCCESS;
 

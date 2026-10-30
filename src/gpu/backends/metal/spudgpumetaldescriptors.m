@@ -59,6 +59,8 @@ SPUDRESULT spudgpu_create_sampler(
     spudgpu_sampler *out_sampler) {
 	if (!device)
 		return SPUDRESULT_GPU_INVALID_DEVICE;
+	if (SPUD_STALE(device, "spudgpu_create_sampler", "device"))
+		return SPUDRESULT_GPU_INVALID_DEVICE;
 	if (!desc)
 		return SPUDRESULT_NULL_DESC;
 	const SPUDRESULT base_sr = spud_struct_check(&desc->base, SPUD_STRUCT_TYPE_GPU_SAMPLER_DESC);
@@ -101,6 +103,7 @@ SPUDRESULT spudgpu_create_sampler(
 		return SPUDRESULT_OUT_OF_MEMORY;
 	}
 	sampler_metal->head.allocator     = device_metal->head.allocator;
+	SPUD_BIRTH(sampler_metal);
 	sampler_metal->_sampler_state_mtl = [state retain];
 	sampler_metal->_parent_device     = device_metal;
 	SPUDGPU___LIVE_ADD(&device_metal->_live, SPUDGPU___OBJECT_SAMPLER);
@@ -118,8 +121,11 @@ void spudgpu_destroy_sampler(spudgpu_sampler sampler) {
 	spudgpu_sampler_metal *sampler_metal = (spudgpu_sampler_metal *)sampler;
 	if (!sampler_metal)
 		return;
+	if (SPUD_STALE(sampler, "spudgpu_destroy_sampler", "sampler"))
+		return;
 	[sampler_metal->_sampler_state_mtl release];
 	SPUDGPU___LIVE_REMOVE(&sampler_metal->_parent_device->_live, SPUDGPU___OBJECT_SAMPLER);
+	SPUD_KILL(sampler);
 	const SPUD_ALLOCATOR allocator = sampler_metal->head.allocator;
 	spud_string_free(&allocator, sampler_metal->head.debug_name);
 	SPUD_DELETE(&allocator, spudgpu_sampler_metal, sampler_metal);
@@ -141,6 +147,8 @@ SPUDRESULT spudgpu_create_descriptor_set_layout(
     spudgpu_descriptor_set_layout *out_layout) {
 	if (!device)
 		return SPUDRESULT_GPU_INVALID_DEVICE;
+	if (SPUD_STALE(device, "spudgpu_create_descriptor_set_layout", "device"))
+		return SPUDRESULT_GPU_INVALID_DEVICE;
 	if (!desc)
 		return SPUDRESULT_NULL_DESC;
 	const SPUDRESULT base_sr = spud_struct_check(&desc->base, SPUD_STRUCT_TYPE_GPU_DESCRIPTOR_SET_LAYOUT_DESC);
@@ -160,6 +168,7 @@ SPUDRESULT spudgpu_create_descriptor_set_layout(
 		goto failedattempt;
 	}
 	layout_metal->head.allocator = device->head.allocator;
+	SPUD_BIRTH(layout_metal);
 	layout_metal->_parent_device = (spudgpu_device_metal *)device;
 	layout_metal->_desc          = *desc;
 
@@ -251,10 +260,13 @@ failedattempt:
 void spudgpu_destroy_descriptor_set_layout(spudgpu_descriptor_set_layout layout) {
 	spudgpu_descriptor_set_layout_metal *layout_metal = (spudgpu_descriptor_set_layout_metal *)layout;
 	if (layout_metal) {
+		if (SPUD_STALE(layout, "spudgpu_destroy_descriptor_set_layout", "layout"))
+			return;
 		if (layout_metal->_argument_encoder_mtl) {
 			[layout_metal->_argument_encoder_mtl release];
 		}
 		SPUDGPU___LIVE_REMOVE(&layout_metal->_parent_device->_live, SPUDGPU___OBJECT_DESCRIPTOR_SET_LAYOUT);
+		SPUD_KILL(layout);
 		const SPUD_ALLOCATOR allocator = layout_metal->head.allocator;
 		spud_string_free(&allocator, layout_metal->head.debug_name);
 		SPUD_DELETE(&allocator, spudgpu_descriptor_set_layout_metal, layout_metal);
@@ -266,6 +278,8 @@ SPUDRESULT spudgpu_create_descriptor_pool(
     const spudgpu_descriptor_pool_desc *desc,
     spudgpu_descriptor_pool *out_pool) {
 	if (!device)
+		return SPUDRESULT_GPU_INVALID_DEVICE;
+	if (SPUD_STALE(device, "spudgpu_create_descriptor_pool", "device"))
 		return SPUDRESULT_GPU_INVALID_DEVICE;
 	if (!desc)
 		return SPUDRESULT_NULL_DESC;
@@ -291,6 +305,7 @@ SPUDRESULT spudgpu_create_descriptor_pool(
 		goto failedattempt;
 	}
 	pool_metal->head.allocator      = device->head.allocator;
+	SPUD_BIRTH(pool_metal);
 	pool_metal->_parent_device      = (spudgpu_device_metal *)device;
 	pool_metal->_desc               = *desc;
 	pool_metal->_budget_descriptors = budget_descriptors;
@@ -339,6 +354,7 @@ static void spudgpumetal___internal_free_tracked_sets(spudgpu_descriptor_pool_me
 		spudgpu_descriptor_set_metal *set_metal = pool_metal->_tracked_sets_mtl[i];
 		if (!set_metal)
 			continue;
+		SPUD_KILL(set_metal);
 		if (set_metal->_argument_buffer_mtl) {
 			[set_metal->_argument_buffer_mtl release];
 		}
@@ -353,6 +369,8 @@ void spudgpu_reset_descriptor_pool(spudgpu_descriptor_pool pool) {
 	spudgpu_descriptor_pool_metal *pool_metal = (spudgpu_descriptor_pool_metal *)pool;
 	if (!pool_metal)
 		return;
+	if (SPUD_STALE(pool, "spudgpu_reset_descriptor_pool", "pool"))
+		return;
 	spudgpumetal___internal_free_tracked_sets(pool_metal);
 }
 
@@ -360,9 +378,12 @@ void spudgpu_destroy_descriptor_pool(spudgpu_descriptor_pool pool) {
 	spudgpu_descriptor_pool_metal *pool_metal = (spudgpu_descriptor_pool_metal *)pool;
 	if (!pool_metal)
 		return;
+	if (SPUD_STALE(pool, "spudgpu_destroy_descriptor_pool", "pool"))
+		return;
 	spudgpumetal___internal_free_tracked_sets(pool_metal);
 	spudgpu___internal_budget_give_back(&pool_metal->_parent_device->_budget, pool_metal->_budget_descriptors, pool_metal->_budget_samplers);
 	SPUDGPU___LIVE_REMOVE(&pool_metal->_parent_device->_live, SPUDGPU___OBJECT_DESCRIPTOR_POOL);
+	SPUD_KILL(pool);
 	const SPUD_ALLOCATOR allocator = pool_metal->head.allocator;
 	SPUD_DELETE_ARRAY(&allocator, spudgpu_descriptor_set_metal *, pool_metal->_tracked_sets_mtl, pool_metal->_desc.max_sets);
 	spud_string_free(&allocator, pool_metal->head.debug_name);
@@ -374,6 +395,8 @@ SPUDRESULT spudgpu_create_descriptor_sets(
     const spudgpu_descriptor_set_desc *desc,
     spudgpu_descriptor_set *out_sets) {
 	if (!device)
+		return SPUDRESULT_GPU_INVALID_DEVICE;
+	if (SPUD_STALE(device, "spudgpu_create_descriptor_sets", "device"))
 		return SPUDRESULT_GPU_INVALID_DEVICE;
 	if (!desc)
 		return SPUDRESULT_NULL_DESC;
@@ -405,6 +428,7 @@ SPUDRESULT spudgpu_create_descriptor_sets(
 			return SPUDRESULT_GPU_INTERNAL_DESCRIPTOR_SET_ALLOCATION_FAIL;
 
 		set_metal->head.allocator = pool_metal->head.allocator;
+		SPUD_BIRTH(set_metal);
 		set_metal->_parent_pool   = pool_metal;
 		set_metal->_layout      = layout_metal;
 		set_metal->_argument_buffer_mtl =
@@ -429,6 +453,8 @@ void spudgpu_update_descriptor_sets(
     const spudgpu_write_descriptor_set *writes,
     uint32_t write_count) {
 	if (!device || !writes || write_count == 0)
+		return;
+	if (SPUD_STALE(device, "spudgpu_update_descriptor_sets", "device"))
 		return;
 	for (uint32_t writes_i = 0; writes_i < write_count; ++writes_i)
 		if (spud_struct_check(&writes[writes_i].base, SPUD_STRUCT_TYPE_GPU_WRITE_DESCRIPTOR_SET) != SPUD_SUCCESS)
@@ -522,6 +548,10 @@ void spudgpu_cmd_bind_descriptor_sets(
     uint32_t set_count) {
 	if (!cmd || !pipeline || !sets || set_count == 0)
 		return;
+	if (SPUD_STALE(cmd, "spudgpu_cmd_bind_descriptor_sets", "cmd"))
+		return;
+	if (SPUD_STALE(pipeline, "spudgpu_cmd_bind_descriptor_sets", "pipeline"))
+		return;
 	if (set_count > SPUDGPU_MAX_DESCRIPTOR_SET_LAYOUTS)
 		return;
 	if (first_set > SPUDGPU_MAX_DESCRIPTOR_SET_LAYOUTS - set_count)
@@ -591,6 +621,10 @@ void spudgpu_cmd_bind_descriptor_sets_compute(
     const spudgpu_descriptor_set *sets,
     uint32_t set_count) {
 	if (!cmd || !pipeline || !sets || set_count == 0)
+		return;
+	if (SPUD_STALE(cmd, "spudgpu_cmd_bind_descriptor_sets_compute", "cmd"))
+		return;
+	if (SPUD_STALE(pipeline, "spudgpu_cmd_bind_descriptor_sets_compute", "pipeline"))
 		return;
 	if (set_count > SPUDGPU_MAX_DESCRIPTOR_SET_LAYOUTS)
 		return;

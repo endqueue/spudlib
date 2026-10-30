@@ -19,7 +19,8 @@ extern "C" {
 #endif
 
 struct spudfile_instance_t {
-	SPUD_ALLOCATOR allocator;
+	/* No debug name: the instance desc has none. */
+	spud_object_head head;
 };
 
 struct spudfile_file_t {

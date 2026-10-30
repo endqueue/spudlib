@@ -1023,7 +1023,7 @@ static SPUDRESULT spudinput_evdev_scan(
 			continue;
 
 		bool out_of_memory       = false;
-		spudinput_evdev_pad *pad = spudinput_evdev_open(&instance->allocator, path, entry->d_name, info.st_rdev, &out_of_memory);
+		spudinput_evdev_pad *pad = spudinput_evdev_open(&instance->head.allocator, path, entry->d_name, info.st_rdev, &out_of_memory);
 		if (out_of_memory) {
 			result = SPUDRESULT_OUT_OF_MEMORY;
 			break;
@@ -1033,7 +1033,7 @@ static SPUDRESULT spudinput_evdev_scan(
 
 		if (count == capacity) {
 			const uint32_t grown       = capacity ? capacity * 2 : 4;
-			spudinput_evdev_pad **more = SPUD_RESIZE_ARRAY(&instance->allocator, spudinput_evdev_pad *, pads, capacity, grown);
+			spudinput_evdev_pad **more = SPUD_RESIZE_ARRAY(&instance->head.allocator, spudinput_evdev_pad *, pads, capacity, grown);
 			if (!more) {
 				spudinput_evdev_close(pad);
 				result = SPUDRESULT_OUT_OF_MEMORY;
@@ -1049,7 +1049,7 @@ static SPUDRESULT spudinput_evdev_scan(
 	if (result != SPUD_SUCCESS) {
 		for (uint32_t i = 0; i < count; ++i)
 			spudinput_evdev_close(pads[i]);
-		SPUD_DELETE_ARRAY(&instance->allocator, spudinput_evdev_pad *, pads, capacity);
+		SPUD_DELETE_ARRAY(&instance->head.allocator, spudinput_evdev_pad *, pads, capacity);
 		return result;
 	}
 
@@ -1086,21 +1086,21 @@ SPUDINPUT_BACKEND_FUNCTION SPUDRESULT spudinput_evdev_create(spudinput_instance 
 	if (!instance->desc.read_in_background)
 		return SPUDRESULT_SPUDINPUT_UNSUPPORTED;
 
-	spudinput_evdev_instance *backend = SPUD_NEW_ZEROED(&instance->allocator, spudinput_evdev_instance);
+	spudinput_evdev_instance *backend = SPUD_NEW_ZEROED(&instance->head.allocator, spudinput_evdev_instance);
 	if (!backend)
 		return SPUDRESULT_OUT_OF_MEMORY;
 	backend->rescan = true;
 
 	backend->inotify_fd = inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
 	if (backend->inotify_fd < 0) {
-		SPUD_DELETE(&instance->allocator, spudinput_evdev_instance, backend);
+		SPUD_DELETE(&instance->head.allocator, spudinput_evdev_instance, backend);
 		return SPUDRESULT_API_SPECIFIC_FAILURE;
 	}
 	if (inotify_add_watch(backend->inotify_fd, SPUDINPUT_EVDEV_DIRECTORY, IN_CREATE | IN_ATTRIB) < 0) {
 		/* No directory: nothing to watch, and nothing to find. */
 		if (errno != ENOENT) {
 			close(backend->inotify_fd);
-			SPUD_DELETE(&instance->allocator, spudinput_evdev_instance, backend);
+			SPUD_DELETE(&instance->head.allocator, spudinput_evdev_instance, backend);
 			return SPUDRESULT_API_SPECIFIC_FAILURE;
 		}
 		close(backend->inotify_fd);
@@ -1115,7 +1115,7 @@ SPUDINPUT_BACKEND_FUNCTION void spudinput_evdev_destroy(spudinput_instance insta
 	spudinput_evdev_instance *backend = (spudinput_evdev_instance *)instance->backend;
 	if (backend->inotify_fd >= 0)
 		close(backend->inotify_fd);
-	SPUD_DELETE(&instance->allocator, spudinput_evdev_instance, backend);
+	SPUD_DELETE(&instance->head.allocator, spudinput_evdev_instance, backend);
 	instance->backend = NULL;
 }
 
@@ -1150,7 +1150,7 @@ SPUDINPUT_BACKEND_FUNCTION SPUDRESULT spudinput_evdev_poll(spudinput_instance in
 		if (result != SPUD_SUCCESS) {
 			for (uint32_t i = 0; i < arrived_count; ++i)
 				spudinput_evdev_close(arrived[i]);
-			SPUD_DELETE_ARRAY(&instance->allocator, spudinput_evdev_pad *, arrived, arrived_capacity);
+			SPUD_DELETE_ARRAY(&instance->head.allocator, spudinput_evdev_pad *, arrived, arrived_capacity);
 			return result;
 		}
 		backend->rescan = false;
@@ -1181,7 +1181,7 @@ SPUDINPUT_BACKEND_FUNCTION SPUDRESULT spudinput_evdev_poll(spudinput_instance in
 		spudinput_evdev_read_whole(pad);
 		spudinput_evdev_fill_record(record, pad);
 	}
-	SPUD_DELETE_ARRAY(&instance->allocator, spudinput_evdev_pad *, arrived, arrived_capacity);
+	SPUD_DELETE_ARRAY(&instance->head.allocator, spudinput_evdev_pad *, arrived, arrived_capacity);
 
 	return SPUD_SUCCESS;
 }

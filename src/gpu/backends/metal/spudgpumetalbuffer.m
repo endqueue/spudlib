@@ -58,6 +58,8 @@ SPUDRESULT spudgpu_create_buffer(
     spudgpu_buffer *out_buffer) {
 	if (!device)
 		return SPUDRESULT_GPU_INVALID_DEVICE;
+	if (SPUD_STALE(device, "spudgpu_create_buffer", "device"))
+		return SPUDRESULT_GPU_INVALID_DEVICE;
 	if (!desc)
 		return SPUDRESULT_NULL_DESC;
 	const SPUDRESULT base_sr = spud_struct_check(&desc->base, SPUD_STRUCT_TYPE_GPU_BUFFER_DESC);
@@ -77,6 +79,7 @@ SPUDRESULT spudgpu_create_buffer(
 		goto failedattempt;
 	}
 	buffer_metal->head.allocator = device_metal->head.allocator;
+	SPUD_BIRTH(buffer_metal);
 	buffer_metal->_parent_device = device_metal;
 	buffer_metal->_desc          = *desc;
 
@@ -107,6 +110,8 @@ failedattempt:
 void spudgpu_destroy_buffer(spudgpu_buffer buffer) {
 	spudgpu_buffer_metal *buffer_metal = (spudgpu_buffer_metal *)buffer;
 	if (buffer_metal) {
+		if (SPUD_STALE(buffer, "spudgpu_destroy_buffer", "buffer"))
+			return;
 		if (buffer_metal->_buffer_mtl) {
 			[buffer_metal->_buffer_mtl release];
 		}
@@ -115,6 +120,7 @@ void spudgpu_destroy_buffer(spudgpu_buffer buffer) {
 			buffer_metal->_heap->_placed_count--;
 #endif
 		SPUDGPU___LIVE_REMOVE(&buffer_metal->_parent_device->_live, SPUDGPU___OBJECT_BUFFER);
+		SPUD_KILL(buffer);
 		const SPUD_ALLOCATOR allocator = buffer_metal->head.allocator;
 		spud_string_free(&allocator, buffer_metal->head.debug_name);
 		SPUD_DELETE(&allocator, spudgpu_buffer_metal, buffer_metal);
@@ -125,6 +131,8 @@ SPUDRESULT spudgpu_get_buffer_desc(
     spudgpu_buffer_desc *out_desc) {
 	spudgpu_buffer_metal *buffer_metal = (spudgpu_buffer_metal *)buffer;
 	if (!buffer_metal)
+		return SPUDRESULT_GPU_INVALID_BUFFER;
+	if (SPUD_STALE(buffer, "spudgpu_get_buffer_desc", "buffer"))
 		return SPUDRESULT_GPU_INVALID_BUFFER;
 	if (!out_desc)
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
@@ -138,6 +146,8 @@ SPUDRESULT spudgpu_get_buffer_gpu_address(
     uint64_t *out_address) {
 	spudgpu_buffer_metal *buffer_metal = (spudgpu_buffer_metal *)buffer;
 	if (!buffer_metal)
+		return SPUDRESULT_GPU_INVALID_BUFFER;
+	if (SPUD_STALE(buffer, "spudgpu_get_buffer_gpu_address", "buffer"))
 		return SPUDRESULT_GPU_INVALID_BUFFER;
 	if (!out_address)
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
@@ -153,6 +163,8 @@ SPUDRESULT spudgpu_create_buffer_view(
     const spudgpu_buffer_view_desc *desc,
     spudgpu_buffer_view *out_buffer_view) {
 	if (!buffer)
+		return SPUDRESULT_GPU_INVALID_BUFFER;
+	if (SPUD_STALE(buffer, "spudgpu_create_buffer_view", "buffer"))
 		return SPUDRESULT_GPU_INVALID_BUFFER;
 	if (!desc)
 		return SPUDRESULT_NULL_DESC;
@@ -176,6 +188,7 @@ SPUDRESULT spudgpu_create_buffer_view(
 		goto failedattempt;
 	}
 	result->head.allocator      = parent_buffer_metal->head.allocator;
+	SPUD_BIRTH(result);
 	result->_desc               = *desc;
 	result->_desc.parent_buffer = buffer; // Authoritative - see spudgpu_buffer_view_metal.
 	result->_parent_device      = parent_buffer_metal->_parent_device;
@@ -192,7 +205,10 @@ failedattempt:
 void spudgpu_destroy_buffer_view(spudgpu_buffer_view buffer_view) {
 	if (!buffer_view)
 		return;
+	if (SPUD_STALE(buffer_view, "spudgpu_destroy_buffer_view", "buffer_view"))
+		return;
 	SPUDGPU___LIVE_REMOVE(&buffer_view->_parent_device->_live, SPUDGPU___OBJECT_BUFFER_VIEW);
+	SPUD_KILL(buffer_view);
 	const SPUD_ALLOCATOR allocator = buffer_view->head.allocator;
 	spud_string_free(&allocator, buffer_view->head.debug_name);
 	SPUD_DELETE(&allocator, spudgpu_buffer_view_metal, buffer_view);
@@ -201,6 +217,8 @@ SPUDRESULT spudgpu_get_buffer_view_desc(
     spudgpu_buffer_view buffer_view,
     spudgpu_buffer_view_desc *out_desc) {
 	if (!buffer_view)
+		return SPUDRESULT_GPU_INVALID_BUFFER_VIEW;
+	if (SPUD_STALE(buffer_view, "spudgpu_get_buffer_view_desc", "buffer_view"))
 		return SPUDRESULT_GPU_INVALID_BUFFER_VIEW;
 	if (!out_desc)
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
@@ -215,6 +233,8 @@ SPUDRESULT spudgpu_map_buffer(
     uint64_t size,
     void **ppData) {
 	if (!buffer)
+		return SPUDRESULT_GPU_INVALID_BUFFER;
+	if (SPUD_STALE(buffer, "spudgpu_map_buffer", "buffer"))
 		return SPUDRESULT_GPU_INVALID_BUFFER;
 
 	spudgpu_buffer_metal *buffer_metal = (spudgpu_buffer_metal *)buffer;
@@ -245,6 +265,8 @@ void spudgpu_unmap_buffer(spudgpu_buffer buffer) {
 	// Nothing to unmap - see spudgpu_map_buffer.
 	if (!buffer)
 		return;
+	if (SPUD_STALE(buffer, "spudgpu_unmap_buffer", "buffer"))
+		return;
 }
 
 // A Shared-storage MTLBuffer is one piece of memory the CPU and the GPU both
@@ -257,6 +279,8 @@ SPUDRESULT spudgpu_flush_buffer(
     uint64_t offset,
     uint64_t size) {
 	if (!buffer)
+		return SPUDRESULT_GPU_INVALID_BUFFER;
+	if (SPUD_STALE(buffer, "spudgpu_flush_buffer", "buffer"))
 		return SPUDRESULT_GPU_INVALID_BUFFER;
 
 	spudgpu_buffer_metal *buffer_metal = (spudgpu_buffer_metal *)buffer;
@@ -273,6 +297,8 @@ SPUDRESULT spudgpu_invalidate_buffer(
     uint64_t offset,
     uint64_t size) {
 	if (!buffer)
+		return SPUDRESULT_GPU_INVALID_BUFFER;
+	if (SPUD_STALE(buffer, "spudgpu_invalidate_buffer", "buffer"))
 		return SPUDRESULT_GPU_INVALID_BUFFER;
 
 	spudgpu_buffer_metal *buffer_metal = (spudgpu_buffer_metal *)buffer;

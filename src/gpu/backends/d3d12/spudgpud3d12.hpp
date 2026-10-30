@@ -298,6 +298,11 @@ typedef struct spudgpu_command_queue_t {
 	spud_object_head head;
 	spudgpu_device_d3d12 *_device;
 	Microsoft::WRL::ComPtr<ID3D12CommandQueue> _d3d_cmd_queue;
+	// The lists of a submission, as D3D12 takes them: kept with its
+	// capacity from submission to submission, on the device's
+	// _eq_allocator, so a steady stream of submissions allocates nothing.
+	// A queue is used by one caller at a time (spudgpu.h).
+	eq::array<ID3D12CommandList *> _scratch_lists;
 #if _DEBUG
 	// How many threads are in a call that uses the queue: a debug build
 	// asserts it is never more than one (spudgpu_d3d12___queue_enter).
@@ -360,6 +365,15 @@ typedef struct spudgpu_command_list_t {
 	// (spudgpu_rendering_begin_desc::timestamp_set); nullptr for none.
 	ID3D12QueryHeap *_end_timestamp_heap;
 	UINT _end_timestamp_index;
+
+	// What a recording call converts the caller's array into before D3D12
+	// takes it: barriers, scissor rectangles, vertex buffer views. Each
+	// keeps its capacity from call to call, on the device's _eq_allocator,
+	// so recording allocates only until the largest call has been seen.
+	// Cleared by each call that uses it; nothing is kept between calls.
+	eq::array<D3D12_RESOURCE_BARRIER> _scratch_barriers;
+	eq::array<D3D12_RECT> _scratch_rects;
+	eq::array<D3D12_VERTEX_BUFFER_VIEW> _scratch_vb_views;
 } spudgpu_command_list_d3d12;
 
 typedef struct spudgpu_timestamp_set_t {

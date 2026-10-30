@@ -280,6 +280,8 @@ SPUDRESULT spudgpu_create_image(
     spudgpu_image *out_image) {
 	if (!device)
 		return SPUDRESULT_GPU_INVALID_DEVICE;
+	if (SPUD_STALE(device, "spudgpu_create_image", "device"))
+		return SPUDRESULT_GPU_INVALID_DEVICE;
 	if (!desc)
 		return SPUDRESULT_NULL_DESC;
 	const SPUDRESULT base_sr = spud_struct_check(&desc->base, SPUD_STRUCT_TYPE_GPU_IMAGE_DESC);
@@ -297,6 +299,7 @@ SPUDRESULT spudgpu_create_image(
 		return SPUDRESULT_OUT_OF_MEMORY;
 	pResult                      = new (pResult) spudgpu_image_d3d12();
 	pResult->head.allocator      = device->head.allocator;
+	SPUD_BIRTH(pResult);
 	pResult->_subresource_states = eq::array<D3D12_RESOURCE_STATES>(&device->_eq_allocator);
 	pResult->_device        = device;
 	pResult->_desc          = *desc;
@@ -349,11 +352,13 @@ SPUDRESULT spudgpu_create_image(
 }
 void spudgpu_destroy_image(spudgpu_image image) {
     if (!image) return;
+    if (SPUD_STALE(image, "spudgpu_destroy_image", "image")) return;
 #if _DEBUG
     if (image->_heap)
         image->_heap->_placed_count--;
 #endif
     SPUDGPU___LIVE_REMOVE(&image->_device->_live, SPUDGPU___OBJECT_IMAGE);
+    SPUD_KILL(image);
     const SPUD_ALLOCATOR allocator = image->head.allocator;
     spud_string_free(&allocator, image->head.debug_name);
     image->~spudgpu_image_d3d12();
@@ -363,6 +368,7 @@ SPUDRESULT spudgpu_get_image_desc(
 	spudgpu_image image,
 	spudgpu_image_desc *out_desc) {
     if (!image) return SPUDRESULT_GPU_INVALID_IMAGE;
+    if (SPUD_STALE(image, "spudgpu_get_image_desc", "image")) return SPUDRESULT_GPU_INVALID_IMAGE;
     if (!out_desc) return SPUDRESULT_NULL_OUTPUT_PARAMETER;
     *out_desc = image->_desc;
     out_desc->base = spud_struct_base(SPUD_STRUCT_TYPE_GPU_IMAGE_DESC);
@@ -375,6 +381,8 @@ SPUDRESULT spudgpu_create_image_view(
     const spudgpu_image_view_desc *desc,
     spudgpu_image_view *out_image_view) {
 	if (!image)
+		return SPUDRESULT_GPU_INVALID_IMAGE;
+	if (SPUD_STALE(image, "spudgpu_create_image_view", "image"))
 		return SPUDRESULT_GPU_INVALID_IMAGE;
 	if (!desc)
 		return SPUDRESULT_NULL_DESC;
@@ -409,6 +417,7 @@ SPUDRESULT spudgpu_create_image_view(
 	if (!pResult)
 		return SPUDRESULT_OUT_OF_MEMORY;
 	pResult->head.allocator = image->_device->head.allocator;
+	SPUD_BIRTH(pResult);
 	pResult->_image = image;
 	pResult->_desc  = *desc;
 	pResult->_desc.parent_image = image;
@@ -493,7 +502,10 @@ SPUDRESULT spudgpu_create_image_view(
 void spudgpu_destroy_image_view(spudgpu_image_view image_view) {
 	if (!image_view)
 		return;
+	if (SPUD_STALE(image_view, "spudgpu_destroy_image_view", "image_view"))
+		return;
 	SPUDGPU___LIVE_REMOVE(&image_view->_device->_live, SPUDGPU___OBJECT_IMAGE_VIEW);
+	SPUD_KILL(image_view);
 	const SPUD_ALLOCATOR allocator = image_view->head.allocator;
 	spud_string_free(&allocator, image_view->head.debug_name);
 	SPUD_DELETE(&allocator, spudgpu_image_view_d3d12, image_view);
@@ -501,6 +513,8 @@ void spudgpu_destroy_image_view(spudgpu_image_view image_view) {
 SPUDRESULT spudgpu_get_image_view_desc(
     spudgpu_image_view image_view, spudgpu_image_view_desc *out_desc) {
 	if (!image_view)
+		return SPUDRESULT_GPU_INVALID_IMAGE_VIEW;
+	if (SPUD_STALE(image_view, "spudgpu_get_image_view_desc", "image_view"))
 		return SPUDRESULT_GPU_INVALID_IMAGE_VIEW;
 	if (!out_desc)
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;

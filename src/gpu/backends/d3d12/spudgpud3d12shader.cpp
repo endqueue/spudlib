@@ -509,6 +509,8 @@ SPUDRESULT spudgpu_create_shader_module(
     spudgpu_shader_module *out_module) {
 	if (!device)
 		return SPUDRESULT_GPU_INVALID_DEVICE;
+	if (SPUD_STALE(device, "spudgpu_create_shader_module", "device"))
+		return SPUDRESULT_GPU_INVALID_DEVICE;
 	if (!desc)
 		return SPUDRESULT_NULL_DESC;
 	const SPUDRESULT base_sr = spud_struct_check(&desc->base, SPUD_STRUCT_TYPE_GPU_SHADER_MODULE_DESC);
@@ -637,6 +639,7 @@ SPUDRESULT spudgpu_create_shader_module(
 		return SPUDRESULT_OUT_OF_MEMORY;
 	pResult                 = new (pResult) spudgpu_shader_module_d3d12();
 	pResult->head.allocator = pDev->head.allocator;
+	SPUD_BIRTH(pResult);
 
 	pResult->_desc   = *desc;
 	pResult->_device = pDev;
@@ -656,7 +659,10 @@ SPUDRESULT spudgpu_create_shader_module(
 void spudgpu_destroy_shader_module(spudgpu_shader_module shader_module) {
 	if (!shader_module)
 		return;
+	if (SPUD_STALE(shader_module, "spudgpu_destroy_shader_module", "shader_module"))
+		return;
 	SPUDGPU___LIVE_REMOVE(&shader_module->_device->_live, SPUDGPU___OBJECT_SHADER_MODULE);
+	SPUD_KILL(shader_module);
 	const SPUD_ALLOCATOR allocator = shader_module->head.allocator;
 	spud_string_free(&allocator, shader_module->head.debug_name);
 	shader_module->~spudgpu_shader_module_d3d12();
@@ -668,6 +674,8 @@ SPUDRESULT spudgpu_create_shader_pipeline(
     const spudgpu_shader_pipeline_desc *desc,
     spudgpu_shader_pipeline *out_pipeline) {
 	if (!device)
+		return SPUDRESULT_GPU_INVALID_DEVICE;
+	if (SPUD_STALE(device, "spudgpu_create_shader_pipeline", "device"))
 		return SPUDRESULT_GPU_INVALID_DEVICE;
 	if (!desc)
 		return SPUDRESULT_NULL_DESC;
@@ -695,6 +703,7 @@ SPUDRESULT spudgpu_create_shader_pipeline(
 		return SPUDRESULT_OUT_OF_MEMORY;
 	pResult                   = new (pResult) spudgpu_shader_pipeline_d3d12();
 	pResult->head.allocator   = device->head.allocator;
+	SPUD_BIRTH(pResult);
 	pResult->_device          = device;
 	pResult->_desc            = *desc;
 	pResult->_is_mesh_pipeline = desc->mesh_module != nullptr;
@@ -873,7 +882,10 @@ SPUDRESULT spudgpu_create_shader_pipeline(
 void spudgpu_destroy_shader_pipeline(spudgpu_shader_pipeline pipeline) {
 	if (!pipeline)
 		return;
+	if (SPUD_STALE(pipeline, "spudgpu_destroy_shader_pipeline", "pipeline"))
+		return;
 	SPUDGPU___LIVE_REMOVE(&pipeline->_device->_live, SPUDGPU___OBJECT_SHADER_PIPELINE);
+	SPUD_KILL(pipeline);
 	const SPUD_ALLOCATOR allocator = pipeline->head.allocator;
 	spud_string_free(&allocator, pipeline->head.debug_name);
 	pipeline->~spudgpu_shader_pipeline_d3d12();
@@ -895,6 +907,10 @@ void spudgpu_cmd_bind_pipeline(
     spudgpu_command_list cmd, spudgpu_shader_pipeline pipeline) {
 	if (!cmd || !pipeline)
 		return;
+	if (SPUD_STALE(cmd, "spudgpu_cmd_bind_pipeline", "cmd"))
+		return;
+	if (SPUD_STALE(pipeline, "spudgpu_cmd_bind_pipeline", "pipeline"))
+		return;
 	ID3D12GraphicsCommandList *cmdList = cmd->_d3d_cmd_list.Get();
 	cmdList->SetPipelineState(pipeline->_d3d_pipeline_state.Get());
 	cmdList->SetGraphicsRootSignature(pipeline->_d3d_root_signature.Get());
@@ -910,6 +926,10 @@ void spudgpu_cmd_bind_compute_pipeline(
     spudgpu_command_list cmd, spudgpu_compute_pipeline pipeline) {
 	if (!cmd || !pipeline)
 		return;
+	if (SPUD_STALE(cmd, "spudgpu_cmd_bind_compute_pipeline", "cmd"))
+		return;
+	if (SPUD_STALE(pipeline, "spudgpu_cmd_bind_compute_pipeline", "pipeline"))
+		return;
 	ID3D12GraphicsCommandList *cmdList = cmd->_d3d_cmd_list.Get();
 	cmdList->SetPipelineState(pipeline->_d3d_pipeline_state.Get());
 	cmdList->SetComputeRootSignature(pipeline->_d3d_root_signature.Get());
@@ -922,6 +942,10 @@ void spudgpu_cmd_push_constants(
     uint32_t size,
     const void *data) {
 	if (!cmd || !pipeline || !data || !size)
+		return;
+	if (SPUD_STALE(cmd, "spudgpu_cmd_push_constants", "cmd"))
+		return;
+	if (SPUD_STALE(pipeline, "spudgpu_cmd_push_constants", "pipeline"))
 		return;
 	if (pipeline->_root_layout.push_constant_param == SPUDGPU_D3D12_NO_ROOT_PARAMETER)
 		return;
@@ -942,6 +966,10 @@ void spudgpu_cmd_push_constants_compute(
     const void *data) {
 	if (!cmd || !pipeline || !data || !size)
 		return;
+	if (SPUD_STALE(cmd, "spudgpu_cmd_push_constants_compute", "cmd"))
+		return;
+	if (SPUD_STALE(pipeline, "spudgpu_cmd_push_constants_compute", "pipeline"))
+		return;
 	if (pipeline->_root_layout.push_constant_param == SPUDGPU_D3D12_NO_ROOT_PARAMETER)
 		return;
 	uint32_t rootIdx  = pipeline->_root_layout.push_constant_param;
@@ -956,6 +984,8 @@ SPUDRESULT spudgpu_create_compute_pipeline(
     const spudgpu_compute_pipeline_desc *desc,
     spudgpu_compute_pipeline *out_pipeline) {
 	if (!device)
+		return SPUDRESULT_GPU_INVALID_DEVICE;
+	if (SPUD_STALE(device, "spudgpu_create_compute_pipeline", "device"))
 		return SPUDRESULT_GPU_INVALID_DEVICE;
 	if (!desc)
 		return SPUDRESULT_NULL_DESC;
@@ -973,6 +1003,7 @@ SPUDRESULT spudgpu_create_compute_pipeline(
 		return SPUDRESULT_OUT_OF_MEMORY;
 	pResult                 = new (pResult) spudgpu_compute_pipeline_d3d12();
 	pResult->head.allocator = device->head.allocator;
+	SPUD_BIRTH(pResult);
 	pResult->_device        = device;
 	pResult->_desc          = *desc;
 
@@ -1020,7 +1051,10 @@ SPUDRESULT spudgpu_create_compute_pipeline(
 void spudgpu_destroy_compute_pipeline(spudgpu_compute_pipeline pipeline) {
 	if (!pipeline)
 		return;
+	if (SPUD_STALE(pipeline, "spudgpu_destroy_compute_pipeline", "pipeline"))
+		return;
 	SPUDGPU___LIVE_REMOVE(&pipeline->_device->_live, SPUDGPU___OBJECT_COMPUTE_PIPELINE);
+	SPUD_KILL(pipeline);
 	const SPUD_ALLOCATOR allocator = pipeline->head.allocator;
 	spud_string_free(&allocator, pipeline->head.debug_name);
 	pipeline->~spudgpu_compute_pipeline_d3d12();
@@ -1031,6 +1065,8 @@ SPUDRESULT spudgpu_get_compute_pipeline_desc(
     spudgpu_compute_pipeline pipeline,
     spudgpu_compute_pipeline_desc *out_desc) {
 	if (!pipeline)
+		return SPUDRESULT_GPU_INVALID_COMPUTE_PIPELINE;
+	if (SPUD_STALE(pipeline, "spudgpu_get_compute_pipeline_desc", "pipeline"))
 		return SPUDRESULT_GPU_INVALID_COMPUTE_PIPELINE;
 	if (!out_desc)
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;

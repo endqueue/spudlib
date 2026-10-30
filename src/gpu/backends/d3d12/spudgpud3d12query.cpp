@@ -17,7 +17,11 @@ SPUDRESULT spudgpu_create_timestamp_set(
     spudgpu_timestamp_set *out_set) {
 	if (!device)
 		return SPUDRESULT_GPU_INVALID_DEVICE;
+	if (SPUD_STALE(device, "spudgpu_create_timestamp_set", "device"))
+		return SPUDRESULT_GPU_INVALID_DEVICE;
 	if (!queue)
+		return SPUDRESULT_GPU_INVALID_COMMAND_QUEUE;
+	if (SPUD_STALE(queue, "spudgpu_create_timestamp_set", "queue"))
 		return SPUDRESULT_GPU_INVALID_COMMAND_QUEUE;
 	if (count == 0)
 		return SPUDRESULT_ZERO_SIZE;
@@ -35,6 +39,7 @@ SPUDRESULT spudgpu_create_timestamp_set(
 		return SPUDRESULT_OUT_OF_MEMORY;
 	set                 = new (set) spudgpu_timestamp_set_d3d12();
 	set->head.allocator = device->head.allocator;
+	SPUD_BIRTH(set);
 	set->_count         = count;
 	set->_frequency     = frequency;
 	set->_device        = device;
@@ -75,7 +80,10 @@ SPUDRESULT spudgpu_create_timestamp_set(
 void spudgpu_destroy_timestamp_set(spudgpu_timestamp_set set) {
 	if (!set)
 		return;
+	if (SPUD_STALE(set, "spudgpu_destroy_timestamp_set", "set"))
+		return;
 	SPUDGPU___LIVE_REMOVE(&set->_device->_live, SPUDGPU___OBJECT_TIMESTAMP_SET);
+	SPUD_KILL(set);
 	const SPUD_ALLOCATOR allocator = set->head.allocator;
 	spud_string_free(&allocator, set->head.debug_name);
 	set->~spudgpu_timestamp_set_d3d12();
@@ -88,8 +96,12 @@ void spudgpu_cmd_reset_timestamps(
     uint32_t first,
     uint32_t count) {
 	// A timestamp query has no begin and nothing to reset.
-	(void)cmd;
-	(void)set;
+	if (!cmd || !set)
+		return;
+	if (SPUD_STALE(cmd, "spudgpu_cmd_reset_timestamps", "cmd"))
+		return;
+	if (SPUD_STALE(set, "spudgpu_cmd_reset_timestamps", "set"))
+		return;
 	(void)first;
 	(void)count;
 }
@@ -100,6 +112,10 @@ void spudgpu_cmd_resolve_timestamps(
     uint32_t first,
     uint32_t count) {
 	if (!cmd || !set || count == 0)
+		return;
+	if (SPUD_STALE(cmd, "spudgpu_cmd_resolve_timestamps", "cmd"))
+		return;
+	if (SPUD_STALE(set, "spudgpu_cmd_resolve_timestamps", "set"))
 		return;
 	if (first >= set->_count || count > set->_count - first)
 		return;
@@ -113,6 +129,8 @@ SPUDRESULT spudgpu_get_timestamps(
     uint32_t count,
     uint64_t *out_ns) {
 	if (!set)
+		return SPUDRESULT_GPU_INVALID_TIMESTAMP_SET;
+	if (SPUD_STALE(set, "spudgpu_get_timestamps", "set"))
 		return SPUDRESULT_GPU_INVALID_TIMESTAMP_SET;
 	if (count == 0)
 		return SPUDRESULT_ZERO_SIZE;

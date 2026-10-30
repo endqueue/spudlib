@@ -21,6 +21,8 @@ uint32_t spud_get_version(void) {
 SPUDRESULT spud_debug_name_set(void *object, const char *name) {
 	if (!object)
 		return SPUDRESULT_NULL_OBJECT;
+	if (SPUD_STALE(object, "spud_debug_name_set", "object"))
+		return SPUDRESULT_NULL_OBJECT;
 
 	/* Every object that carries a debug name starts with a spud_object_head,
 	 * which holds the name and the allocator it is copied and freed with. */
@@ -28,10 +30,11 @@ SPUDRESULT spud_debug_name_set(void *object, const char *name) {
 }
 
 const char *spud_debug_name_get(void *object) {
-	if (object) {
-		return ((const spud_object_head *)object)->debug_name;
-	} else
+	if (!object)
 		return NULL;
+	if (SPUD_STALE(object, "spud_debug_name_get", "object"))
+		return NULL;
+	return ((const spud_object_head *)object)->debug_name;
 }
 
 static void *spud_system_allocate(void *user_data, size_t size, size_t alignment) {

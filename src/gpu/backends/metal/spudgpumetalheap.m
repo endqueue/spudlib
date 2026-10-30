@@ -105,6 +105,8 @@ SPUDRESULT spudgpu_create_heap(
     spudgpu_heap *out_heap) {
 	if (!device)
 		return SPUDRESULT_GPU_INVALID_DEVICE;
+	if (SPUD_STALE(device, "spudgpu_create_heap", "device"))
+		return SPUDRESULT_GPU_INVALID_DEVICE;
 	if (!desc)
 		return SPUDRESULT_NULL_DESC;
 	const SPUDRESULT base_sr = spud_struct_check(&desc->base, SPUD_STRUCT_TYPE_GPU_HEAP_DESC);
@@ -134,6 +136,7 @@ SPUDRESULT spudgpu_create_heap(
 	if (!heap)
 		return SPUDRESULT_OUT_OF_MEMORY;
 	heap->head.allocator        = device_metal->head.allocator;
+	SPUD_BIRTH(heap);
 	heap->_parent_device        = device_metal;
 	heap->_desc                 = *desc;
 	heap->_resource_options_mtl =
@@ -168,12 +171,15 @@ void spudgpu_destroy_heap(spudgpu_heap heap) {
 	spudgpu_heap_metal *heap_metal = (spudgpu_heap_metal *)heap;
 	if (!heap_metal)
 		return;
+	if (SPUD_STALE(heap, "spudgpu_destroy_heap", "heap"))
+		return;
 #if _DEBUG
 	// Every buffer and image placed in the heap is destroyed first (see
 	// spudgpu.h).
 	assert(heap_metal->_placed_count == 0);
 #endif
 	SPUDGPU___LIVE_REMOVE(&heap_metal->_parent_device->_live, SPUDGPU___OBJECT_HEAP);
+	SPUD_KILL(heap);
 	const SPUD_ALLOCATOR allocator = heap_metal->head.allocator;
 	spud_string_free(&allocator, heap_metal->head.debug_name);
 	[heap_metal->_heap_mtl release];
@@ -184,6 +190,8 @@ SPUDRESULT spudgpu_get_heap_desc(
     spudgpu_heap heap,
     spudgpu_heap_desc *out_desc) {
 	if (!heap)
+		return SPUDRESULT_GPU_INVALID_HEAP;
+	if (SPUD_STALE(heap, "spudgpu_get_heap_desc", "heap"))
 		return SPUDRESULT_GPU_INVALID_HEAP;
 	if (!out_desc)
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
@@ -197,6 +205,8 @@ SPUDRESULT spudgpu_get_buffer_placement_requirements(
     const spudgpu_buffer_desc *desc,
     spudgpu_placement_requirements *out_requirements) {
 	if (!heap)
+		return SPUDRESULT_GPU_INVALID_HEAP;
+	if (SPUD_STALE(heap, "spudgpu_get_buffer_placement_requirements", "heap"))
 		return SPUDRESULT_GPU_INVALID_HEAP;
 	if (!desc)
 		return SPUDRESULT_NULL_DESC;
@@ -223,6 +233,8 @@ SPUDRESULT spudgpu_get_image_placement_requirements(
     const spudgpu_image_desc *desc,
     spudgpu_placement_requirements *out_requirements) {
 	if (!heap)
+		return SPUDRESULT_GPU_INVALID_HEAP;
+	if (SPUD_STALE(heap, "spudgpu_get_image_placement_requirements", "heap"))
 		return SPUDRESULT_GPU_INVALID_HEAP;
 	if (!desc)
 		return SPUDRESULT_NULL_DESC;
@@ -253,6 +265,8 @@ SPUDRESULT spudgpu_create_placed_buffer(
     spudgpu_buffer *out_buffer) {
 	if (!heap)
 		return SPUDRESULT_GPU_INVALID_HEAP;
+	if (SPUD_STALE(heap, "spudgpu_create_placed_buffer", "heap"))
+		return SPUDRESULT_GPU_INVALID_HEAP;
 	if (!desc)
 		return SPUDRESULT_NULL_DESC;
 	const SPUDRESULT base_sr = spud_struct_check(&desc->base, SPUD_STRUCT_TYPE_GPU_BUFFER_DESC);
@@ -280,6 +294,7 @@ SPUDRESULT spudgpu_create_placed_buffer(
 	if (!buffer_metal)
 		return SPUDRESULT_OUT_OF_MEMORY;
 	buffer_metal->head.allocator = heap_metal->head.allocator;
+	SPUD_BIRTH(buffer_metal);
 	buffer_metal->_parent_device = heap_metal->_parent_device;
 	buffer_metal->_desc          = *desc;
 	buffer_metal->_buffer_mtl    = [heap_metal->_heap_mtl newBufferWithLength:(NSUInteger)desc->size
@@ -314,6 +329,8 @@ SPUDRESULT spudgpu_create_placed_image(
     spudgpu_image *out_image) {
 	if (!heap)
 		return SPUDRESULT_GPU_INVALID_HEAP;
+	if (SPUD_STALE(heap, "spudgpu_create_placed_image", "heap"))
+		return SPUDRESULT_GPU_INVALID_HEAP;
 	if (!desc)
 		return SPUDRESULT_NULL_DESC;
 	const SPUDRESULT base_sr = spud_struct_check(&desc->base, SPUD_STRUCT_TYPE_GPU_IMAGE_DESC);
@@ -344,6 +361,7 @@ SPUDRESULT spudgpu_create_placed_image(
 		return SPUDRESULT_OUT_OF_MEMORY;
 	}
 	image_metal->head.allocator = heap_metal->head.allocator;
+	SPUD_BIRTH(image_metal);
 	image_metal->_parent_device = heap_metal->_parent_device;
 	image_metal->_desc          = *desc;
 	image_metal->_texture_mtl   = [heap_metal->_heap_mtl newTextureWithDescriptor:texture_desc offset:(NSUInteger)offset];

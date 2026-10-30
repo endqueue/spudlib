@@ -93,6 +93,7 @@ SPUDRESULT spudnet_instance_create(
 	if (!instance)
 		return SPUDRESULT_OUT_OF_MEMORY;
 	instance->head.allocator = *allocator;
+	SPUD_BIRTH(instance);
 
 	pthread_mutex_lock(&spudnet_curl_start_lock);
 	// The libcurl found at run time, which need not be the one the headers
@@ -119,8 +120,11 @@ SPUDRESULT spudnet_instance_create(
 void spudnet_instance_destroy(spudnet_instance instance) {
 	if (!instance)
 		return;
+	if (SPUD_STALE(instance, "spudnet_instance_destroy", "instance"))
+		return;
 	// Thread-safe on any libcurl an instance could have been made with.
 	curl_global_cleanup();
+	SPUD_KILL(instance);
 	const SPUD_ALLOCATOR allocator = instance->head.allocator;
 	spud_string_free(&allocator, instance->head.debug_name);
 	SPUD_DELETE(&allocator, struct spudnet_instance_t, instance);
@@ -523,8 +527,11 @@ static void spudnet_curl_proxy_apply(CURL *curl, const struct spudnet_proxy *pro
 void spudnet_http_client_destroy(spudnet_http_client client) {
 	if (!client)
 		return;
+	if (SPUD_STALE(client, "spudnet_http_client_destroy", "client"))
+		return;
 	if (client->multi)
 		curl_multi_cleanup(client->multi);
+	SPUD_KILL(client);
 	const SPUD_ALLOCATOR allocator = client->head.allocator;
 	spudnet_curl_tls_free(&allocator, &client->tls);
 	spudnet_proxy_free(&allocator, &client->proxy);
@@ -541,6 +548,8 @@ SPUDRESULT spudnet_http_client_create(
 	*out_client = NULL;
 	if (!instance)
 		return SPUDRESULT_SPUDNET_INVALID_INSTANCE;
+	if (SPUD_STALE(instance, "spudnet_http_client_create", "instance"))
+		return SPUDRESULT_SPUDNET_INVALID_INSTANCE;
 	if (!desc)
 		return SPUDRESULT_NULL_DESC;
 	const SPUDRESULT base_sr = spud_struct_check(&desc->base, SPUD_STRUCT_TYPE_NET_HTTP_CLIENT_DESC);
@@ -551,6 +560,7 @@ SPUDRESULT spudnet_http_client_create(
 	if (!client)
 		return SPUDRESULT_OUT_OF_MEMORY;
 	client->head.allocator = instance->head.allocator;
+	SPUD_BIRTH(client);
 	atomic_init(&client->busy, false);
 	SPUDRESULT result = spudnet_curl_tls_create(&client->head.allocator, &desc->tls, &client->tls);
 	if (!SPUDFAIL(result))
@@ -1163,6 +1173,8 @@ static enum spudnet_curl_sent spudnet_curl_send_frame(
 void spudnet_websocket_destroy(spudnet_websocket socket) {
 	if (!socket)
 		return;
+	if (SPUD_STALE(socket, "spudnet_websocket_destroy", "socket"))
+		return;
 	if (socket->multi && socket->curl)
 		curl_multi_remove_handle(socket->multi, socket->curl); // harmless when it isn't on it
 	if (socket->curl)
@@ -1170,6 +1182,7 @@ void spudnet_websocket_destroy(spudnet_websocket socket) {
 	if (socket->multi)
 		curl_multi_cleanup(socket->multi);
 	curl_slist_free_all(socket->headers);
+	SPUD_KILL(socket);
 	const SPUD_ALLOCATOR allocator = socket->head.allocator;
 	spudnet_curl_tls_free(&allocator, &socket->tls);
 	if (socket->wake >= 0)
@@ -1189,6 +1202,8 @@ SPUDRESULT spudnet_websocket_create(
 	*out_socket = NULL;
 	if (!instance)
 		return SPUDRESULT_SPUDNET_INVALID_INSTANCE;
+	if (SPUD_STALE(instance, "spudnet_websocket_create", "instance"))
+		return SPUDRESULT_SPUDNET_INVALID_INSTANCE;
 	if (!spudnet_curl_has_websocket())
 		return SPUDRESULT_SPUDNET_UNSUPPORTED;
 
@@ -1196,6 +1211,7 @@ SPUDRESULT spudnet_websocket_create(
 	if (!socket)
 		return SPUDRESULT_OUT_OF_MEMORY;
 	socket->head.allocator = instance->head.allocator;
+	SPUD_BIRTH(socket);
 	socket->instance       = instance;
 	pthread_mutex_init(&socket->lock, NULL);
 	atomic_init(&socket->aborted, false);
@@ -1216,7 +1232,15 @@ void spudnet_websocket_get_error(
     spudnet_websocket socket,
     SPUDNET_ERROR_SIDE side,
     spudnet_error *out_error) {
-	bool known = socket && (side == SPUDNET_ERROR_SIDE_RECEIVING || side == SPUDNET_ERROR_SIDE_SENDING);
+	if (!socket) {
+		spudnet_error_get(NULL, out_error);
+		return;
+	}
+	if (SPUD_STALE(socket, "spudnet_websocket_get_error", "socket")) {
+		spudnet_error_get(NULL, out_error);
+		return;
+	}
+	bool known = side == SPUDNET_ERROR_SIDE_RECEIVING || side == SPUDNET_ERROR_SIDE_SENDING;
 	spudnet_error_get(known ? &socket->errors[side] : NULL, out_error);
 }
 
@@ -1264,6 +1288,8 @@ bool spudnet_websocket_wait_ready(spudnet_websocket socket) {
 void spudnet_websocket_abort(spudnet_websocket socket) {
 	if (!socket)
 		return;
+	if (SPUD_STALE(socket, "spudnet_websocket_abort", "socket"))
+		return;
 	atomic_store(&socket->aborted, true);
 	// One for a wait on the open connection, one for the opening request.
 	uint64_t one = 1;
@@ -1280,6 +1306,8 @@ SPUDRESULT spudnet_websocket_connect(
 	if (out_http_status)
 		*out_http_status = 0;
 	if (!socket)
+		return SPUDRESULT_SPUDNET_INVALID_WEBSOCKET;
+	if (SPUD_STALE(socket, "spudnet_websocket_connect", "socket"))
 		return SPUDRESULT_SPUDNET_INVALID_WEBSOCKET;
 	if (!desc)
 		return SPUDRESULT_NULL_DESC;
@@ -1405,6 +1433,8 @@ SPUDRESULT spudnet_websocket_send(
     uint32_t timeout_ms) {
 	if (!socket)
 		return SPUDRESULT_SPUDNET_INVALID_WEBSOCKET;
+	if (SPUD_STALE(socket, "spudnet_websocket_send", "socket"))
+		return SPUDRESULT_SPUDNET_INVALID_WEBSOCKET;
 	if ((size > 0 && !data) || size > SIZE_MAX)
 		return SPUDRESULT_SPUDNET_SEND_FAILED;
 
@@ -1464,6 +1494,8 @@ SPUDRESULT spudnet_websocket_recv(
 	*out_type             = SPUDNET_WEBSOCKET_MESSAGE_BINARY;
 	*out_message_complete = false;
 	if (!socket)
+		return SPUDRESULT_SPUDNET_INVALID_WEBSOCKET;
+	if (SPUD_STALE(socket, "spudnet_websocket_recv", "socket"))
 		return SPUDRESULT_SPUDNET_INVALID_WEBSOCKET;
 	if (!data || size == 0)
 		return SPUDRESULT_ZERO_SIZE;
@@ -1560,6 +1592,8 @@ SPUDRESULT spudnet_websocket_close(
     const char *reason) {
 	if (!socket)
 		return SPUDRESULT_SPUDNET_INVALID_WEBSOCKET;
+	if (SPUD_STALE(socket, "spudnet_websocket_close", "socket"))
+		return SPUDRESULT_SPUDNET_INVALID_WEBSOCKET;
 	size_t reason_length = reason ? strlen(reason) : 0;
 	if (reason_length > 123)
 		return SPUDRESULT_SPUDNET_SEND_FAILED;
@@ -1610,6 +1644,8 @@ SPUDRESULT spudnet_websocket_close(
 uint16_t spudnet_websocket_get_close_code(spudnet_websocket socket) {
 	if (!socket)
 		return 0;
+	if (SPUD_STALE(socket, "spudnet_websocket_get_close_code", "socket"))
+		return 0;
 	pthread_mutex_lock(&socket->lock);
 	// Only a close the peer made has a code to report.
 	uint16_t code = (socket->peer_closed && !socket->close_requested) ? socket->close_code : 0;
@@ -1626,6 +1662,8 @@ SPUDRESULT spudnet_websocket_create(
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
 	*out_socket = NULL;
 	if (!instance)
+		return SPUDRESULT_SPUDNET_INVALID_INSTANCE;
+	if (SPUD_STALE(instance, "spudnet_websocket_create", "instance"))
 		return SPUDRESULT_SPUDNET_INVALID_INSTANCE;
 	return SPUDRESULT_SPUDNET_UNSUPPORTED;
 }

@@ -400,6 +400,9 @@ SPUDRESULT spudgpuvulkan___create_swapchain_internal(
 		logicalDevice, pSwapChain->_swapchain_vk, &imageCount,
 		pSwapChain->_swapchain_images_vk);
 	if (result != VK_SUCCESS) return SPUDRESULT_API_SPECIFIC_FAILURE;
+	// The images there really are, which an acquire may name any of: the
+	// count spudgpu_get_swap_chain_desc() reports, as spudgpu.h says.
+	pSwapChain->_desc.buffer_count = imageCount;
 
 	return SPUD_SUCCESS;
 }
@@ -462,6 +465,7 @@ SPUDRESULT spudgpuvulkan___fences_semaphores_swapchain_creation_internal(
 	// semaphore getters), so each has the swap chain's allocator.
 	for (uint32_t i = 0; i < max_frames; i++) {
 		pSwapChain->_image_available_semaphores[i].head.allocator = pSwapChain->head.allocator;
+		SPUD_BIRTH(&pSwapChain->_image_available_semaphores[i]);
 		pSwapChain->_image_available_semaphores[i]._device_vk = vk_device;
 		vkCreateSemaphore(vk_device, &semInfo, NULL, &pSwapChain->_image_available_semaphores[i]._semaphore_vk);
 		vkCreateFence(vk_device, &fenceInfo, NULL, &pSwapChain->_in_flight_fences_vk[i]);
@@ -469,6 +473,7 @@ SPUDRESULT spudgpuvulkan___fences_semaphores_swapchain_creation_internal(
 
 	for (uint32_t i = 0; i < image_count; i++) {
 		pSwapChain->_render_finished_semaphores[i].head.allocator = pSwapChain->head.allocator;
+		SPUD_BIRTH(&pSwapChain->_render_finished_semaphores[i]);
 		pSwapChain->_render_finished_semaphores[i]._device_vk = vk_device;
 		vkCreateSemaphore(vk_device, &semInfo, NULL, &pSwapChain->_render_finished_semaphores[i]._semaphore_vk);
 	}
@@ -539,9 +544,11 @@ SPUDRESULT spudgpuvulkan_create_image_views_internal(
 		// The view and its image are handles the caller can name, so each
 		// has the swap chain's allocator.
 		view->head.allocator = pSwapChain->head.allocator;
+		SPUD_BIRTH(view);
 		spudgpu_image_vulkan *img = SPUD_NEW_ZEROED(allocator, spudgpu_image_vulkan);
 		if (!img) return SPUDRESULT_OUT_OF_MEMORY;
 		img->head.allocator = pSwapChain->head.allocator;
+		SPUD_BIRTH(img);
 		img->_device = pSwapChain->_device;
 		img->_image_vk = pSwapChain->_swapchain_images_vk[i];
 		img->_format_vk = pSwapChain->_format_vk;
@@ -571,12 +578,14 @@ static void spudgpuvulkan___release_swap_chain_internal(spudgpu_swap_chain_vulka
 	for (uint32_t i = 0; i < swap_chain->_max_frames_in_flight; i++) {
 		vkDestroySemaphore(dev, swap_chain->_image_available_semaphores[i]._semaphore_vk, NULL);
 		vkDestroyFence(dev, swap_chain->_in_flight_fences_vk[i], NULL);
+		SPUD_KILL(&swap_chain->_image_available_semaphores[i]);
 		spud_string_free(allocator, swap_chain->_image_available_semaphores[i].head.debug_name);
 	}
 	// render_finished_semaphores is sized/indexed by swapchain image count, not
 	// _max_frames_in_flight — see spudgpuvulkan___fences_semaphores_swapchain_creation_internal.
 	for (uint32_t i = 0; i < swap_chain->_render_finished_semaphores_count; i++) {
 		vkDestroySemaphore(dev, swap_chain->_render_finished_semaphores[i]._semaphore_vk, NULL);
+		SPUD_KILL(&swap_chain->_render_finished_semaphores[i]);
 		spud_string_free(allocator, swap_chain->_render_finished_semaphores[i].head.debug_name);
 	}
 	SPUD_DELETE_ARRAY(allocator, spudgpu_semaphore_vulkan, swap_chain->_image_available_semaphores, swap_chain->_max_frames_in_flight);
@@ -586,9 +595,11 @@ static void spudgpuvulkan___release_swap_chain_internal(spudgpu_swap_chain_vulka
 	for (uint32_t i = 0; i < swap_chain->_swapchain_image_views_count; i++) {
 		spudgpu_image_vulkan *image = swap_chain->_swapchain_image_views_vk[i]._desc.parent_image;
 		if (image) {
+			SPUD_KILL(image);
 			spud_string_free(allocator, image->head.debug_name);
 			SPUD_DELETE(allocator, spudgpu_image_vulkan, image);
 		}
+		SPUD_KILL(&swap_chain->_swapchain_image_views_vk[i]);
 		spud_string_free(allocator, swap_chain->_swapchain_image_views_vk[i].head.debug_name);
 		vkDestroyImageView(dev, swap_chain->_swapchain_image_views_vk[i]._image_view_vk, NULL);
 	}
@@ -608,6 +619,7 @@ SPUDRESULT spudgpu_create_surface(
 	void *display_handle,
 	spudgpu_surface *out_surface) {
 	if (!instance) return SPUDRESULT_GPU_INVALID_INSTANCE;
+	if (SPUD_STALE(instance, "spudgpu_create_surface", "instance")) return SPUDRESULT_GPU_INVALID_INSTANCE;
 	if (!window_handle) return SPUDRESULT_GPU_INVALID_WINDOW_HANDLE;
 #if !defined(SPUDLIB_PLATFORM_WIN32)
 	// Only Wayland/X11 surfaces need the display connection; Win32 has none
@@ -618,6 +630,7 @@ SPUDRESULT spudgpu_create_surface(
 
 	spudgpu_surface_vulkan result = {0};
 	result.head.allocator = instance->head.allocator;
+	SPUD_BIRTH(&result);
 	result._instance = *instance;
 
 	VkResult r = VK_SUCCESS;
@@ -661,9 +674,11 @@ SPUDRESULT spudgpu_create_surface(
 
 void spudgpu_destroy_surface(spudgpu_surface surface) {
 	if (!surface) return;
+	if (SPUD_STALE(surface, "spudgpu_destroy_surface", "surface")) return;
 	vkDestroySurfaceKHR(
 		surface->_instance._instance_vk,
 		surface->_surface_vk, NULL);
+	SPUD_KILL(surface);
 	const SPUD_ALLOCATOR allocator = surface->head.allocator;
 	spud_string_free(&allocator, surface->head.debug_name);
 	SPUD_DELETE(&allocator, spudgpu_surface_vulkan, surface);
@@ -674,11 +689,13 @@ spudgpu_surface spudgpu_create_surface_from_callback(
 	void *user_data,
 	spudgpu_surface_create_fn create_fn) {
 	if (!instance || !create_fn) return NULL;
+	if (SPUD_STALE(instance, "spudgpu_create_surface_from_callback", "instance")) return NULL;
 
 	spudgpu_surface_vulkan *result = SPUD_NEW_ZEROED(&instance->head.allocator, spudgpu_surface_vulkan);
 	if (!result) return NULL;
 
 	result->head.allocator = instance->head.allocator;
+	SPUD_BIRTH(result);
 	result->_instance = *instance;
 
 	bool ok = create_fn(
@@ -700,6 +717,7 @@ SPUDRESULT spudgpu_get_surface_present_scalings(
 	spudgpu_surface surface,
 	uint32_t *out_scalings) {
 	if (!device) return SPUDRESULT_GPU_INVALID_DEVICE;
+	if (SPUD_STALE(device, "spudgpu_get_surface_present_scalings", "device")) return SPUDRESULT_GPU_INVALID_DEVICE;
 	const SPUDRESULT sr = spudgpu___internal_check_surface_present_scalings(device->_features, surface, out_scalings);
 	if (sr != SPUD_SUCCESS) return sr;
 	return spudgpuvulkan___surface_present_scalings_internal(device, surface->_surface_vk, out_scalings);
@@ -710,6 +728,7 @@ SPUDRESULT spudgpu_create_swap_chain(
 	const spudgpu_swap_chain_desc *desc,
 	spudgpu_swap_chain *out_swap_chain) {
 	if (!device) return SPUDRESULT_GPU_INVALID_DEVICE;
+	if (SPUD_STALE(device, "spudgpu_create_swap_chain", "device")) return SPUDRESULT_GPU_INVALID_DEVICE;
 	const SPUDRESULT desc_sr = spudgpu___internal_check_swap_chain_desc(device->_features, desc, out_swap_chain);
 	if (desc_sr != SPUD_SUCCESS) return desc_sr;
 	uint32_t scalings = 0;
@@ -719,6 +738,7 @@ SPUDRESULT spudgpu_create_swap_chain(
 
 	spudgpu_swap_chain_vulkan result = {0};
 	result.head.allocator = device->head.allocator;
+	SPUD_BIRTH(&result);
 	result._device = *((spudgpu_device_vulkan *) device);
 	memcpy(&result._desc, desc, sizeof(spudgpu_swap_chain_desc));
 	result._present_queue = (spudgpu_command_queue_vulkan *) desc->queue;
@@ -754,8 +774,10 @@ SPUDRESULT spudgpu_create_swap_chain(
 
 void spudgpu_destroy_swap_chain(spudgpu_swap_chain swap_chain) {
 	if (!swap_chain) return;
+	if (SPUD_STALE(swap_chain, "spudgpu_destroy_swap_chain", "swap_chain")) return;
 	SPUDGPU___LIVE_REMOVE(&swap_chain->_device._shared->live, SPUDGPU___OBJECT_SWAP_CHAIN);
 	spudgpuvulkan___release_swap_chain_internal(swap_chain);
+	SPUD_KILL(swap_chain);
 	const SPUD_ALLOCATOR allocator = swap_chain->head.allocator;
 	spud_string_free(&allocator, swap_chain->head.debug_name);
 	SPUD_DELETE(&allocator, spudgpu_swap_chain_vulkan, swap_chain);
@@ -766,6 +788,7 @@ SPUDRESULT spudgpu_get_swap_chain_desc(
 	spudgpu_swap_chain swap_chain,
 	spudgpu_swap_chain_desc *out_desc) {
 	if (!swap_chain) return SPUDRESULT_GPU_INVALID_SWAP_CHAIN;
+	if (SPUD_STALE(swap_chain, "spudgpu_get_swap_chain_desc", "swap_chain")) return SPUDRESULT_GPU_INVALID_SWAP_CHAIN;
 	if (!out_desc) return SPUDRESULT_NULL_OUTPUT_PARAMETER;
 	*out_desc = ((spudgpu_swap_chain_vulkan *) swap_chain)->_desc;
 	out_desc->base = spud_struct_base(SPUD_STRUCT_TYPE_GPU_SWAP_CHAIN_DESC);
@@ -774,6 +797,7 @@ SPUDRESULT spudgpu_get_swap_chain_desc(
 
 uint32_t spudgpu_swap_chain_acquire_next_image(spudgpu_swap_chain swap_chain) {
 	if (!swap_chain) return SPUD_UINT32_MAX;
+	if (SPUD_STALE(swap_chain, "spudgpu_swap_chain_acquire_next_image", "swap_chain")) return SPUD_UINT32_MAX;
 	VkDevice device = swap_chain->_device._logical_device_vk;
 
 	// Wait for the fence of the current frame slot, so we don't overwrite
@@ -813,6 +837,7 @@ uint32_t spudgpu_swap_chain_acquire_next_image(spudgpu_swap_chain swap_chain) {
 
 void spudgpu_swap_chain_present(spudgpu_swap_chain swap_chain) {
 	if (!swap_chain) return;
+	if (SPUD_STALE(swap_chain, "spudgpu_swap_chain_present", "swap_chain")) return;
 
 	// Tell the presentation engine to display _current_image_index.
 	// Wait on _render_finished_semaphores[_current_image_index] — indexed by
@@ -847,19 +872,22 @@ spudgpu_image_view spudgpu_get_swap_chain_image_view(
 	spudgpu_swap_chain swap_chain,
 	uint32_t image_index) {
 	if (!swap_chain) return NULL;
-	else if (image_index >= swap_chain->_swapchain_image_views_count) return NULL;
-	else return &swap_chain->_swapchain_image_views_vk[image_index];
+	if (SPUD_STALE(swap_chain, "spudgpu_get_swap_chain_image_view", "swap_chain")) return NULL;
+	if (image_index >= swap_chain->_swapchain_image_views_count) return NULL;
+	return &swap_chain->_swapchain_image_views_vk[image_index];
 }
 
 spudgpu_semaphore spudgpu_swap_chain_get_image_available_semaphore(spudgpu_swap_chain swap_chain) {
 	if (!swap_chain) return NULL;
-	else return &swap_chain->_image_available_semaphores[swap_chain->_current_frame];
+	if (SPUD_STALE(swap_chain, "spudgpu_swap_chain_get_image_available_semaphore", "swap_chain")) return NULL;
+	return &swap_chain->_image_available_semaphores[swap_chain->_current_frame];
 }
 
 spudgpu_semaphore spudgpu_swap_chain_get_render_finished_semaphore(spudgpu_swap_chain swap_chain) {
 	if (!swap_chain) return NULL;
+	if (SPUD_STALE(swap_chain, "spudgpu_swap_chain_get_render_finished_semaphore", "swap_chain")) return NULL;
 	// Indexed by swapchain image, not frame-in-flight slot — see spudgpu_swap_chain_present.
-	else return &swap_chain->_render_finished_semaphores[swap_chain->_current_image_index];
+	return &swap_chain->_render_finished_semaphores[swap_chain->_current_image_index];
 }
 
 

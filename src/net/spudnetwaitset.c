@@ -304,11 +304,14 @@ SPUDRESULT spudnet_wait_set_create(
 	*out_set = NULL;
 	if (!instance)
 		return SPUDRESULT_SPUDNET_INVALID_INSTANCE;
+	if (SPUD_STALE(instance, "spudnet_wait_set_create", "instance"))
+		return SPUDRESULT_SPUDNET_INVALID_INSTANCE;
 
 	struct spudnet_wait_set_t *set = SPUD_NEW_ZEROED(&instance->head.allocator, struct spudnet_wait_set_t);
 	if (!set)
 		return SPUDRESULT_OUT_OF_MEMORY;
 	set->head.allocator = instance->head.allocator;
+	SPUD_BIRTH(set);
 	set->allocator      = spud_eq_allocator(&set->head.allocator);
 	eq_array_init(&set->members, &set->allocator);
 	eq_array_init(&set->entries, &set->allocator);
@@ -329,6 +332,8 @@ SPUDRESULT spudnet_wait_set_create(
 void spudnet_wait_set_destroy(spudnet_wait_set set) {
 	if (!set)
 		return;
+	if (SPUD_STALE(set, "spudnet_wait_set_destroy", "set"))
+		return;
 	// A WebSocket that notifies holds this set; each lets go before the
 	// wake socket it would write to is closed.
 #if SPUDNET_EXT_WEBSOCKET
@@ -340,6 +345,7 @@ void spudnet_wait_set_destroy(spudnet_wait_set set) {
 	spudnet_wait_wake_destroy(set);
 	eq_array_free(&set->members);
 	eq_array_free(&set->entries);
+	SPUD_KILL(set);
 	const SPUD_ALLOCATOR allocator = set->head.allocator;
 	spud_string_free(&allocator, set->head.debug_name);
 	SPUD_DELETE(&allocator, struct spudnet_wait_set_t, set);
@@ -348,12 +354,16 @@ void spudnet_wait_set_destroy(spudnet_wait_set set) {
 void spudnet_wait_set_abort(spudnet_wait_set set) {
 	if (!set)
 		return;
+	if (SPUD_STALE(set, "spudnet_wait_set_abort", "set"))
+		return;
 	spudnet_wait_set_aborted_flag(set);
 	spudnet_wait_wake_signal(set);
 }
 
 void spudnet_wait_set_wake(spudnet_wait_set set) {
 	if (!set)
+		return;
+	if (SPUD_STALE(set, "spudnet_wait_set_wake", "set"))
 		return;
 	// The flag first: the wait that the signal ends has to find it.
 	spudnet_wait_set_woken_flag(set);
@@ -368,7 +378,15 @@ void spudnet_wait_set_notify(struct spudnet_wait_set_t *set) {
 void spudnet_wait_set_get_error(
     spudnet_wait_set set,
     spudnet_error *out_error) {
-	spudnet_error_get(set ? &set->error : NULL, out_error);
+	if (!set) {
+		spudnet_error_get(NULL, out_error);
+		return;
+	}
+	if (SPUD_STALE(set, "spudnet_wait_set_get_error", "set")) {
+		spudnet_error_get(NULL, out_error);
+		return;
+	}
+	spudnet_error_get(&set->error, out_error);
 }
 
 // --------------------------------------------------------------------------
@@ -418,8 +436,14 @@ SPUDRESULT spudnet_wait_set_add_tcp_socket(
     void *user) {
 	if (!set)
 		return SPUDRESULT_SPUDNET_INVALID_WAIT_SET;
+	if (SPUD_STALE(set, "spudnet_wait_set_add_tcp_socket", "set"))
+		return SPUDRESULT_SPUDNET_INVALID_WAIT_SET;
 	if (wait_for == 0 || (wait_for & ~(uint32_t)(SPUDNET_WAIT_FOR_INCOMING | SPUDNET_WAIT_FOR_ROOM)) != 0)
 		return SPUDRESULT_DESC_INVALID_PARAMETERS;
+	if (!socket)
+		return SPUDRESULT_SPUDNET_INVALID_TCP_SOCKET;
+	if (SPUD_STALE(socket, "spudnet_wait_set_add_tcp_socket", "socket"))
+		return SPUDRESULT_SPUDNET_INVALID_TCP_SOCKET;
 	intptr_t native = 0;
 	if (!spudnet_tcp_socket_native(socket, &native))
 		return SPUDRESULT_SPUDNET_INVALID_TCP_SOCKET;
@@ -447,6 +471,12 @@ SPUDRESULT spudnet_wait_set_add_tcp_listener(
     void *user) {
 	if (!set)
 		return SPUDRESULT_SPUDNET_INVALID_WAIT_SET;
+	if (SPUD_STALE(set, "spudnet_wait_set_add_tcp_listener", "set"))
+		return SPUDRESULT_SPUDNET_INVALID_WAIT_SET;
+	if (!listener)
+		return SPUDRESULT_SPUDNET_INVALID_TCP_LISTENER;
+	if (SPUD_STALE(listener, "spudnet_wait_set_add_tcp_listener", "listener"))
+		return SPUDRESULT_SPUDNET_INVALID_TCP_LISTENER;
 	intptr_t native = 0;
 	if (!spudnet_tcp_listener_native(listener, &native))
 		return SPUDRESULT_SPUDNET_INVALID_TCP_LISTENER;
@@ -469,13 +499,25 @@ SPUDRESULT spudnet_wait_set_add_tcp_listener(
 }
 
 void spudnet_wait_set_remove_tcp_socket(spudnet_wait_set set, spudnet_tcp_socket socket) {
-	struct spudnet_wait_member *member = (set && socket) ? spudnet_wait_find(set, SPUDNET_WAIT_KIND_TCP_SOCKET, socket) : NULL;
+	if (!set || !socket)
+		return;
+	if (SPUD_STALE(set, "spudnet_wait_set_remove_tcp_socket", "set"))
+		return;
+	if (SPUD_STALE(socket, "spudnet_wait_set_remove_tcp_socket", "socket"))
+		return;
+	struct spudnet_wait_member *member = spudnet_wait_find(set, SPUDNET_WAIT_KIND_TCP_SOCKET, socket);
 	if (member)
 		spudnet_wait_remove(set, member);
 }
 
 void spudnet_wait_set_remove_tcp_listener(spudnet_wait_set set, spudnet_tcp_listener listener) {
-	struct spudnet_wait_member *member = (set && listener) ? spudnet_wait_find(set, SPUDNET_WAIT_KIND_TCP_LISTENER, listener) : NULL;
+	if (!set || !listener)
+		return;
+	if (SPUD_STALE(set, "spudnet_wait_set_remove_tcp_listener", "set"))
+		return;
+	if (SPUD_STALE(listener, "spudnet_wait_set_remove_tcp_listener", "listener"))
+		return;
+	struct spudnet_wait_member *member = spudnet_wait_find(set, SPUDNET_WAIT_KIND_TCP_LISTENER, listener);
 	if (member)
 		spudnet_wait_remove(set, member);
 }
@@ -490,7 +532,11 @@ SPUDRESULT spudnet_wait_set_add_websocket(
     void *user) {
 	if (!set)
 		return SPUDRESULT_SPUDNET_INVALID_WAIT_SET;
+	if (SPUD_STALE(set, "spudnet_wait_set_add_websocket", "set"))
+		return SPUDRESULT_SPUDNET_INVALID_WAIT_SET;
 	if (!socket)
+		return SPUDRESULT_SPUDNET_INVALID_WEBSOCKET;
+	if (SPUD_STALE(socket, "spudnet_wait_set_add_websocket", "socket"))
 		return SPUDRESULT_SPUDNET_INVALID_WEBSOCKET;
 	if (spudnet_websocket_instance(socket) != set->instance)
 		return SPUDRESULT_SPUDNET_INVALID_INSTANCE;
@@ -514,7 +560,13 @@ SPUDRESULT spudnet_wait_set_add_websocket(
 }
 
 void spudnet_wait_set_remove_websocket(spudnet_wait_set set, spudnet_websocket socket) {
-	struct spudnet_wait_member *member = (set && socket) ? spudnet_wait_find(set, SPUDNET_WAIT_KIND_WEBSOCKET, socket) : NULL;
+	if (!set || !socket)
+		return;
+	if (SPUD_STALE(set, "spudnet_wait_set_remove_websocket", "set"))
+		return;
+	if (SPUD_STALE(socket, "spudnet_wait_set_remove_websocket", "socket"))
+		return;
+	struct spudnet_wait_member *member = spudnet_wait_find(set, SPUDNET_WAIT_KIND_WEBSOCKET, socket);
 	if (!member)
 		return;
 	spudnet_websocket_wait_detach(socket);
@@ -548,6 +600,8 @@ SPUDRESULT spudnet_wait_set_wait(
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
 	*out_count = 0;
 	if (!set)
+		return SPUDRESULT_SPUDNET_INVALID_WAIT_SET;
+	if (SPUD_STALE(set, "spudnet_wait_set_wait", "set"))
 		return SPUDRESULT_SPUDNET_INVALID_WAIT_SET;
 	if (!out_events)
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;

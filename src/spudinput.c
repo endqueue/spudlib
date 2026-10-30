@@ -300,7 +300,7 @@ SPUDRESULT spudinput_shared_reserve(
 
 	/* Both arrays or neither, so that both stay `record_capacity` long,
 	 * which is the count each is freed with. */
-	const SPUD_ALLOCATOR *allocator = &instance->allocator;
+	const SPUD_ALLOCATOR *allocator = &instance->head.allocator;
 	spudinput_gamepad_id *ids       = SPUD_NEW_ARRAY(allocator, spudinput_gamepad_id, (size_t)needed);
 	if (!ids)
 		return SPUDRESULT_OUT_OF_MEMORY;
@@ -402,17 +402,18 @@ SPUDRESULT spudinput_instance_create(
 	spudinput_instance instance = SPUD_NEW_ZEROED(desc->allocator, struct spudinput_instance_t);
 	if (!instance)
 		return SPUDRESULT_OUT_OF_MEMORY;
-	instance->allocator = *desc->allocator;
+	instance->head.allocator = *desc->allocator;
+	SPUD_BIRTH(instance);
 	instance->desc      = *desc;
 	/* The caller's chain and allocator struct needn't outlive this call;
 	 * nothing is chained yet. */
 	instance->desc.base.next = NULL;
-	instance->desc.allocator = &instance->allocator;
+	instance->desc.allocator = &instance->head.allocator;
 	instance->next_id        = 1;
 
 	const SPUDRESULT result = spudinput_backend_create(instance);
 	if (result != SPUD_SUCCESS) {
-		const SPUD_ALLOCATOR allocator = instance->allocator;
+		const SPUD_ALLOCATOR allocator = instance->head.allocator;
 		SPUD_DELETE(&allocator, struct spudinput_instance_t, instance);
 		return result;
 	}
@@ -424,8 +425,11 @@ SPUDRESULT spudinput_instance_create(
 void spudinput_instance_destroy(spudinput_instance instance) {
 	if (!instance)
 		return;
+	if (SPUD_STALE(instance, "spudinput_instance_destroy", "instance"))
+		return;
 
-	const SPUD_ALLOCATOR allocator = instance->allocator;
+	SPUD_KILL(instance);
+	const SPUD_ALLOCATOR allocator = instance->head.allocator;
 	for (uint32_t i = 0; i < instance->record_count; ++i) {
 		spudinput_backend_release_gamepad(instance, &instance->records[i]);
 		SPUD_DELETE_ARRAY(&allocator, SPUDINPUT_GAMEPAD_MOTION_SAMPLE, instance->records[i].motion_samples, instance->desc.motion_sample_capacity);
@@ -440,12 +444,16 @@ void spudinput_instance_destroy(spudinput_instance instance) {
 SPUDINPUT_NATIVE_API spudinput_instance_get_native_api(spudinput_instance instance) {
 	if (!instance)
 		return SPUDINPUT_NATIVE_API_NONE;
+	if (SPUD_STALE(instance, "spudinput_instance_get_native_api", "instance"))
+		return SPUDINPUT_NATIVE_API_NONE;
 
 	return instance->desc.native_api;
 }
 
 SPUDRESULT spudinput_instance_poll(spudinput_instance instance) {
 	if (!instance)
+		return SPUDRESULT_SPUDINPUT_INVALID_INSTANCE;
+	if (SPUD_STALE(instance, "spudinput_instance_poll", "instance"))
 		return SPUDRESULT_SPUDINPUT_INVALID_INSTANCE;
 
 	for (uint32_t i = 0; i < instance->record_count; ++i)
@@ -462,7 +470,7 @@ SPUDRESULT spudinput_instance_poll(spudinput_instance instance) {
 		spudinput_gamepad_record *record = &instance->records[i];
 		if (!record->seen) {
 			spudinput_backend_release_gamepad(instance, record);
-			SPUD_DELETE_ARRAY(&instance->allocator, SPUDINPUT_GAMEPAD_MOTION_SAMPLE, record->motion_samples, instance->desc.motion_sample_capacity);
+			SPUD_DELETE_ARRAY(&instance->head.allocator, SPUDINPUT_GAMEPAD_MOTION_SAMPLE, record->motion_samples, instance->desc.motion_sample_capacity);
 			continue;
 		}
 
@@ -488,6 +496,8 @@ SPUDRESULT spudinput_instance_get_gamepads(
     uint32_t *out_gamepad_count) {
 	if (!instance)
 		return SPUDRESULT_SPUDINPUT_INVALID_INSTANCE;
+	if (SPUD_STALE(instance, "spudinput_instance_get_gamepads", "instance"))
+		return SPUDRESULT_SPUDINPUT_INVALID_INSTANCE;
 	if (!out_gamepads || !out_gamepad_count)
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
 
@@ -501,6 +511,8 @@ SPUDRESULT spudinput_gamepad_get_properties(
     spudinput_gamepad_id gamepad,
     SPUDINPUT_GAMEPAD_PROPERTIES *out_properties) {
 	if (!instance)
+		return SPUDRESULT_SPUDINPUT_INVALID_INSTANCE;
+	if (SPUD_STALE(instance, "spudinput_gamepad_get_properties", "instance"))
 		return SPUDRESULT_SPUDINPUT_INVALID_INSTANCE;
 
 	const spudinput_gamepad_record *record = spudinput_find_gamepad(instance, gamepad);
@@ -525,6 +537,8 @@ SPUDRESULT spudinput_gamepad_get_state(
     SPUDINPUT_GAMEPAD_STATE *out_state) {
 	if (!instance)
 		return SPUDRESULT_SPUDINPUT_INVALID_INSTANCE;
+	if (SPUD_STALE(instance, "spudinput_gamepad_get_state", "instance"))
+		return SPUDRESULT_SPUDINPUT_INVALID_INSTANCE;
 
 	const spudinput_gamepad_record *record = spudinput_find_gamepad(instance, gamepad);
 	if (!record)
@@ -543,6 +557,8 @@ SPUDRESULT spudinput_gamepad_set_rumble(
     spudinput_gamepad_id gamepad,
     const SPUDINPUT_GAMEPAD_RUMBLE *rumble) {
 	if (!instance)
+		return SPUDRESULT_SPUDINPUT_INVALID_INSTANCE;
+	if (SPUD_STALE(instance, "spudinput_gamepad_set_rumble", "instance"))
 		return SPUDRESULT_SPUDINPUT_INVALID_INSTANCE;
 
 	spudinput_gamepad_record *record = spudinput_find_gamepad(instance, gamepad);
@@ -573,6 +589,8 @@ SPUDRESULT spudinput_gamepad_get_battery(
     SPUDINPUT_GAMEPAD_BATTERY *out_battery) {
 	if (!instance)
 		return SPUDRESULT_SPUDINPUT_INVALID_INSTANCE;
+	if (SPUD_STALE(instance, "spudinput_gamepad_get_battery", "instance"))
+		return SPUDRESULT_SPUDINPUT_INVALID_INSTANCE;
 
 	const spudinput_gamepad_record *record = spudinput_find_gamepad(instance, gamepad);
 	if (!record)
@@ -596,6 +614,8 @@ SPUDRESULT spudinput_gamepad_set_motion_enabled(
     bool enabled) {
 	if (!instance)
 		return SPUDRESULT_SPUDINPUT_INVALID_INSTANCE;
+	if (SPUD_STALE(instance, "spudinput_gamepad_set_motion_enabled", "instance"))
+		return SPUDRESULT_SPUDINPUT_INVALID_INSTANCE;
 
 	spudinput_gamepad_record *record = spudinput_find_gamepad(instance, gamepad);
 	if (!record)
@@ -609,7 +629,7 @@ SPUDRESULT spudinput_gamepad_set_motion_enabled(
 
 	if (enabled && !record->motion_samples) {
 		record->motion_samples =
-		    SPUD_NEW_ARRAY_ZEROED(&instance->allocator, SPUDINPUT_GAMEPAD_MOTION_SAMPLE, instance->desc.motion_sample_capacity);
+		    SPUD_NEW_ARRAY_ZEROED(&instance->head.allocator, SPUDINPUT_GAMEPAD_MOTION_SAMPLE, instance->desc.motion_sample_capacity);
 		if (!record->motion_samples)
 			return SPUDRESULT_OUT_OF_MEMORY;
 	}
@@ -635,6 +655,8 @@ SPUDRESULT spudinput_gamepad_get_motion(
     uint32_t *out_dropped_count) {
 	if (!instance)
 		return SPUDRESULT_SPUDINPUT_INVALID_INSTANCE;
+	if (SPUD_STALE(instance, "spudinput_gamepad_get_motion", "instance"))
+		return SPUDRESULT_SPUDINPUT_INVALID_INSTANCE;
 
 	const spudinput_gamepad_record *record = spudinput_find_gamepad(instance, gamepad);
 	if (!record)
@@ -659,6 +681,8 @@ SPUDRESULT spudinput_gamepad_get_touch(
     SPUDINPUT_GAMEPAD_TOUCH_STATE *out_touch) {
 	if (!instance)
 		return SPUDRESULT_SPUDINPUT_INVALID_INSTANCE;
+	if (SPUD_STALE(instance, "spudinput_gamepad_get_touch", "instance"))
+		return SPUDRESULT_SPUDINPUT_INVALID_INSTANCE;
 
 	const spudinput_gamepad_record *record = spudinput_find_gamepad(instance, gamepad);
 	if (!record)
@@ -682,6 +706,8 @@ SPUDRESULT spudinput_gamepad_set_light_color(
     float blue) {
 	if (!instance)
 		return SPUDRESULT_SPUDINPUT_INVALID_INSTANCE;
+	if (SPUD_STALE(instance, "spudinput_gamepad_set_light_color", "instance"))
+		return SPUDRESULT_SPUDINPUT_INVALID_INSTANCE;
 
 	spudinput_gamepad_record *record = spudinput_find_gamepad(instance, gamepad);
 	if (!record)
@@ -699,6 +725,8 @@ SPUDRESULT spudinput_gamepad_set_player_indicator(
     spudinput_gamepad_id gamepad,
     uint32_t player) {
 	if (!instance)
+		return SPUDRESULT_SPUDINPUT_INVALID_INSTANCE;
+	if (SPUD_STALE(instance, "spudinput_gamepad_set_player_indicator", "instance"))
 		return SPUDRESULT_SPUDINPUT_INVALID_INSTANCE;
 
 	spudinput_gamepad_record *record = spudinput_find_gamepad(instance, gamepad);
@@ -721,6 +749,8 @@ SPUDRESULT spudinput_gamepad_get_button_label(
     char *out_label,
     uint32_t label_size) {
 	if (!instance)
+		return SPUDRESULT_SPUDINPUT_INVALID_INSTANCE;
+	if (SPUD_STALE(instance, "spudinput_gamepad_get_button_label", "instance"))
 		return SPUDRESULT_SPUDINPUT_INVALID_INSTANCE;
 
 	spudinput_gamepad_record *record = spudinput_find_gamepad(instance, gamepad);
@@ -748,6 +778,8 @@ SPUDRESULT spudinput_gamepad_get_axis_label(
     char *out_label,
     uint32_t label_size) {
 	if (!instance)
+		return SPUDRESULT_SPUDINPUT_INVALID_INSTANCE;
+	if (SPUD_STALE(instance, "spudinput_gamepad_get_axis_label", "instance"))
 		return SPUDRESULT_SPUDINPUT_INVALID_INSTANCE;
 
 	spudinput_gamepad_record *record = spudinput_find_gamepad(instance, gamepad);

@@ -26,7 +26,8 @@ SPUDRESULT spudfile_instance_create(
 	spudfile_instance instance = SPUD_NEW_ZEROED(desc->allocator, struct spudfile_instance_t);
 	if (!instance)
 		return SPUDRESULT_OUT_OF_MEMORY;
-	instance->allocator = *desc->allocator;
+	instance->head.allocator = *desc->allocator;
+	SPUD_BIRTH(instance);
 	*out_instance       = instance;
 	return SPUD_SUCCESS;
 }
@@ -34,7 +35,10 @@ SPUDRESULT spudfile_instance_create(
 void spudfile_instance_destroy(spudfile_instance instance) {
 	if (!instance)
 		return;
-	const SPUD_ALLOCATOR allocator = instance->allocator;
+	if (SPUD_STALE(instance, "spudfile_instance_destroy", "instance"))
+		return;
+	SPUD_KILL(instance);
+	const SPUD_ALLOCATOR allocator = instance->head.allocator;
 	SPUD_DELETE(&allocator, struct spudfile_instance_t, instance);
 }
 
@@ -47,6 +51,8 @@ SPUDRESULT spudfile_file_open(
     const spudfile_open_desc *desc,
     spudfile_file *out_file) {
 	if (!instance)
+		return SPUDRESULT_SPUDFILE_INVALID_INSTANCE;
+	if (SPUD_STALE(instance, "spudfile_file_open", "instance"))
 		return SPUDRESULT_SPUDFILE_INVALID_INSTANCE;
 	if (!desc)
 		return SPUDRESULT_NULL_DESC;
@@ -67,10 +73,11 @@ SPUDRESULT spudfile_file_open(
 	if (desc->create == SPUDFILE_CREATE_TRUNCATE && desc->access == SPUDFILE_ACCESS_READ)
 		return SPUDRESULT_DESC_INVALID_PARAMETERS;
 
-	spudfile_file file = SPUD_NEW_ZEROED(&instance->allocator, struct spudfile_file_t);
+	spudfile_file file = SPUD_NEW_ZEROED(&instance->head.allocator, struct spudfile_file_t);
 	if (!file)
 		return SPUDRESULT_OUT_OF_MEMORY;
-	file->head.allocator = instance->allocator;
+	file->head.allocator = instance->head.allocator;
+	SPUD_BIRTH(file);
 	file->instance       = instance;
 	file->access         = desc->access;
 
@@ -91,7 +98,10 @@ SPUDRESULT spudfile_file_open(
 void spudfile_file_close(spudfile_file file) {
 	if (!file)
 		return;
+	if (SPUD_STALE(file, "spudfile_file_close", "file"))
+		return;
 	spudfile_backend_close(file->native);
+	SPUD_KILL(file);
 	const SPUD_ALLOCATOR allocator = file->head.allocator;
 	spud_string_free(&allocator, file->head.debug_name);
 	SPUD_DELETE(&allocator, struct spudfile_file_t, file);
@@ -110,6 +120,8 @@ SPUDRESULT spudfile_file_read_at(
     uint64_t *out_read) {
 	if (!file)
 		return SPUDRESULT_SPUDFILE_INVALID_FILE;
+	if (SPUD_STALE(file, "spudfile_file_read_at", "file"))
+		return SPUDRESULT_SPUDFILE_INVALID_FILE;
 	if (!buffer || !out_read)
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
 	*out_read = 0;
@@ -127,6 +139,8 @@ SPUDRESULT spudfile_file_write_at(
     uint64_t size) {
 	if (!file)
 		return SPUDRESULT_SPUDFILE_INVALID_FILE;
+	if (SPUD_STALE(file, "spudfile_file_write_at", "file"))
+		return SPUDRESULT_SPUDFILE_INVALID_FILE;
 	if (!data && size != 0)
 		return SPUDRESULT_NULL_DESC;
 	if (!spudfile_writable(file))
@@ -141,6 +155,8 @@ SPUDRESULT spudfile_file_get_size(
     uint64_t *out_size) {
 	if (!file)
 		return SPUDRESULT_SPUDFILE_INVALID_FILE;
+	if (SPUD_STALE(file, "spudfile_file_get_size", "file"))
+		return SPUDRESULT_SPUDFILE_INVALID_FILE;
 	if (!out_size)
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
 	return spudfile_backend_get_size(file->native, out_size);
@@ -151,6 +167,8 @@ SPUDRESULT spudfile_file_set_size(
     uint64_t size) {
 	if (!file)
 		return SPUDRESULT_SPUDFILE_INVALID_FILE;
+	if (SPUD_STALE(file, "spudfile_file_set_size", "file"))
+		return SPUDRESULT_SPUDFILE_INVALID_FILE;
 	if (!spudfile_writable(file))
 		return SPUDRESULT_SPUDFILE_NOT_WRITABLE;
 	return spudfile_backend_set_size(file->native, size);
@@ -160,6 +178,8 @@ SPUDRESULT spudfile_file_flush(
     spudfile_file file,
     SPUDFILE_FLUSH_LEVEL level) {
 	if (!file)
+		return SPUDRESULT_SPUDFILE_INVALID_FILE;
+	if (SPUD_STALE(file, "spudfile_file_flush", "file"))
 		return SPUDRESULT_SPUDFILE_INVALID_FILE;
 	if (level != SPUDFILE_FLUSH_LEVEL_DEVICE && level != SPUDFILE_FLUSH_LEVEL_MEDIA)
 		return SPUDRESULT_DESC_INVALID_PARAMETERS;
@@ -180,6 +200,8 @@ SPUDRESULT spudfile_file_map(
 	*out_mapping = NULL;
 	if (!file)
 		return SPUDRESULT_SPUDFILE_INVALID_FILE;
+	if (SPUD_STALE(file, "spudfile_file_map", "file"))
+		return SPUDRESULT_SPUDFILE_INVALID_FILE;
 	if (size == 0)
 		return SPUDRESULT_ZERO_SIZE;
 	if (!spudfile_readable(file))
@@ -195,6 +217,7 @@ SPUDRESULT spudfile_file_map(
 	if (!mapping)
 		return SPUDRESULT_OUT_OF_MEMORY;
 	mapping->head.allocator = file->head.allocator;
+	SPUD_BIRTH(mapping);
 	uint64_t lead           = 0;
 	const SPUDRESULT result = spudfile_backend_map(file->native, offset, size, &mapping->base, &mapping->base_size, &lead);
 	if (result != SPUD_SUCCESS) {
@@ -210,12 +233,21 @@ SPUDRESULT spudfile_file_map(
 
 const void *spudfile_mapping_get_data(spudfile_mapping mapping) { return mapping ? mapping->data : NULL; }
 
-uint64_t spudfile_mapping_get_size(spudfile_mapping mapping) { return mapping ? mapping->size : 0; }
+uint64_t spudfile_mapping_get_size(spudfile_mapping mapping) {
+	if (!mapping)
+		return 0;
+	if (SPUD_STALE(mapping, "spudfile_mapping_get_size", "mapping"))
+		return 0;
+	return mapping->size;
+}
 
 void spudfile_mapping_release(spudfile_mapping mapping) {
 	if (!mapping)
 		return;
+	if (SPUD_STALE(mapping, "spudfile_mapping_release", "mapping"))
+		return;
 	spudfile_backend_unmap(mapping->base, mapping->base_size);
+	SPUD_KILL(mapping);
 	const SPUD_ALLOCATOR allocator = mapping->head.allocator;
 	spud_string_free(&allocator, mapping->head.debug_name);
 	SPUD_DELETE(&allocator, struct spudfile_mapping_t, mapping);
@@ -228,6 +260,8 @@ SPUDRESULT spudfile_path_get_info(
     const char *path,
     SPUDFILE_PATH_INFO *out_info) {
 	if (!instance)
+		return SPUDRESULT_SPUDFILE_INVALID_INSTANCE;
+	if (SPUD_STALE(instance, "spudfile_path_get_info", "instance"))
 		return SPUDRESULT_SPUDFILE_INVALID_INSTANCE;
 	if (!spudfile_path_given(path))
 		return SPUDRESULT_SPUDFILE_NULL_PATH;
@@ -249,6 +283,8 @@ SPUDRESULT spudfile_path_replace(
     SPUDFILE_FLUSH_LEVEL level) {
 	if (!instance)
 		return SPUDRESULT_SPUDFILE_INVALID_INSTANCE;
+	if (SPUD_STALE(instance, "spudfile_path_replace", "instance"))
+		return SPUDRESULT_SPUDFILE_INVALID_INSTANCE;
 	if (!spudfile_path_given(source))
 		return SPUDRESULT_SPUDFILE_NULL_PATH;
 	if (!spudfile_path_given(target))
@@ -263,6 +299,8 @@ SPUDRESULT spudfile_path_remove(
     const char *path) {
 	if (!instance)
 		return SPUDRESULT_SPUDFILE_INVALID_INSTANCE;
+	if (SPUD_STALE(instance, "spudfile_path_remove", "instance"))
+		return SPUDRESULT_SPUDFILE_INVALID_INSTANCE;
 	if (!spudfile_path_given(path))
 		return SPUDRESULT_SPUDFILE_NULL_PATH;
 	return spudfile_backend_path_remove(instance, path);
@@ -272,6 +310,8 @@ SPUDRESULT spudfile_directory_create(
     spudfile_instance instance,
     const char *path) {
 	if (!instance)
+		return SPUDRESULT_SPUDFILE_INVALID_INSTANCE;
+	if (SPUD_STALE(instance, "spudfile_directory_create", "instance"))
 		return SPUDRESULT_SPUDFILE_INVALID_INSTANCE;
 	if (!spudfile_path_given(path))
 		return SPUDRESULT_SPUDFILE_NULL_PATH;

@@ -23,6 +23,8 @@ SPUDRESULT spudgpu_create_fence(
     spudgpu_fence *out_fence) {
 	if (!device)
 		return SPUDRESULT_GPU_INVALID_DEVICE;
+	if (SPUD_STALE(device, "spudgpu_create_fence", "device"))
+		return SPUDRESULT_GPU_INVALID_DEVICE;
 	if (!out_fence)
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
 
@@ -32,6 +34,7 @@ SPUDRESULT spudgpu_create_fence(
 		return SPUDRESULT_OUT_OF_MEMORY;
 	pResult                       = new (pResult) spudgpu_fence_d3d12();
 	pResult->head.allocator       = device->head.allocator;
+	SPUD_BIRTH(pResult);
 	pResult->_device              = device;
 	pResult->flags                = flags;
 
@@ -52,7 +55,10 @@ SPUDRESULT spudgpu_create_fence(
 void spudgpu_destroy_fence(spudgpu_fence fence) {
 	if (!fence)
 		return;
+	if (SPUD_STALE(fence, "spudgpu_destroy_fence", "fence"))
+		return;
 	SPUDGPU___LIVE_REMOVE(&fence->_device->_live, SPUDGPU___OBJECT_FENCE);
+	SPUD_KILL(fence);
 	const SPUD_ALLOCATOR allocator = fence->head.allocator;
 	spud_string_free(&allocator, fence->head.debug_name);
 	fence->~spudgpu_fence_d3d12();
@@ -62,14 +68,19 @@ void spudgpu_destroy_fence(spudgpu_fence fence) {
 uint64_t spudgpu_get_fence_value(spudgpu_fence fence) {
 	if (!fence)
 		return 0;
-	else
-		return fence->_d3d_fence->GetCompletedValue();
+	if (SPUD_STALE(fence, "spudgpu_get_fence_value", "fence"))
+		return 0;
+	return fence->_d3d_fence->GetCompletedValue();
 }
 SPUDRESULT spudgpu_signal_fence(
     spudgpu_device device, spudgpu_fence fence, uint64_t value) {
 	if (!device)
 		return SPUDRESULT_GPU_INVALID_DEVICE;
+	if (SPUD_STALE(device, "spudgpu_signal_fence", "device"))
+		return SPUDRESULT_GPU_INVALID_DEVICE;
 	if (!fence)
+		return SPUDRESULT_GPU_INVALID_FENCE;
+	if (SPUD_STALE(fence, "spudgpu_signal_fence", "fence"))
 		return SPUDRESULT_GPU_INVALID_FENCE;
 	if (FAILED(fence->_d3d_fence->Signal(value)))
 		return SPUDRESULT_API_SPECIFIC_FAILURE;
@@ -84,6 +95,8 @@ SPUDRESULT spudgpu_wait_for_fences(
     bool wait_all,
     uint64_t timeout_ns) {
 	if (!device)
+		return SPUDRESULT_GPU_INVALID_DEVICE;
+	if (SPUD_STALE(device, "spudgpu_wait_for_fences", "device"))
 		return SPUDRESULT_GPU_INVALID_DEVICE;
 	if (!fences)
 		return SPUDRESULT_GPU_INVALID_FENCE;
@@ -150,6 +163,8 @@ SPUDRESULT spudgpu_create_semaphore(
     spudgpu_device device, spudgpu_semaphore *out_semaphore) {
 	if (!device)
 		return SPUDRESULT_GPU_INVALID_DEVICE;
+	if (SPUD_STALE(device, "spudgpu_create_semaphore", "device"))
+		return SPUDRESULT_GPU_INVALID_DEVICE;
 	if (!out_semaphore)
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
 
@@ -159,6 +174,7 @@ SPUDRESULT spudgpu_create_semaphore(
 		return SPUDRESULT_OUT_OF_MEMORY;
 	pResult                 = new (pResult) spudgpu_semaphore_d3d12();
 	pResult->head.allocator = device->head.allocator;
+	SPUD_BIRTH(pResult);
 	pResult->_device        = device;
 
 	if (FAILED(device->_d3d_device->CreateFence(
@@ -177,7 +193,10 @@ SPUDRESULT spudgpu_create_semaphore(
 void spudgpu_destroy_semaphore(spudgpu_semaphore semaphore) {
 	if (!semaphore)
 		return;
+	if (SPUD_STALE(semaphore, "spudgpu_destroy_semaphore", "semaphore"))
+		return;
 	SPUDGPU___LIVE_REMOVE(&semaphore->_device->_live, SPUDGPU___OBJECT_SEMAPHORE);
+	SPUD_KILL(semaphore);
 	const SPUD_ALLOCATOR allocator = semaphore->head.allocator;
 	spud_string_free(&allocator, semaphore->head.debug_name);
 	semaphore->~spudgpu_semaphore_d3d12();

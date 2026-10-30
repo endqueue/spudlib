@@ -20,6 +20,7 @@ SPUDRESULT spudgpu_create_fence(
     uint64_t initial_value,
     spudgpu_fence *out_fence) {
     if (!device) return SPUDRESULT_GPU_INVALID_DEVICE;
+    if (SPUD_STALE(device, "spudgpu_create_fence", "device")) return SPUDRESULT_GPU_INVALID_DEVICE;
     if (!out_fence) return SPUDRESULT_NULL_OUTPUT_PARAMETER;
     // SPUDGPU_FENCE_FLAG_SHARED has nothing to select here: sharing a
     // semaphore across processes is an export done on demand, not a
@@ -38,6 +39,7 @@ SPUDRESULT spudgpu_create_fence(
     spudgpu_fence_vulkan *fence = SPUD_NEW_ZEROED(&device->head.allocator, spudgpu_fence_vulkan);
     if (!fence) return SPUDRESULT_OUT_OF_MEMORY;
     fence->head.allocator = device->head.allocator;
+    SPUD_BIRTH(fence);
 
     VkResult r = vkCreateSemaphore(device->_logical_device_vk, &info, NULL, &fence->_semaphore_vk);
     if (r != VK_SUCCESS) {
@@ -54,8 +56,10 @@ SPUDRESULT spudgpu_create_fence(
 
 void spudgpu_destroy_fence(spudgpu_fence fence) {
     if (!fence) return;
+    if (SPUD_STALE(fence, "spudgpu_destroy_fence", "fence")) return;
     vkDestroySemaphore(fence->_device_vk, fence->_semaphore_vk, NULL);
     SPUDGPU___LIVE_REMOVE(&fence->_shared->live, SPUDGPU___OBJECT_FENCE);
+    SPUD_KILL(fence);
     const SPUD_ALLOCATOR allocator = fence->head.allocator;
     spud_string_free(&allocator, fence->head.debug_name);
     SPUD_DELETE(&allocator, spudgpu_fence_vulkan, fence);
@@ -63,6 +67,7 @@ void spudgpu_destroy_fence(spudgpu_fence fence) {
 
 uint64_t spudgpu_get_fence_value(spudgpu_fence fence) {
     if (!fence) return 0;
+    if (SPUD_STALE(fence, "spudgpu_get_fence_value", "fence")) return 0;
     uint64_t value = 0;
     if (vkGetSemaphoreCounterValue(fence->_device_vk, fence->_semaphore_vk, &value) != VK_SUCCESS)
         return 0;
@@ -74,7 +79,9 @@ SPUDRESULT spudgpu_signal_fence(
     spudgpu_fence fence,
     uint64_t value) {
     if (!device) return SPUDRESULT_GPU_INVALID_DEVICE;
+    if (SPUD_STALE(device, "spudgpu_signal_fence", "device")) return SPUDRESULT_GPU_INVALID_DEVICE;
     if (!fence) return SPUDRESULT_GPU_INVALID_FENCE;
+    if (SPUD_STALE(fence, "spudgpu_signal_fence", "fence")) return SPUDRESULT_GPU_INVALID_FENCE;
 
     VkSemaphoreSignalInfo info = {0};
     info.sType     = VK_STRUCTURE_TYPE_SEMAPHORE_SIGNAL_INFO;
@@ -93,6 +100,7 @@ SPUDRESULT spudgpu_wait_for_fences(
     bool wait_all,
     uint64_t timeout_ns) {
     if (!device) return SPUDRESULT_GPU_INVALID_DEVICE;
+    if (SPUD_STALE(device, "spudgpu_wait_for_fences", "device")) return SPUDRESULT_GPU_INVALID_DEVICE;
     if (!fences) return SPUDRESULT_GPU_INVALID_FENCE;
     if (!values) return SPUDRESULT_NULL_OBJECT;
     if (fence_count == 0) return SPUDRESULT_ZERO_SIZE;
@@ -125,6 +133,7 @@ SPUDRESULT spudgpu_create_semaphore(
     spudgpu_device device,
     spudgpu_semaphore *out_semaphore) {
     if (!device) return SPUDRESULT_GPU_INVALID_DEVICE;
+    if (SPUD_STALE(device, "spudgpu_create_semaphore", "device")) return SPUDRESULT_GPU_INVALID_DEVICE;
     if (!out_semaphore) return SPUDRESULT_NULL_OUTPUT_PARAMETER;
 
     VkSemaphoreCreateInfo info = {0};
@@ -133,6 +142,7 @@ SPUDRESULT spudgpu_create_semaphore(
     spudgpu_semaphore_vulkan *sem = SPUD_NEW_ZEROED(&device->head.allocator, spudgpu_semaphore_vulkan);
     if (!sem) return SPUDRESULT_GENERAL_FAILURE;
     sem->head.allocator = device->head.allocator;
+    SPUD_BIRTH(sem);
 
     VkResult r = vkCreateSemaphore(device->_logical_device_vk, &info, NULL, &sem->_semaphore_vk);
     if (r != VK_SUCCESS) {
@@ -149,8 +159,10 @@ SPUDRESULT spudgpu_create_semaphore(
 
 void spudgpu_destroy_semaphore(spudgpu_semaphore semaphore) {
     if (!semaphore) return;
+    if (SPUD_STALE(semaphore, "spudgpu_destroy_semaphore", "semaphore")) return;
     vkDestroySemaphore(semaphore->_device_vk, semaphore->_semaphore_vk, NULL);
     SPUDGPU___LIVE_REMOVE(&semaphore->_shared->live, SPUDGPU___OBJECT_SEMAPHORE);
+    SPUD_KILL(semaphore);
     const SPUD_ALLOCATOR allocator = semaphore->head.allocator;
     spud_string_free(&allocator, semaphore->head.debug_name);
     SPUD_DELETE(&allocator, spudgpu_semaphore_vulkan, semaphore);

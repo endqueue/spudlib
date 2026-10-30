@@ -27,6 +27,8 @@ SPUDRESULT spudgpu_create_fence(
     spudgpu_fence *out_fence) {
 	if (!device)
 		return SPUDRESULT_GPU_INVALID_DEVICE;
+	if (SPUD_STALE(device, "spudgpu_create_fence", "device"))
+		return SPUDRESULT_GPU_INVALID_DEVICE;
 	if (!out_fence)
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
 
@@ -38,6 +40,7 @@ SPUDRESULT spudgpu_create_fence(
 		goto failedattempt;
 	}
 	fence_metal->head.allocator = device->head.allocator;
+	SPUD_BIRTH(fence_metal);
 	fence_metal->_parent_device = (spudgpu_device_metal *)device;
 	fence_metal->_flags         = flags;
 
@@ -66,10 +69,13 @@ failedattempt:
 void spudgpu_destroy_fence(spudgpu_fence fence) {
 	spudgpu_fence_metal *fence_metal = (spudgpu_fence_metal *)fence;
 	if (fence_metal) {
+		if (SPUD_STALE(fence, "spudgpu_destroy_fence", "fence"))
+			return;
 		if (fence_metal->_shared_event_mtl) {
 			[fence_metal->_shared_event_mtl release];
 		}
 		SPUDGPU___LIVE_REMOVE(&fence_metal->_parent_device->_live, SPUDGPU___OBJECT_FENCE);
+		SPUD_KILL(fence);
 		const SPUD_ALLOCATOR allocator = fence_metal->head.allocator;
 		spud_string_free(&allocator, fence_metal->head.debug_name);
 		SPUD_DELETE(&allocator, spudgpu_fence_metal, fence_metal);
@@ -79,6 +85,8 @@ void spudgpu_destroy_fence(spudgpu_fence fence) {
 uint64_t spudgpu_get_fence_value(spudgpu_fence fence) {
 	spudgpu_fence_metal *fence_metal = (spudgpu_fence_metal *)fence;
 	if (!fence_metal)
+		return 0;
+	if (SPUD_STALE(fence, "spudgpu_get_fence_value", "fence"))
 		return 0;
 	if (!fence_metal->_shared_event_mtl)
 		return 0;
@@ -93,7 +101,11 @@ SPUDRESULT spudgpu_signal_fence(
     uint64_t value) {
 	if (!device)
 		return SPUDRESULT_GPU_INVALID_DEVICE;
+	if (SPUD_STALE(device, "spudgpu_signal_fence", "device"))
+		return SPUDRESULT_GPU_INVALID_DEVICE;
 	if (!fence)
+		return SPUDRESULT_GPU_INVALID_FENCE;
+	if (SPUD_STALE(fence, "spudgpu_signal_fence", "fence"))
 		return SPUDRESULT_GPU_INVALID_FENCE;
 
 	spudgpu_fence_metal *fence_metal = (spudgpu_fence_metal *)fence;
@@ -110,6 +122,8 @@ SPUDRESULT spudgpu_wait_for_fences(
     bool wait_all,
     uint64_t timeout_ns) {
 	if (!device)
+		return SPUDRESULT_GPU_INVALID_DEVICE;
+	if (SPUD_STALE(device, "spudgpu_wait_for_fences", "device"))
 		return SPUDRESULT_GPU_INVALID_DEVICE;
 	if (!fences)
 		return SPUDRESULT_GPU_INVALID_FENCE;
@@ -201,6 +215,8 @@ SPUDRESULT spudgpu_create_semaphore(
     spudgpu_semaphore *out_semaphore) {
 	if (!device)
 		return SPUDRESULT_GPU_INVALID_DEVICE;
+	if (SPUD_STALE(device, "spudgpu_create_semaphore", "device"))
+		return SPUDRESULT_GPU_INVALID_DEVICE;
 	if (!out_semaphore)
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
 
@@ -212,6 +228,7 @@ SPUDRESULT spudgpu_create_semaphore(
 		goto failedattempt;
 	}
 	semaphore_metal->head.allocator = device->head.allocator;
+	SPUD_BIRTH(semaphore_metal);
 	semaphore_metal->_parent_device = (spudgpu_device_metal *)device;
 
 	semaphore_metal->_event_mtl = [semaphore_metal->_parent_device->_device_mtl newEvent];
@@ -233,10 +250,13 @@ failedattempt:
 void spudgpu_destroy_semaphore(spudgpu_semaphore semaphore) {
 	spudgpu_semaphore_metal *semaphore_metal = (spudgpu_semaphore_metal *)semaphore;
 	if (semaphore_metal) {
+		if (SPUD_STALE(semaphore, "spudgpu_destroy_semaphore", "semaphore"))
+			return;
 		if (semaphore_metal->_event_mtl) {
 			[semaphore_metal->_event_mtl release];
 		}
 		SPUDGPU___LIVE_REMOVE(&semaphore_metal->_parent_device->_live, SPUDGPU___OBJECT_SEMAPHORE);
+		SPUD_KILL(semaphore);
 		const SPUD_ALLOCATOR allocator = semaphore_metal->head.allocator;
 		spud_string_free(&allocator, semaphore_metal->head.debug_name);
 		SPUD_DELETE(&allocator, spudgpu_semaphore_metal, semaphore_metal);

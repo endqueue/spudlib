@@ -603,7 +603,7 @@ SPUDINPUT_BACKEND_FUNCTION SPUDRESULT spudinput_gamecontroller_poll(spudinput_in
 			if (!gamepad || spudinput_gc_find(instance, controller))
 				continue;
 
-			spudinput_gc_pad *pad = SPUD_NEW_ZEROED(&instance->allocator, spudinput_gc_pad);
+			spudinput_gc_pad *pad = SPUD_NEW_ZEROED(&instance->head.allocator, spudinput_gc_pad);
 			if (!pad)
 				return SPUDRESULT_OUT_OF_MEMORY;
 			pad->controller = [controller retain];
@@ -652,8 +652,8 @@ SPUDINPUT_BACKEND_FUNCTION void spudinput_gamecontroller_release_gamepad(
 
 		[pad->controller release];
 	}
-	SPUD_DELETE_ARRAY(&instance->allocator, SPUDINPUT_GAMEPAD_MOTION_SAMPLE, pad->pending, pad->pending_capacity);
-	SPUD_DELETE(&instance->allocator, spudinput_gc_pad, pad);
+	SPUD_DELETE_ARRAY(&instance->head.allocator, SPUDINPUT_GAMEPAD_MOTION_SAMPLE, pad->pending, pad->pending_capacity);
+	SPUD_DELETE(&instance->head.allocator, spudinput_gc_pad, pad);
 	record->native = NULL;
 }
 
@@ -693,7 +693,7 @@ SPUDINPUT_BACKEND_FUNCTION SPUDRESULT spudinput_gamecontroller_set_motion_enable
 	spudinput_gc_pad *pad = (spudinput_gc_pad *)record->native;
 
 	if (enabled && !pad->pending) {
-		pad->pending = SPUD_NEW_ARRAY_ZEROED(&instance->allocator, SPUDINPUT_GAMEPAD_MOTION_SAMPLE, instance->desc.motion_sample_capacity);
+		pad->pending = SPUD_NEW_ARRAY_ZEROED(&instance->head.allocator, SPUDINPUT_GAMEPAD_MOTION_SAMPLE, instance->desc.motion_sample_capacity);
 		if (!pad->pending)
 			return SPUDRESULT_OUT_OF_MEMORY;
 		pad->pending_capacity = instance->desc.motion_sample_capacity;

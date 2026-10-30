@@ -23,6 +23,8 @@ SPUDRESULT spudgpu_get_command_queue(
     spudgpu_command_queue *out_queue) {
 	if (!device)
 		return SPUDRESULT_GPU_INVALID_DEVICE;
+	if (SPUD_STALE(device, "spudgpu_get_command_queue", "device"))
+		return SPUDRESULT_GPU_INVALID_DEVICE;
 	spudgpu_command_queue *queues = NULL;
 	uint32_t count                = 0;
 	switch (type) {
@@ -56,6 +58,8 @@ SPUDRESULT spudgpu_submit_command_lists(
     uint32_t cmd_list_count) {
 	if (!queue)
 		return SPUDRESULT_GPU_INVALID_COMMAND_QUEUE;
+	if (SPUD_STALE(queue, "spudgpu_submit_command_lists", "queue"))
+		return SPUDRESULT_GPU_INVALID_COMMAND_QUEUE;
 	if (!cmd_lists)
 		return SPUDRESULT_GPU_INVALID_COMMAND_LIST;
 	if (cmd_list_count == 0)
@@ -84,11 +88,15 @@ SPUDRESULT spudgpu_submit_command_lists_synced(
     spudgpu_swap_chain swap_chain) {
 	if (!queue)
 		return SPUDRESULT_GPU_INVALID_COMMAND_QUEUE;
+	if (SPUD_STALE(queue, "spudgpu_submit_command_lists_synced", "queue"))
+		return SPUDRESULT_GPU_INVALID_COMMAND_QUEUE;
 	if (!cmd_lists)
 		return SPUDRESULT_GPU_INVALID_COMMAND_LIST;
 	if (cmd_list_count == 0)
 		return SPUDRESULT_ZERO_SIZE;
 	if (!swap_chain)
+		return SPUDRESULT_GPU_INVALID_SWAP_CHAIN;
+	if (SPUD_STALE(swap_chain, "spudgpu_submit_command_lists_synced", "swap_chain"))
 		return SPUDRESULT_GPU_INVALID_SWAP_CHAIN;
 
 	// spudgpu_queue_submit with only the command lists and the swap chain set.
@@ -161,6 +169,8 @@ SPUDRESULT spudgpu_create_command_allocator(
     spudgpu_command_allocator *out_allocator) {
 	if (!device)
 		return SPUDRESULT_GPU_INVALID_DEVICE;
+	if (SPUD_STALE(device, "spudgpu_create_command_allocator", "device"))
+		return SPUDRESULT_GPU_INVALID_DEVICE;
 	if (!desc)
 		return SPUDRESULT_NULL_DESC;
 	const SPUDRESULT base_sr = spud_struct_check(&desc->base, SPUD_STRUCT_TYPE_GPU_COMMAND_ALLOCATOR_DESC);
@@ -177,6 +187,7 @@ SPUDRESULT spudgpu_create_command_allocator(
 	if (!allocator_metal)
 		return SPUDRESULT_OUT_OF_MEMORY;
 	allocator_metal->head.allocator = device->head.allocator;
+	SPUD_BIRTH(allocator_metal);
 	allocator_metal->_parent_device = (spudgpu_device_metal *)device;
 	allocator_metal->_desc          = *desc;
 	allocator_metal->_parent_queue  = queue;
@@ -189,8 +200,11 @@ SPUDRESULT spudgpu_create_command_allocator(
 void spudgpu_destroy_command_allocator(spudgpu_command_allocator allocator) {
 	spudgpu_command_allocator_metal *allocator_metal = (spudgpu_command_allocator_metal *)allocator;
 	if (allocator_metal) {
+		if (SPUD_STALE(allocator, "spudgpu_destroy_command_allocator", "allocator"))
+			return;
 		// _parent_queue is borrowed from the device, which releases it.
 		SPUDGPU___LIVE_REMOVE(&allocator_metal->_parent_device->_live, SPUDGPU___OBJECT_COMMAND_ALLOCATOR);
+		SPUD_KILL(allocator);
 		const SPUD_ALLOCATOR memory_allocator = allocator_metal->head.allocator;
 		spud_string_free(&memory_allocator, allocator_metal->head.debug_name);
 		SPUD_DELETE(&memory_allocator, spudgpu_command_allocator_metal, allocator_metal);
@@ -199,6 +213,8 @@ void spudgpu_destroy_command_allocator(spudgpu_command_allocator allocator) {
 
 SPUDRESULT spudgpu_reset_command_allocator(spudgpu_command_allocator allocator) {
 	if (!allocator)
+		return SPUDRESULT_GPU_INVALID_COMMAND_ALLOCATOR;
+	if (SPUD_STALE(allocator, "spudgpu_reset_command_allocator", "allocator"))
 		return SPUDRESULT_GPU_INVALID_COMMAND_ALLOCATOR;
 #if _DEBUG
 	// spudgpu.h: no list of the allocator is open when it is reset.
@@ -219,6 +235,8 @@ SPUDRESULT spudgpu_create_command_list(
     spudgpu_command_list *out_cmd_list) {
 	if (!allocator)
 		return SPUDRESULT_GPU_INVALID_COMMAND_ALLOCATOR;
+	if (SPUD_STALE(allocator, "spudgpu_create_command_list", "allocator"))
+		return SPUDRESULT_GPU_INVALID_COMMAND_ALLOCATOR;
 	if (!out_cmd_list)
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
 
@@ -231,6 +249,7 @@ SPUDRESULT spudgpu_create_command_list(
 		goto failedattempt;
 	}
 	cmd_list_metal->head.allocator    = allocator->head.allocator;
+	SPUD_BIRTH(cmd_list_metal);
 	cmd_list_metal->_parent_allocator = (spudgpu_command_allocator_metal *)allocator;
 
 	spudgpumetal___internal_acquire_command_buffer(cmd_list_metal);
@@ -247,6 +266,8 @@ failedattempt:
 void spudgpu_destroy_command_list(spudgpu_command_list cmd) {
 	spudgpu_command_list_metal *cmd_list_metal = (spudgpu_command_list_metal *)cmd;
 	if (cmd_list_metal) {
+		if (SPUD_STALE(cmd, "spudgpu_destroy_command_list", "cmd"))
+			return;
 		if (cmd_list_metal->_command_buffer_mtl) {
 			[cmd_list_metal->_command_buffer_mtl release];
 		}
@@ -256,6 +277,7 @@ void spudgpu_destroy_command_list(spudgpu_command_list cmd) {
 			cmd_list_metal->_parent_allocator->_open_list = NULL;
 #endif
 		SPUDGPU___LIVE_REMOVE(&cmd_list_metal->_parent_allocator->_parent_device->_live, SPUDGPU___OBJECT_COMMAND_LIST);
+		SPUD_KILL(cmd);
 		const SPUD_ALLOCATOR allocator = cmd_list_metal->head.allocator;
 		spud_string_free(&allocator, cmd_list_metal->head.debug_name);
 		SPUD_DELETE(&allocator, spudgpu_command_list_metal, cmd_list_metal);
@@ -264,6 +286,8 @@ void spudgpu_destroy_command_list(spudgpu_command_list cmd) {
 
 void spudgpu_begin_command_list(spudgpu_command_list cmd) {
 	if (!cmd)
+		return;
+	if (SPUD_STALE(cmd, "spudgpu_begin_command_list", "cmd"))
 		return;
 
 	spudgpu_command_list_metal *cmd_list_metal = (spudgpu_command_list_metal *)cmd;
@@ -281,6 +305,8 @@ void spudgpu_begin_command_list(spudgpu_command_list cmd) {
 
 void spudgpu_end_command_list(spudgpu_command_list cmd) {
 	if (!cmd)
+		return;
+	if (SPUD_STALE(cmd, "spudgpu_end_command_list", "cmd"))
 		return;
 #if _DEBUG
 	{
@@ -308,6 +334,8 @@ void spudgpu_end_command_list(spudgpu_command_list cmd) {
 void spudgpu_cmd_begin_debug_label(spudgpu_command_list cmd, const char *label) {
 	if (!cmd)
 		return;
+	if (SPUD_STALE(cmd, "spudgpu_cmd_begin_debug_label", "cmd"))
+		return;
 	spudgpu_command_list_metal *cmd_list_metal = (spudgpu_command_list_metal *)cmd;
 	// Allocated and released here rather than autoreleased: a caller in
 	// plain C may have no autorelease pool.
@@ -326,6 +354,8 @@ void spudgpu_cmd_begin_debug_label(spudgpu_command_list cmd, const char *label) 
 
 void spudgpu_cmd_end_debug_label(spudgpu_command_list cmd) {
 	if (!cmd)
+		return;
+	if (SPUD_STALE(cmd, "spudgpu_cmd_end_debug_label", "cmd"))
 		return;
 	spudgpu_command_list_metal *cmd_list_metal = (spudgpu_command_list_metal *)cmd;
 	if (cmd_list_metal->_active_render_encoder) {
@@ -379,6 +409,8 @@ void spudgpu_cmd_set_viewports(
     const SPUDGPU_VIEWPORT *viewports) {
 	if (!cmd || !viewports || viewport_count == 0)
 		return;
+	if (SPUD_STALE(cmd, "spudgpu_cmd_set_viewports", "cmd"))
+		return;
 
 	spudgpu_command_list_metal *cmd_list_metal = (spudgpu_command_list_metal *)cmd;
 	if (first_viewport + viewport_count > SPUDGPU_METAL_MAX_VIEWPORTS)
@@ -419,6 +451,8 @@ void spudgpu_cmd_set_scissor_rects(
     const SPUDGPU_SCISSOR_RECT *scissor_rects) {
 	if (!cmd || !scissor_rects || scissor_rect_count == 0)
 		return;
+	if (SPUD_STALE(cmd, "spudgpu_cmd_set_scissor_rects", "cmd"))
+		return;
 
 	spudgpu_command_list_metal *cmd_list_metal = (spudgpu_command_list_metal *)cmd;
 	if (first_scissor_rect + scissor_rect_count > SPUDGPU_METAL_MAX_VIEWPORTS)
@@ -456,6 +490,8 @@ void spudgpu_cmd_set_vertex_buffers(
     spudgpu_buffer_view *buffer_views) {
 	if (!cmd || !buffer_views || view_count == 0)
 		return;
+	if (SPUD_STALE(cmd, "spudgpu_cmd_set_vertex_buffers", "cmd"))
+		return;
 
 	spudgpu_command_list_metal *cmd_list_metal = (spudgpu_command_list_metal *)cmd;
 	if (!cmd_list_metal->_active_render_encoder)
@@ -481,6 +517,10 @@ void spudgpu_cmd_set_index_buffer(
     spudgpu_command_list cmd,
     spudgpu_buffer_view buffer_view) {
 	if (!cmd || !buffer_view)
+		return;
+	if (SPUD_STALE(cmd, "spudgpu_cmd_set_index_buffer", "cmd"))
+		return;
+	if (SPUD_STALE(buffer_view, "spudgpu_cmd_set_index_buffer", "buffer_view"))
 		return;
 
 	// Metal has no bind-ahead-of-time index buffer state the way Vulkan's
@@ -560,6 +600,8 @@ void spudgpu_cmd_draw(
     uint32_t start_vertex_location) {
 	if (!cmd)
 		return;
+	if (SPUD_STALE(cmd, "spudgpu_cmd_draw", "cmd"))
+		return;
 
 	spudgpu_command_list_metal *cmd_list_metal = (spudgpu_command_list_metal *)cmd;
 	if (!cmd_list_metal->_active_render_encoder)
@@ -581,6 +623,8 @@ void spudgpu_cmd_draw_indexed(
     uint32_t start_index_location,
     int32_t base_vertex_location) {
 	if (!cmd)
+		return;
+	if (SPUD_STALE(cmd, "spudgpu_cmd_draw_indexed", "cmd"))
 		return;
 
 	spudgpu_command_list_metal *cmd_list_metal = (spudgpu_command_list_metal *)cmd;
@@ -621,6 +665,8 @@ void spudgpu_cmd_draw_instanced(
     uint32_t start_instance_location) {
 	if (!cmd)
 		return;
+	if (SPUD_STALE(cmd, "spudgpu_cmd_draw_instanced", "cmd"))
+		return;
 
 	spudgpu_command_list_metal *cmd_list_metal = (spudgpu_command_list_metal *)cmd;
 	if (!cmd_list_metal->_active_render_encoder)
@@ -646,6 +692,8 @@ void spudgpu_cmd_draw_indexed_instanced(
     int32_t base_vertex_location,
     uint32_t start_instance_location) {
 	if (!cmd)
+		return;
+	if (SPUD_STALE(cmd, "spudgpu_cmd_draw_indexed_instanced", "cmd"))
 		return;
 
 	spudgpu_command_list_metal *cmd_list_metal = (spudgpu_command_list_metal *)cmd;
@@ -690,6 +738,10 @@ void spudgpu_cmd_bind_pipeline(
     spudgpu_command_list cmd,
     spudgpu_shader_pipeline pipeline) {
 	if (!cmd || !pipeline)
+		return;
+	if (SPUD_STALE(cmd, "spudgpu_cmd_bind_pipeline", "cmd"))
+		return;
+	if (SPUD_STALE(pipeline, "spudgpu_cmd_bind_pipeline", "pipeline"))
 		return;
 
 	spudgpu_command_list_metal *cmd_list_metal    = (spudgpu_command_list_metal *)cmd;
@@ -747,6 +799,10 @@ void spudgpu_cmd_bind_compute_pipeline(
     spudgpu_compute_pipeline pipeline) {
 	if (!cmd || !pipeline)
 		return;
+	if (SPUD_STALE(cmd, "spudgpu_cmd_bind_compute_pipeline", "cmd"))
+		return;
+	if (SPUD_STALE(pipeline, "spudgpu_cmd_bind_compute_pipeline", "pipeline"))
+		return;
 
 	spudgpu_command_list_metal *cmd_list_metal      = (spudgpu_command_list_metal *)cmd;
 	spudgpu_compute_pipeline_metal *pipeline_metal  = (spudgpu_compute_pipeline_metal *)pipeline;
@@ -767,6 +823,8 @@ void spudgpu_cmd_dispatch(
     uint32_t group_count_y,
     uint32_t group_count_z) {
 	if (!cmd)
+		return;
+	if (SPUD_STALE(cmd, "spudgpu_cmd_dispatch", "cmd"))
 		return;
 
 	spudgpu_command_list_metal *cmd_list_metal = (spudgpu_command_list_metal *)cmd;
@@ -798,6 +856,8 @@ void spudgpu_cmd_dispatch_mesh(
     uint32_t group_count_y,
     uint32_t group_count_z) {
 	if (!cmd)
+		return;
+	if (SPUD_STALE(cmd, "spudgpu_cmd_dispatch_mesh", "cmd"))
 		return;
 
 	spudgpu_command_list_metal *cmd_list_metal = (spudgpu_command_list_metal *)cmd;
@@ -833,6 +893,8 @@ void spudgpu_cmd_set_depth_bounds(
     float max_depth_bounds) {
 	if (!cmd)
 		return;
+	if (SPUD_STALE(cmd, "spudgpu_cmd_set_depth_bounds", "cmd"))
+		return;
 
 	spudgpu_command_list_metal *cmd_list_metal = (spudgpu_command_list_metal *)cmd;
 	if (!cmd_list_metal->_active_render_encoder)
@@ -861,6 +923,10 @@ void spudgpu_cmd_draw_indirect(
     uint32_t draw_count,
     uint32_t stride) {
 	if (!cmd || !buffer || draw_count == 0)
+		return;
+	if (SPUD_STALE(cmd, "spudgpu_cmd_draw_indirect", "cmd"))
+		return;
+	if (SPUD_STALE(buffer, "spudgpu_cmd_draw_indirect", "buffer"))
 		return;
 
 	spudgpu_command_list_metal *cmd_list_metal = (spudgpu_command_list_metal *)cmd;
@@ -900,6 +966,10 @@ void spudgpu_cmd_draw_indexed_indirect(
     uint32_t draw_count,
     uint32_t stride) {
 	if (!cmd || !buffer || draw_count == 0)
+		return;
+	if (SPUD_STALE(cmd, "spudgpu_cmd_draw_indexed_indirect", "cmd"))
+		return;
+	if (SPUD_STALE(buffer, "spudgpu_cmd_draw_indexed_indirect", "buffer"))
 		return;
 
 	spudgpu_command_list_metal *cmd_list_metal = (spudgpu_command_list_metal *)cmd;
@@ -945,6 +1015,10 @@ void spudgpu_cmd_push_constants(
     const void *data) {
 	if (!cmd || !pipeline || !data || size == 0)
 		return;
+	if (SPUD_STALE(cmd, "spudgpu_cmd_push_constants", "cmd"))
+		return;
+	if (SPUD_STALE(pipeline, "spudgpu_cmd_push_constants", "pipeline"))
+		return;
 	if (offset + size > SPUDGPU_METAL_PUSH_CONSTANTS_SIZE)
 		return;
 
@@ -982,6 +1056,10 @@ void spudgpu_cmd_push_constants_compute(
     const void *data) {
 	if (!cmd || !pipeline || !data || size == 0)
 		return;
+	if (SPUD_STALE(cmd, "spudgpu_cmd_push_constants_compute", "cmd"))
+		return;
+	if (SPUD_STALE(pipeline, "spudgpu_cmd_push_constants_compute", "pipeline"))
+		return;
 
 	spudgpu_command_list_metal *cmd_list_metal     = (spudgpu_command_list_metal *)cmd;
 	spudgpu_compute_pipeline_metal *pipeline_metal = (spudgpu_compute_pipeline_metal *)pipeline;
@@ -1015,6 +1093,8 @@ SPUDRESULT spudgpu_queue_submit(
     spudgpu_command_queue queue,
     const spudgpu_submit_desc *desc) {
 	if (!queue)
+		return SPUDRESULT_GPU_INVALID_COMMAND_QUEUE;
+	if (SPUD_STALE(queue, "spudgpu_queue_submit", "queue"))
 		return SPUDRESULT_GPU_INVALID_COMMAND_QUEUE;
 	if (!desc)
 		return SPUDRESULT_NULL_DESC;
@@ -1101,6 +1181,8 @@ SPUDRESULT spudgpu_queue_submit(
 
 void spudgpu_queue_wait_idle(spudgpu_command_queue queue) {
 	if (!queue)
+		return;
+	if (SPUD_STALE(queue, "spudgpu_queue_wait_idle", "queue"))
 		return;
 
 	spudgpu_command_queue_metal *queue_metal = (spudgpu_command_queue_metal *)queue;

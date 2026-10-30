@@ -118,7 +118,7 @@ static bool spudgpu_d3d12_push_subresource_barriers(
 }
 
 static void spudgpu_d3d12_resource_barrier(
-    ID3D12GraphicsCommandList *cmdList,
+    spudgpu_command_list_d3d12 *cmd,
     spudgpu_image_d3d12 *image,
     SPUDGPU_IMAGE_LAYOUT new_layout) {
 	D3D12_RESOURCE_STATES stateAfter = spudgpu_d3d12_image_layout_state(image, new_layout);
@@ -132,7 +132,8 @@ static void spudgpu_d3d12_resource_barrier(
 		// again afterwards.
 		const UINT mipLevels = image->_desc.mip_levels;
 		const UINT arraySize = image->_desc.array_layers;
-		eq::array<D3D12_RESOURCE_BARRIER> barriers(&image->_device->_eq_allocator);
+		eq::array<D3D12_RESOURCE_BARRIER> &barriers = cmd->_scratch_barriers;
+		barriers.clear();
 		bool built = true;
 		for (UINT layer = 0; layer < arraySize && built; ++layer) {
 			for (UINT mip = 0; mip < mipLevels && built; ++mip) {
@@ -150,7 +151,7 @@ static void spudgpu_d3d12_resource_barrier(
 			return;
 		}
 		if (!barriers.empty())
-			cmdList->ResourceBarrier((UINT)barriers.size(), barriers.data);
+			cmd->_d3d_cmd_list->ResourceBarrier((UINT)barriers.size(), barriers.data);
 		image->_subresource_states.clear();
 		image->_current_state = stateAfter;
 		return;
@@ -160,7 +161,7 @@ static void spudgpu_d3d12_resource_barrier(
 	if (stateBefore == stateAfter) {
 		if (is_storage_state) {
 			D3D12_RESOURCE_BARRIER barrier = spudgpu_d3d12_uav_barrier(image);
-			cmdList->ResourceBarrier(1, &barrier);
+			cmd->_d3d_cmd_list->ResourceBarrier(1, &barrier);
 		}
 		return;
 	}
@@ -172,7 +173,7 @@ static void spudgpu_d3d12_resource_barrier(
 	barrier.Transition.StateBefore           = stateBefore;
 	barrier.Transition.StateAfter            = stateAfter;
 	barrier.Transition.Subresource           = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-	cmdList->ResourceBarrier(1, &barrier);
+	cmd->_d3d_cmd_list->ResourceBarrier(1, &barrier);
 	image->_current_state = stateAfter;
 }
 
@@ -186,7 +187,11 @@ void spudgpu_cmd_image_barrier(
 	(void)old_layout;
 	if (!cmd || !image)
 		return;
-	spudgpu_d3d12_resource_barrier(cmd->_d3d_cmd_list.Get(), image, new_layout);
+	if (SPUD_STALE(cmd, "spudgpu_cmd_image_barrier", "cmd"))
+		return;
+	if (SPUD_STALE(image, "spudgpu_cmd_image_barrier", "image"))
+		return;
+	spudgpu_d3d12_resource_barrier(cmd, image, new_layout);
 }
 
 void spudgpu_cmd_image_barrier_view(
@@ -195,9 +200,15 @@ void spudgpu_cmd_image_barrier_view(
     SPUDGPU_IMAGE_LAYOUT old_layout,
     SPUDGPU_IMAGE_LAYOUT new_layout) {
 	(void)old_layout;
-	if (!cmd || !image_view || !image_view->_image)
+	if (!cmd || !image_view)
 		return;
-	spudgpu_d3d12_resource_barrier(cmd->_d3d_cmd_list.Get(), image_view->_image, new_layout);
+	if (SPUD_STALE(cmd, "spudgpu_cmd_image_barrier_view", "cmd"))
+		return;
+	if (SPUD_STALE(image_view, "spudgpu_cmd_image_barrier_view", "image_view"))
+		return;
+	if (!image_view->_image)
+		return;
+	spudgpu_d3d12_resource_barrier(cmd, image_view->_image, new_layout);
 }
 
 void spudgpu_cmd_image_barrier_subresource(
@@ -208,6 +219,10 @@ void spudgpu_cmd_image_barrier_subresource(
     SPUDGPU_IMAGE_LAYOUT new_layout) {
 	(void)old_layout;
 	if (!cmd || !image || !range)
+		return;
+	if (SPUD_STALE(cmd, "spudgpu_cmd_image_barrier_subresource", "cmd"))
+		return;
+	if (SPUD_STALE(image, "spudgpu_cmd_image_barrier_subresource", "image"))
 		return;
 
 	const D3D12_RESOURCE_STATES stateAfter = spudgpu_d3d12_image_layout_state(image, new_layout);
@@ -226,7 +241,7 @@ void spudgpu_cmd_image_barrier_subresource(
 	// The whole image, and nothing of it out of step: the one-barrier path.
 	if (image->_subresource_states.empty() && range->base_mip_level == 0 && range->mip_level_count == mipLevels &&
 	    range->base_array_layer == 0 && range->array_layer_count == arraySize) {
-		spudgpu_d3d12_resource_barrier(cmd->_d3d_cmd_list.Get(), image, new_layout);
+		spudgpu_d3d12_resource_barrier(cmd, image, new_layout);
 		return;
 	}
 
@@ -245,7 +260,8 @@ void spudgpu_cmd_image_barrier_subresource(
 
 	// Room for every barrier this can make is taken first, so that nothing
 	// below can fail once the tracked states start to change.
-	eq::array<D3D12_RESOURCE_BARRIER> barriers(&image->_device->_eq_allocator);
+	eq::array<D3D12_RESOURCE_BARRIER> &barriers = cmd->_scratch_barriers;
+	barriers.clear();
 	// One more than the transitions, for the ordering barrier below.
 	if (barriers.reserve((size_t)range->mip_level_count * range->array_layer_count * spudgpu_d3d12_format_plane_count(image->_d3d_resource_desc.Format) +
 	                     1) != EQ_SUCCESS) {
@@ -317,6 +333,12 @@ void spudgpu_cmd_copy_buffer(
     uint64_t size) {
 	if (!cmd || !src_buffer || !dst_buffer)
 		return;
+	if (SPUD_STALE(cmd, "spudgpu_cmd_copy_buffer", "cmd"))
+		return;
+	if (SPUD_STALE(src_buffer, "spudgpu_cmd_copy_buffer", "src_buffer"))
+		return;
+	if (SPUD_STALE(dst_buffer, "spudgpu_cmd_copy_buffer", "dst_buffer"))
+		return;
 	cmd->_d3d_cmd_list->CopyBufferRegion(
 	    dst_buffer->_d3d_resource.Get(), dst_offset,
 	    src_buffer->_d3d_resource.Get(), src_offset, size);
@@ -328,6 +350,12 @@ void spudgpu_cmd_copy_buffer_to_image(
     spudgpu_image dst_image,
     const spudgpu_image_buffer_copy_desc *desc) {
 	if (!cmd || !src_buffer || !dst_image || !desc)
+		return;
+	if (SPUD_STALE(cmd, "spudgpu_cmd_copy_buffer_to_image", "cmd"))
+		return;
+	if (SPUD_STALE(src_buffer, "spudgpu_cmd_copy_buffer_to_image", "src_buffer"))
+		return;
+	if (SPUD_STALE(dst_image, "spudgpu_cmd_copy_buffer_to_image", "dst_image"))
 		return;
 
 	D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprint =
@@ -359,6 +387,12 @@ void spudgpu_cmd_copy_image_to_buffer(
     spudgpu_buffer dst_buffer,
     const spudgpu_image_buffer_copy_desc *desc) {
 	if (!cmd || !src_image || !dst_buffer || !desc)
+		return;
+	if (SPUD_STALE(cmd, "spudgpu_cmd_copy_image_to_buffer", "cmd"))
+		return;
+	if (SPUD_STALE(src_image, "spudgpu_cmd_copy_image_to_buffer", "src_image"))
+		return;
+	if (SPUD_STALE(dst_buffer, "spudgpu_cmd_copy_image_to_buffer", "dst_buffer"))
 		return;
 
 	D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprint =
@@ -401,6 +435,8 @@ void spudgpu_get_image_buffer_copy_size(
     uint64_t *out_total_size) {
 	if (!image)
 		return;
+	if (SPUD_STALE(image, "spudgpu_get_image_buffer_copy_size", "image"))
+		return;
 
 	D3D12_RESOURCE_DESC resDesc = image->_d3d_resource_desc;
 	D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprint = {};
@@ -420,6 +456,8 @@ SPUDRESULT spudgpu_get_image_buffer_copy_offset_alignment(
     uint64_t *out_alignment) {
 	if (!image)
 		return SPUDRESULT_GPU_INVALID_IMAGE;
+	if (SPUD_STALE(image, "spudgpu_get_image_buffer_copy_offset_alignment", "image"))
+		return SPUDRESULT_GPU_INVALID_IMAGE;
 	if (!out_alignment)
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
 	if (spudgpu___internal_format_block_bytes(image->_desc.format) == 0)
@@ -435,6 +473,12 @@ void spudgpu_cmd_blit_image(
     spudgpu_image dst_image,
     const spudgpu_image_blit_desc *desc) {
 	if (!cmd || !src_image || !dst_image || !desc)
+		return;
+	if (SPUD_STALE(cmd, "spudgpu_cmd_blit_image", "cmd"))
+		return;
+	if (SPUD_STALE(src_image, "spudgpu_cmd_blit_image", "src_image"))
+		return;
+	if (SPUD_STALE(dst_image, "spudgpu_cmd_blit_image", "dst_image"))
 		return;
 
 	UINT srcWidth  = desc->src_x1 - desc->src_x0;
@@ -513,6 +557,8 @@ void spudgpu_cmd_begin_rendering(
     const spudgpu_rendering_begin_desc *desc) {
 	if (!cmd || !desc)
 		return;
+	if (SPUD_STALE(cmd, "spudgpu_cmd_begin_rendering", "cmd"))
+		return;
 	if (spud_struct_check(&desc->base, SPUD_STRUCT_TYPE_GPU_RENDERING_BEGIN_DESC) != SPUD_SUCCESS)
 		return;
 	// A layered pass needs a device created with
@@ -523,7 +569,7 @@ void spudgpu_cmd_begin_rendering(
 	// Color attachments, a depth attachment, or both: a depth-only pass (a
 	// shadow map, a depth pre-pass) has no color attachment at all, as on
 	// Vulkan and Metal.
-	UINT colorCount = desc->color_attachments ? desc->color_attachment_count : 0;
+	UINT colorCount = desc->color_attachment_count;
 	if (colorCount > SPUDGPU_MAX_COLOR_ATTACHMENTS)
 		colorCount = SPUDGPU_MAX_COLOR_ATTACHMENTS;
 	if (colorCount > 0 && !desc->color_attachments[0].image_view)
@@ -681,6 +727,8 @@ void spudgpu_cmd_begin_rendering(
 void spudgpu_cmd_end_rendering(spudgpu_command_list cmd) {
 	if (!cmd)
 		return;
+	if (SPUD_STALE(cmd, "spudgpu_cmd_end_rendering", "cmd"))
+		return;
 	if (cmd->_using_render_pass)
 		cmd->_d3d_cmd_list->EndRenderPass();
 	if (cmd->_end_timestamp_heap) {
@@ -707,6 +755,10 @@ void spudgpu_cmd_clear_color_attachment(
 	(void)width;
 	(void)height; // ClearRenderTargetView clears the view's full extent.
 	if (!cmd || !attachment)
+		return;
+	if (SPUD_STALE(cmd, "spudgpu_cmd_clear_color_attachment", "cmd"))
+		return;
+	if (SPUD_STALE(attachment, "spudgpu_cmd_clear_color_attachment", "attachment"))
 		return;
 
 	spudgpu_image_view_d3d12 *view = (spudgpu_image_view_d3d12 *)attachment;
@@ -744,6 +796,10 @@ void spudgpu_cmd_clear_depth_attachment(
 	(void)width;
 	(void)height; // ClearDepthStencilView clears the view's full extent.
 	if (!cmd || !attachment)
+		return;
+	if (SPUD_STALE(cmd, "spudgpu_cmd_clear_depth_attachment", "cmd"))
+		return;
+	if (SPUD_STALE(attachment, "spudgpu_cmd_clear_depth_attachment", "attachment"))
 		return;
 	if (!clear_depth && !clear_stencil)
 		return;

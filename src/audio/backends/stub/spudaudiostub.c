@@ -30,6 +30,8 @@ SPUDRESULT spudaudio_create_instance(
 SPUDRESULT spudaudio_destroy_instance(spudaudio_instance instance) {
 	if (!instance)
 		return SPUDRESULT_SAUD_INVALID_INSTANCE;
+	if (SPUD_STALE(instance, "spudaudio_destroy_instance", "instance"))
+		return SPUDRESULT_SAUD_INVALID_INSTANCE;
 	return SPUDRESULT_NOT_IMPLEMENTED_YET;
 }
 
@@ -49,6 +51,8 @@ SPUDRESULT spudaudio_enumerate_devices(
 	*out_device_count = 0;
 	if (!instance)
 		return SPUDRESULT_SAUD_INVALID_INSTANCE;
+	if (SPUD_STALE(instance, "spudaudio_enumerate_devices", "instance"))
+		return SPUDRESULT_SAUD_INVALID_INSTANCE;
 	if (direction != SPUDAUDIO_DIRECTION_OUTPUT && direction != SPUDAUDIO_DIRECTION_INPUT)
 		return SPUDRESULT_DESC_INVALID_PARAMETERS;
 	return SPUDRESULT_NOT_IMPLEMENTED_YET;
@@ -63,6 +67,8 @@ SPUDRESULT spudaudio_get_device_properties(
 	if (base_sr != SPUD_SUCCESS)
 		return base_sr;
 	if (!device)
+		return SPUDRESULT_SAUD_INVALID_DEVICE;
+	if (SPUD_STALE(device, "spudaudio_get_device_properties", "device"))
 		return SPUDRESULT_SAUD_INVALID_DEVICE;
 	return SPUDRESULT_NOT_IMPLEMENTED_YET;
 }
@@ -83,6 +89,8 @@ SPUDRESULT spudaudio_get_timing_caps(
 	if (!format)
 		return SPUDRESULT_NULL_DESC;
 	if (!device)
+		return SPUDRESULT_SAUD_INVALID_DEVICE;
+	if (SPUD_STALE(device, "spudaudio_get_timing_caps", "device"))
 		return SPUDRESULT_SAUD_INVALID_DEVICE;
 	return SPUDRESULT_NOT_IMPLEMENTED_YET;
 }
@@ -122,11 +130,15 @@ void spudaudio_destroy_stream(spudaudio_stream stream) { (void)stream; }
 SPUDRESULT spudaudio_stream_start(spudaudio_stream stream) {
 	if (!stream)
 		return SPUDRESULT_SAUD_INVALID_STREAM;
+	if (SPUD_STALE(stream, "spudaudio_stream_start", "stream"))
+		return SPUDRESULT_SAUD_INVALID_STREAM;
 	return SPUDRESULT_NOT_IMPLEMENTED_YET;
 }
 
 SPUDRESULT spudaudio_stream_stop(spudaudio_stream stream) {
 	if (!stream)
+		return SPUDRESULT_SAUD_INVALID_STREAM;
+	if (SPUD_STALE(stream, "spudaudio_stream_stop", "stream"))
 		return SPUDRESULT_SAUD_INVALID_STREAM;
 	return SPUDRESULT_NOT_IMPLEMENTED_YET;
 }
@@ -141,6 +153,8 @@ SPUDRESULT spudaudio_stream_get_config(
 		return base_sr;
 	if (!stream)
 		return SPUDRESULT_SAUD_INVALID_STREAM;
+	if (SPUD_STALE(stream, "spudaudio_stream_get_config", "stream"))
+		return SPUDRESULT_SAUD_INVALID_STREAM;
 	return SPUDRESULT_NOT_IMPLEMENTED_YET;
 }
 
@@ -150,6 +164,8 @@ SPUDRESULT spudaudio_stream_get_latency_frames(
 	if (!out_latency_frames)
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
 	if (!stream)
+		return SPUDRESULT_SAUD_INVALID_STREAM;
+	if (SPUD_STALE(stream, "spudaudio_stream_get_latency_frames", "stream"))
 		return SPUDRESULT_SAUD_INVALID_STREAM;
 	return SPUDRESULT_NOT_IMPLEMENTED_YET;
 }
@@ -161,11 +177,15 @@ SPUDRESULT spudaudio_stream_get_status(
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
 	if (!stream)
 		return SPUDRESULT_SAUD_INVALID_STREAM;
+	if (SPUD_STALE(stream, "spudaudio_stream_get_status", "stream"))
+		return SPUDRESULT_SAUD_INVALID_STREAM;
 	return SPUDRESULT_NOT_IMPLEMENTED_YET;
 }
 
 SPUDRESULT spudaudio_set_device_sample_rate(spudaudio_device device, uint32_t sample_rate) {
 	if (!device)
+		return SPUDRESULT_SAUD_INVALID_DEVICE;
+	if (SPUD_STALE(device, "spudaudio_set_device_sample_rate", "device"))
 		return SPUDRESULT_SAUD_INVALID_DEVICE;
 	if (sample_rate == 0)
 		return SPUDRESULT_DESC_INVALID_PARAMETERS;
@@ -179,6 +199,8 @@ SPUDRESULT spudaudio_set_device_event_callback(
 	(void)callback;
 	(void)user_data;
 	if (!instance)
+		return SPUDRESULT_SAUD_INVALID_INSTANCE;
+	if (SPUD_STALE(instance, "spudaudio_set_device_event_callback", "instance"))
 		return SPUDRESULT_SAUD_INVALID_INSTANCE;
 	return SPUDRESULT_NOT_IMPLEMENTED_YET;
 }

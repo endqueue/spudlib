@@ -13,6 +13,7 @@
 #include "../../spudgpushared.h"
 #include <vulkan/vulkan.h>
 #include <stdatomic.h>
+#include <string.h>
 
 typedef struct spudgpu_instance_t {
     spud_object_head head;
@@ -155,10 +156,37 @@ static inline uint32_t spudgpuvulkan___max_draw_indirect_count(const spudgpu_dev
 // pointer. A queue is the caller's to synchronize (spudgpu.h,
 // spudgpu_submit_command_lists), as Vulkan's own vkQueueSubmit,
 // vkQueuePresentKHR and vkQueueWaitIdle require; nothing here locks it.
+// A block a call carves its temporary arrays from (Vulkan's barriers,
+// rectangles, handles, the values of a submission), kept with its capacity
+// on the object that owns it, a command list or a queue, from call to call:
+// a steady stream of calls allocates only until the largest has been seen.
+// Words of 8 bytes, the most any array carved from it needs aligned to.
+// The owner is used by one caller at a time (spudgpu.h), so one block is
+// enough; nothing in it outlives the call.
+typedef EQ_ARRAY(uint64_t) spudgpuvulkan___scratch;
+
+// Rounds a byte count up to the scratch block's words: where the next array
+// carved from it starts.
+#define SPUDGPUVULKAN___SCRATCH_ROUND(bytes) (((bytes) + 7u) & ~(size_t)7u)
+
+// [bytes] of [scratch], zeroed, whatever it held before gone: NULL if it
+// can't grow that far.
+static inline void *spudgpuvulkan___scratch_take(spudgpuvulkan___scratch *scratch, size_t bytes) {
+    size_t words = SPUDGPUVULKAN___SCRATCH_ROUND(bytes) / 8u;
+    if (words == 0) words = 1;
+    if (eq_array_reserve(scratch, words) != EQ_SUCCESS) return NULL;
+    memset(scratch->data, 0, words * 8u);
+    return scratch->data;
+}
+
 typedef struct spudgpu_command_queue_t {
     spud_object_head head;
     VkQueue _queue_vk;
     uint32_t _queue_family_index;
+    // A submission's arrays (spudgpuvulkan___scratch), on _eq_allocator,
+    // eqstd's view of head.allocator.
+    EQ_ALLOCATOR _eq_allocator;
+    spudgpuvulkan___scratch _scratch;
 #if _DEBUG
     // How many threads are in a call that uses the queue: a debug build
     // asserts it is never more than one (spudgpuvulkan___queue_enter).
@@ -206,6 +234,10 @@ typedef struct spudgpu_command_list_t {
     spud_object_head head;
     VkCommandBuffer _command_buffer_vk;
     spudgpu_command_allocator_vulkan _allocator;
+    // A recording call's arrays (spudgpuvulkan___scratch), on _eq_allocator,
+    // eqstd's view of head.allocator.
+    EQ_ALLOCATOR _eq_allocator;
+    spudgpuvulkan___scratch _scratch;
 #if _DEBUG
     // _allocator is a copy; this is the allocator itself, whose _open_list
     // the list's begin and end keep.

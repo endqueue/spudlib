@@ -15,6 +15,8 @@ SPUDRESULT spudgpu_get_command_queue(
     spudgpu_command_queue *out_queue) {
 	if (!device)
 		return SPUDRESULT_GPU_INVALID_DEVICE;
+	if (SPUD_STALE(device, "spudgpu_get_command_queue", "device"))
+		return SPUDRESULT_GPU_INVALID_DEVICE;
 	spudgpu_command_queue *queues = nullptr;
 	uint32_t count                = 0;
 	switch (type) {
@@ -48,23 +50,25 @@ SPUDRESULT spudgpu_submit_command_lists(
     uint32_t cmd_list_count) {
 	if (!queue)
 		return SPUDRESULT_GPU_INVALID_COMMAND_QUEUE;
+	if (SPUD_STALE(queue, "spudgpu_submit_command_lists", "queue"))
+		return SPUDRESULT_GPU_INVALID_COMMAND_QUEUE;
 	if (!cmd_lists)
 		return SPUDRESULT_GPU_INVALID_COMMAND_LIST;
 	if (cmd_list_count == 0)
 		return SPUDRESULT_ZERO_SIZE;
 	if (FAILED(queue->_device->_d3d_device->GetDeviceRemovedReason()))
 		return SPUDRESULT_GPU_DEVICE_LOST;
-	ID3D12CommandList **d3dLists =
-	    SPUD_NEW_ARRAY(&queue->head.allocator, ID3D12CommandList *, cmd_list_count);
-	if (!d3dLists)
-		return SPUDRESULT_OUT_OF_MEMORY;
-	for (uint32_t i = 0; i < cmd_list_count; ++i)
-		d3dLists[i] = cmd_lists[i]->_d3d_cmd_list.Get();
 	spudgpu_d3d12___queue_enter(queue);
+	queue->_scratch_lists.clear();
+	if (queue->_scratch_lists.reserve(cmd_list_count) != EQ_SUCCESS) {
+		spudgpu_d3d12___queue_leave(queue);
+		return SPUDRESULT_OUT_OF_MEMORY;
+	}
+	for (uint32_t i = 0; i < cmd_list_count; ++i)
+		(void)queue->_scratch_lists.push(cmd_lists[i]->_d3d_cmd_list.Get());
 	queue->_d3d_cmd_queue->ExecuteCommandLists(
-	    static_cast<UINT>(cmd_list_count), d3dLists);
+	    static_cast<UINT>(cmd_list_count), queue->_scratch_lists.data);
 	spudgpu_d3d12___queue_leave(queue);
-	SPUD_DELETE_ARRAY(&queue->head.allocator, ID3D12CommandList *, d3dLists, cmd_list_count);
 	return SPUD_SUCCESS;
 }
 
@@ -75,11 +79,15 @@ SPUDRESULT spudgpu_submit_command_lists_synced(
     spudgpu_swap_chain swap_chain) {
 	if (!queue)
 		return SPUDRESULT_GPU_INVALID_COMMAND_QUEUE;
+	if (SPUD_STALE(queue, "spudgpu_submit_command_lists_synced", "queue"))
+		return SPUDRESULT_GPU_INVALID_COMMAND_QUEUE;
 	if (!cmd_lists)
 		return SPUDRESULT_GPU_INVALID_COMMAND_LIST;
 	if (cmd_list_count == 0)
 		return SPUDRESULT_ZERO_SIZE;
 	if (!swap_chain)
+		return SPUDRESULT_GPU_INVALID_SWAP_CHAIN;
+	if (SPUD_STALE(swap_chain, "spudgpu_submit_command_lists_synced", "swap_chain"))
 		return SPUDRESULT_GPU_INVALID_SWAP_CHAIN;
 
 	// spudgpu_queue_submit with only the command lists and the swap chain set.
@@ -96,6 +104,8 @@ SPUDRESULT spudgpu_create_command_allocator(
     const spudgpu_command_allocator_desc *desc,
     spudgpu_command_allocator *out_allocator) {
 	if (!device)
+		return SPUDRESULT_GPU_INVALID_DEVICE;
+	if (SPUD_STALE(device, "spudgpu_create_command_allocator", "device"))
 		return SPUDRESULT_GPU_INVALID_DEVICE;
 	if (!desc)
 		return SPUDRESULT_NULL_DESC;
@@ -129,6 +139,7 @@ SPUDRESULT spudgpu_create_command_allocator(
 		return SPUDRESULT_OUT_OF_MEMORY;
 	pResult                 = new (pResult) spudgpu_command_allocator_d3d12();
 	pResult->head.allocator = device->head.allocator;
+	SPUD_BIRTH(pResult);
 	pResult->_device        = device;
     pResult->_d3d_cmd_list_type = spudgpu_d3d12_get_command_list_type(desc->type);
 	if (FAILED(device->_d3d_device->CreateCommandAllocator(
@@ -146,7 +157,10 @@ SPUDRESULT spudgpu_create_command_allocator(
 void spudgpu_destroy_command_allocator(spudgpu_command_allocator allocator) {
 	if (!allocator)
 		return;
+	if (SPUD_STALE(allocator, "spudgpu_destroy_command_allocator", "allocator"))
+		return;
 	SPUDGPU___LIVE_REMOVE(&allocator->_device->_live, SPUDGPU___OBJECT_COMMAND_ALLOCATOR);
+	SPUD_KILL(allocator);
 	const SPUD_ALLOCATOR memory_allocator = allocator->head.allocator;
 	spud_string_free(&memory_allocator, allocator->head.debug_name);
 	allocator->~spudgpu_command_allocator_d3d12();
@@ -156,6 +170,8 @@ void spudgpu_destroy_command_allocator(spudgpu_command_allocator allocator) {
 SPUDRESULT
 spudgpu_reset_command_allocator(spudgpu_command_allocator allocator) {
 	if (!allocator)
+		return SPUDRESULT_GPU_INVALID_COMMAND_ALLOCATOR;
+	if (SPUD_STALE(allocator, "spudgpu_reset_command_allocator", "allocator"))
 		return SPUDRESULT_GPU_INVALID_COMMAND_ALLOCATOR;
 #if _DEBUG
 	// spudgpu.h: no list of the allocator is open when it is reset.
@@ -170,6 +186,8 @@ SPUDRESULT spudgpu_create_command_list(
     spudgpu_command_allocator allocator, spudgpu_command_list *out_cmd_list) {
 	if (!allocator)
 		return SPUDRESULT_GPU_INVALID_COMMAND_ALLOCATOR;
+	if (SPUD_STALE(allocator, "spudgpu_create_command_list", "allocator"))
+		return SPUDRESULT_GPU_INVALID_COMMAND_ALLOCATOR;
     if (!out_cmd_list)
         return SPUDRESULT_NULL_OUTPUT_PARAMETER;
     spudgpu_command_list_d3d12 *pResult = SPUD_NEW(&allocator->_device->head.allocator, spudgpu_command_list_d3d12);
@@ -177,7 +195,11 @@ SPUDRESULT spudgpu_create_command_list(
         return SPUDRESULT_OUT_OF_MEMORY;
     pResult = new (pResult) spudgpu_command_list_d3d12();
     pResult->head.allocator = allocator->_device->head.allocator;
+    SPUD_BIRTH(pResult);
     pResult->_allocator = allocator;
+    pResult->_scratch_barriers = eq::array<D3D12_RESOURCE_BARRIER>(&allocator->_device->_eq_allocator);
+    pResult->_scratch_rects = eq::array<D3D12_RECT>(&allocator->_device->_eq_allocator);
+    pResult->_scratch_vb_views = eq::array<D3D12_VERTEX_BUFFER_VIEW>(&allocator->_device->_eq_allocator);
     if (FAILED(pResult->_allocator->_device->_d3d_device->CreateCommandList1(
         1, allocator->_d3d_cmd_list_type, D3D12_COMMAND_LIST_FLAG_NONE,
         IID_PPV_ARGS(&pResult->_d3d_cmd_list)
@@ -192,12 +214,14 @@ SPUDRESULT spudgpu_create_command_list(
 }
 void spudgpu_destroy_command_list(spudgpu_command_list cmd) {
     if (!cmd) return;
+    if (SPUD_STALE(cmd, "spudgpu_destroy_command_list", "cmd")) return;
 #if _DEBUG
     // A list destroyed open is not open any more.
     if (cmd->_allocator->_open_list == cmd)
         cmd->_allocator->_open_list = nullptr;
 #endif
     SPUDGPU___LIVE_REMOVE(&cmd->_allocator->_device->_live, SPUDGPU___OBJECT_COMMAND_LIST);
+    SPUD_KILL(cmd);
     const SPUD_ALLOCATOR allocator = cmd->head.allocator;
     spud_string_free(&allocator, cmd->head.debug_name);
     cmd->~spudgpu_command_list_d3d12();
@@ -206,6 +230,7 @@ void spudgpu_destroy_command_list(spudgpu_command_list cmd) {
 void spudgpu_begin_command_list(spudgpu_command_list cmd)
 {
 	if (!cmd) return;
+	if (SPUD_STALE(cmd, "spudgpu_begin_command_list", "cmd")) return;
 #if _DEBUG
 	// spudgpu.h: one list of an allocator open at a time. D3D12 would
 	// refuse the Reset below and leave the list closed.
@@ -218,6 +243,7 @@ void spudgpu_begin_command_list(spudgpu_command_list cmd)
 void spudgpu_end_command_list(spudgpu_command_list cmd)
 {
 	if (!cmd) return;
+	if (SPUD_STALE(cmd, "spudgpu_end_command_list", "cmd")) return;
 	cmd->_d3d_cmd_list->Close();
 #if _DEBUG
 	if (cmd->_allocator->_open_list == cmd)
@@ -232,12 +258,14 @@ static const UINT spudgpu_d3d12_pix_event_ansi = 1;
 
 void spudgpu_cmd_begin_debug_label(spudgpu_command_list cmd, const char *label) {
 	if (!cmd) return;
+	if (SPUD_STALE(cmd, "spudgpu_cmd_begin_debug_label", "cmd")) return;
 	const char *text = label ? label : "";
 	cmd->_d3d_cmd_list->BeginEvent(spudgpu_d3d12_pix_event_ansi, text, (UINT)(strlen(text) + 1));
 }
 
 void spudgpu_cmd_end_debug_label(spudgpu_command_list cmd) {
 	if (!cmd) return;
+	if (SPUD_STALE(cmd, "spudgpu_cmd_end_debug_label", "cmd")) return;
 	cmd->_d3d_cmd_list->EndEvent();
 }
 void spudgpu_cmd_set_viewports(
@@ -246,6 +274,8 @@ void spudgpu_cmd_set_viewports(
     uint32_t viewport_count,
     const SPUDGPU_VIEWPORT *viewports) {
 	if (!cmd || !viewports || !viewport_count)
+		return;
+	if (SPUD_STALE(cmd, "spudgpu_cmd_set_viewports", "cmd"))
 		return;
 	//D3D12_VIEWPORT *d3dViewports;
 	cmd->_d3d_cmd_list->RSSetViewports(
@@ -260,13 +290,15 @@ void spudgpu_cmd_set_scissor_rects(
     const SPUDGPU_SCISSOR_RECT *scissor_rects) {
 	if (!cmd || !scissor_rects || !scissor_rect_count)
 		return;
+	if (SPUD_STALE(cmd, "spudgpu_cmd_set_scissor_rects", "cmd"))
+		return;
 	// SPUDGPU_SCISSOR_RECT is {x, y, width, height} floats; D3D12_RECT is
 	// {left, top, right, bottom} LONGs -- not layout-compatible, needs a
 	// real per-rect conversion rather than a reinterpret_cast.
-	D3D12_RECT *d3dRects = SPUD_NEW_ARRAY(
-	    &cmd->head.allocator, D3D12_RECT, scissor_rect_count);
-	if (!d3dRects)
+	cmd->_scratch_rects.clear();
+	if (cmd->_scratch_rects.resize(scissor_rect_count) != EQ_SUCCESS)
 		return;
+	D3D12_RECT *d3dRects = cmd->_scratch_rects.data;
 	for (uint32_t i = 0; i < scissor_rect_count; ++i) {
 		d3dRects[i].left   = (LONG)scissor_rects[i].x;
 		d3dRects[i].top    = (LONG)scissor_rects[i].y;
@@ -275,7 +307,6 @@ void spudgpu_cmd_set_scissor_rects(
 	}
 	cmd->_d3d_cmd_list->RSSetScissorRects(
 	    static_cast<UINT>(scissor_rect_count), d3dRects);
-	SPUD_DELETE_ARRAY(&cmd->head.allocator, D3D12_RECT, d3dRects, scissor_rect_count);
 }
 void spudgpu_cmd_set_vertex_buffers(
     spudgpu_command_list cmd,
@@ -284,10 +315,12 @@ void spudgpu_cmd_set_vertex_buffers(
     spudgpu_buffer_view *buffer_views) {
 	if (!cmd || !view_count || !buffer_views)
 		return;
-	D3D12_VERTEX_BUFFER_VIEW *d3dVbViews = SPUD_NEW_ARRAY(
-	    &cmd->head.allocator, D3D12_VERTEX_BUFFER_VIEW, view_count);
-	if (!d3dVbViews)
+	if (SPUD_STALE(cmd, "spudgpu_cmd_set_vertex_buffers", "cmd"))
 		return;
+	cmd->_scratch_vb_views.clear();
+	if (cmd->_scratch_vb_views.resize(view_count) != EQ_SUCCESS)
+		return;
+	D3D12_VERTEX_BUFFER_VIEW *d3dVbViews = cmd->_scratch_vb_views.data;
 	for (uint32_t i = 0; i < view_count; ++i)
 		d3dVbViews[i] = buffer_views[i]->_d3d_view._vb;
 	cmd->_d3d_cmd_list->IASetVertexBuffers(
@@ -295,12 +328,15 @@ void spudgpu_cmd_set_vertex_buffers(
 		static_cast<UINT>(view_count),
 		d3dVbViews
 	);
-	SPUD_DELETE_ARRAY(&cmd->head.allocator, D3D12_VERTEX_BUFFER_VIEW, d3dVbViews, view_count);
 }
 void spudgpu_cmd_set_index_buffer(
     spudgpu_command_list cmd,
     spudgpu_buffer_view buffer_view) {
 	if (!cmd || !buffer_view)
+		return;
+	if (SPUD_STALE(cmd, "spudgpu_cmd_set_index_buffer", "cmd"))
+		return;
+	if (SPUD_STALE(buffer_view, "spudgpu_cmd_set_index_buffer", "buffer_view"))
 		return;
 	cmd->_d3d_cmd_list->IASetIndexBuffer(&buffer_view->_d3d_view._ib);
 }
@@ -309,6 +345,8 @@ void spudgpu_cmd_draw(
     uint32_t vertex_count,
     uint32_t start_vertex_location) {
 	if (!cmd)
+		return;
+	if (SPUD_STALE(cmd, "spudgpu_cmd_draw", "cmd"))
 		return;
 	cmd->_d3d_cmd_list->DrawInstanced(
 	    vertex_count, 1, start_vertex_location, 0);
@@ -320,6 +358,8 @@ void spudgpu_cmd_draw_indexed(
     int32_t base_vertex_location) {
 	if (!cmd)
 		return;
+	if (SPUD_STALE(cmd, "spudgpu_cmd_draw_indexed", "cmd"))
+		return;
 	cmd->_d3d_cmd_list->DrawIndexedInstanced(
 		index_count, 1, start_index_location, base_vertex_location, 0);
 }
@@ -330,6 +370,8 @@ void spudgpu_cmd_draw_instanced(
     uint32_t start_vertex_location,
     uint32_t start_instance_location) {
 	if (!cmd)
+		return;
+	if (SPUD_STALE(cmd, "spudgpu_cmd_draw_instanced", "cmd"))
 		return;
 	cmd->_d3d_cmd_list->DrawInstanced(
 		vertex_count_per_instance,
@@ -345,6 +387,8 @@ void spudgpu_cmd_draw_indexed_instanced(
     int32_t base_vertex_location,
     uint32_t start_instance_location) {
 	if (!cmd)
+		return;
+	if (SPUD_STALE(cmd, "spudgpu_cmd_draw_indexed_instanced", "cmd"))
 		return;
 	cmd->_d3d_cmd_list->DrawIndexedInstanced(
 		index_count_per_instance,
@@ -386,6 +430,8 @@ void spudgpu_cmd_dispatch(
     uint32_t group_count_z) {
 	if (!cmd)
 		return;
+	if (SPUD_STALE(cmd, "spudgpu_cmd_dispatch", "cmd"))
+		return;
 	cmd->_d3d_cmd_list->Dispatch(group_count_x, group_count_y, group_count_z);
 }
 
@@ -396,6 +442,8 @@ void spudgpu_cmd_dispatch_mesh(
     uint32_t group_count_y,
     uint32_t group_count_z) {
 	if (!cmd)
+		return;
+	if (SPUD_STALE(cmd, "spudgpu_cmd_dispatch_mesh", "cmd"))
 		return;
 	// DispatchMesh is declared on ID3D12GraphicsCommandList6 - _d3d_cmd_list
 	// is stored as the newer ID3D12GraphicsCommandList10 (spudgpud3d12.hpp),
@@ -410,6 +458,8 @@ void spudgpu_cmd_set_depth_bounds(
     float min_depth_bounds,
     float max_depth_bounds) {
 	if (!cmd)
+		return;
+	if (SPUD_STALE(cmd, "spudgpu_cmd_set_depth_bounds", "cmd"))
 		return;
 	// Without the feature the device may not have the test (OPTIONS2), and
 	// the device has exactly what it was created with.
@@ -494,6 +544,10 @@ void spudgpu_cmd_draw_indirect(
     uint32_t stride) {
 	if (!cmd || !buffer || draw_count == 0)
 		return;
+	if (SPUD_STALE(cmd, "spudgpu_cmd_draw_indirect", "cmd"))
+		return;
+	if (SPUD_STALE(buffer, "spudgpu_cmd_draw_indirect", "buffer"))
+		return;
 	if (draw_count > spudgpu_d3d12___max_draw_indirect_count(cmd->_allocator->_device))
 		return;
 	if (stride % 4 != 0 || stride < sizeof(spudgpu_draw_indirect_args))
@@ -513,6 +567,10 @@ void spudgpu_cmd_draw_indexed_indirect(
     uint32_t draw_count,
     uint32_t stride) {
 	if (!cmd || !buffer || draw_count == 0)
+		return;
+	if (SPUD_STALE(cmd, "spudgpu_cmd_draw_indexed_indirect", "cmd"))
+		return;
+	if (SPUD_STALE(buffer, "spudgpu_cmd_draw_indexed_indirect", "buffer"))
 		return;
 	if (draw_count > spudgpu_d3d12___max_draw_indirect_count(cmd->_allocator->_device))
 		return;
@@ -570,6 +628,8 @@ void spudgpu_cmd_pipeline_barrier(
     uint32_t image_barrier_count) {
 	if (!cmd)
 		return;
+	if (SPUD_STALE(cmd, "spudgpu_cmd_pipeline_barrier", "cmd"))
+		return;
 	if (buffer_barrier_count > 0 && !buffer_barriers)
 		return;
 	for (uint32_t buffer_barriers_i = 0; buffer_barriers_i < buffer_barrier_count; ++buffer_barriers_i)
@@ -586,7 +646,8 @@ void spudgpu_cmd_pipeline_barrier(
 
 	// Room for every barrier first, so that none of the pushes below can
 	// fail. Out of memory: nothing is recorded.
-	eq::array<D3D12_RESOURCE_BARRIER> barriers(&cmd->_allocator->_device->_eq_allocator);
+	eq::array<D3D12_RESOURCE_BARRIER> &barriers = cmd->_scratch_barriers;
+	barriers.clear();
 	if (barriers.reserve(total) != EQ_SUCCESS) {
 		printf("spudgpu: spudgpu_cmd_pipeline_barrier - out of memory building barriers; nothing recorded\n");
 		return;
@@ -634,6 +695,8 @@ SPUDRESULT spudgpu_queue_submit(
     spudgpu_command_queue queue, const spudgpu_submit_desc *desc) {
 	if (!queue)
 		return SPUDRESULT_GPU_INVALID_COMMAND_QUEUE;
+	if (SPUD_STALE(queue, "spudgpu_queue_submit", "queue"))
+		return SPUDRESULT_GPU_INVALID_COMMAND_QUEUE;
 	if (!desc)
 		return SPUDRESULT_NULL_DESC;
 	const SPUDRESULT base_sr = spud_struct_check(&desc->base, SPUD_STRUCT_TYPE_GPU_SUBMIT_DESC);
@@ -645,24 +708,24 @@ SPUDRESULT spudgpu_queue_submit(
 		return SPUDRESULT_ZERO_SIZE;
 	if (FAILED(queue->_device->_d3d_device->GetDeviceRemovedReason()))
 		return SPUDRESULT_GPU_DEVICE_LOST;
-	// Allocated before the waits are queued, so a failed allocation leaves
-	// the queue untouched.
-	ID3D12CommandList **d3dLists =
-	    SPUD_NEW_ARRAY(&queue->head.allocator, ID3D12CommandList *, desc->cmd_list_count);
-	if (!d3dLists)
-		return SPUDRESULT_OUT_OF_MEMORY;
 	// The waits, the lists and the signals are queued by separate calls, so
 	// the whole of this is one use of the queue (spudgpu.h).
 	spudgpu_d3d12___queue_enter(queue);
+	// Room for the lists before the waits are queued, so a failed
+	// allocation leaves the queue untouched.
+	queue->_scratch_lists.clear();
+	if (queue->_scratch_lists.reserve(desc->cmd_list_count) != EQ_SUCCESS) {
+		spudgpu_d3d12___queue_leave(queue);
+		return SPUDRESULT_OUT_OF_MEMORY;
+	}
 	for (uint32_t i = 0; i < desc->wait_semaphore_count; ++i) {
 		spudgpu_semaphore sem = desc->wait_semaphores[i];
 		queue->_d3d_cmd_queue->Wait(sem->_d3d_fence.Get(), sem->_signal_value);
 	}
 	for (uint32_t i = 0; i < desc->cmd_list_count; ++i)
-		d3dLists[i] = desc->cmd_lists[i]->_d3d_cmd_list.Get();
+		(void)queue->_scratch_lists.push(desc->cmd_lists[i]->_d3d_cmd_list.Get());
 	queue->_d3d_cmd_queue->ExecuteCommandLists(
-	    static_cast<UINT>(desc->cmd_list_count), d3dLists);
-	SPUD_DELETE_ARRAY(&queue->head.allocator, ID3D12CommandList *, d3dLists, desc->cmd_list_count);
+	    static_cast<UINT>(desc->cmd_list_count), queue->_scratch_lists.data);
 
 	// Everything below is queued behind the command lists, so it is
 	// signaled once they have run.
@@ -696,6 +759,8 @@ SPUDRESULT spudgpu_queue_submit(
 void spudgpu_queue_wait_idle(spudgpu_command_queue queue) {
 	if (!queue)
 		return;
+	if (SPUD_STALE(queue, "spudgpu_queue_wait_idle", "queue"))
+		return;
 	Microsoft::WRL::ComPtr<ID3D12Fence> fence;
 	if (FAILED(queue->_device->_d3d_device->CreateFence(
 	        0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence))))
@@ -721,6 +786,8 @@ void spudgpu_begin_bundle_command_list(
 	// scissor_rect are for Vulkan, whose secondary buffers inherit neither.
 	if (!bundle || !desc)
 		return;
+	if (SPUD_STALE(bundle, "spudgpu_begin_bundle_command_list", "bundle"))
+		return;
 	if (spud_struct_check(&desc->base, SPUD_STRUCT_TYPE_GPU_BUNDLE_INHERITANCE_DESC) != SPUD_SUCCESS)
 		return;
 	spudgpu_begin_command_list(bundle);
@@ -729,6 +796,10 @@ void spudgpu_begin_bundle_command_list(
 void spudgpu_cmd_execute_bundle(
     spudgpu_command_list cmd, spudgpu_command_list bundle) {
 	if (!cmd || !bundle)
+		return;
+	if (SPUD_STALE(cmd, "spudgpu_cmd_execute_bundle", "cmd"))
+		return;
+	if (SPUD_STALE(bundle, "spudgpu_cmd_execute_bundle", "bundle"))
 		return;
 	cmd->_d3d_cmd_list->ExecuteBundle(bundle->_d3d_cmd_list.Get());
 }

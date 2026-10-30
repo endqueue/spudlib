@@ -314,6 +314,8 @@ SPUDRESULT spudnet_http_transfer_create(
 	*out_transfer = NULL;
 	if (!client)
 		return SPUDRESULT_SPUDNET_INVALID_HTTP_CLIENT;
+	if (SPUD_STALE(client, "spudnet_http_transfer_create", "client"))
+		return SPUDRESULT_SPUDNET_INVALID_HTTP_CLIENT;
 
 	// Every backend's client starts with its head (see spudnetshared.h), so
 	// the client's allocator is reached without knowing the backend's type.
@@ -323,6 +325,7 @@ SPUDRESULT spudnet_http_transfer_create(
 	if (!transfer)
 		return SPUDRESULT_OUT_OF_MEMORY;
 	transfer->head.allocator = *allocator;
+	SPUD_BIRTH(transfer);
 	transfer->client         = client;
 	transfer->phase          = SPUDNET_HTTP_PHASE_CREATED;
 	SPUDRESULT result        = spudnet_http_backend_create(transfer);
@@ -338,7 +341,10 @@ SPUDRESULT spudnet_http_transfer_create(
 void spudnet_http_transfer_destroy(spudnet_http_transfer transfer) {
 	if (!transfer)
 		return;
+	if (SPUD_STALE(transfer, "spudnet_http_transfer_destroy", "transfer"))
+		return;
 	spudnet_http_backend_destroy(transfer);
+	SPUD_KILL(transfer);
 	const SPUD_ALLOCATOR allocator = transfer->head.allocator;
 	spudnet_head_clear(&allocator, &transfer->response);
 	spud_string_free(&allocator, transfer->head.debug_name);
@@ -348,19 +354,31 @@ void spudnet_http_transfer_destroy(spudnet_http_transfer transfer) {
 void spudnet_http_transfer_abort(spudnet_http_transfer transfer) {
 	if (!transfer)
 		return;
+	if (SPUD_STALE(transfer, "spudnet_http_transfer_abort", "transfer"))
+		return;
 	spudnet_http_backend_abort(transfer);
 }
 
 void spudnet_http_transfer_get_error(
     spudnet_http_transfer transfer,
     spudnet_error *out_error) {
-	spudnet_error_get(transfer ? &transfer->error : NULL, out_error);
+	if (!transfer) {
+		spudnet_error_get(NULL, out_error);
+		return;
+	}
+	if (SPUD_STALE(transfer, "spudnet_http_transfer_get_error", "transfer")) {
+		spudnet_error_get(NULL, out_error);
+		return;
+	}
+	spudnet_error_get(&transfer->error, out_error);
 }
 
 SPUDRESULT spudnet_http_transfer_start(
     spudnet_http_transfer transfer,
     const spudnet_http_transfer_desc *desc) {
 	if (!transfer)
+		return SPUDRESULT_SPUDNET_INVALID_HTTP_TRANSFER;
+	if (SPUD_STALE(transfer, "spudnet_http_transfer_start", "transfer"))
 		return SPUDRESULT_SPUDNET_INVALID_HTTP_TRANSFER;
 	if (!desc)
 		return SPUDRESULT_NULL_DESC;
@@ -403,6 +421,8 @@ SPUDRESULT spudnet_http_transfer_send(
 	*out_sent = 0;
 	if (!transfer)
 		return SPUDRESULT_SPUDNET_INVALID_HTTP_TRANSFER;
+	if (SPUD_STALE(transfer, "spudnet_http_transfer_send", "transfer"))
+		return SPUDRESULT_SPUDNET_INVALID_HTTP_TRANSFER;
 	if (spudnet_http_backend_aborted(transfer))
 		return SPUDRESULT_SPUDNET_ABORTED;
 	if (transfer->phase != SPUDNET_HTTP_PHASE_SENDING || transfer->body == SPUDNET_HTTP_BODY_NONE)
@@ -436,6 +456,8 @@ SPUDRESULT spudnet_http_transfer_receive_response(
     uint32_t timeout_ms) {
 	if (!transfer)
 		return SPUDRESULT_SPUDNET_INVALID_HTTP_TRANSFER;
+	if (SPUD_STALE(transfer, "spudnet_http_transfer_receive_response", "transfer"))
+		return SPUDRESULT_SPUDNET_INVALID_HTTP_TRANSFER;
 	if (spudnet_http_backend_aborted(transfer))
 		return SPUDRESULT_SPUDNET_ABORTED;
 	if (transfer->phase != SPUDNET_HTTP_PHASE_SENDING && transfer->phase != SPUDNET_HTTP_PHASE_AWAITING)
@@ -453,7 +475,11 @@ SPUDRESULT spudnet_http_transfer_receive_response(
 }
 
 uint32_t spudnet_http_transfer_get_status(spudnet_http_transfer transfer) {
-	return transfer ? transfer->response.status : 0;
+	if (!transfer)
+		return 0;
+	if (SPUD_STALE(transfer, "spudnet_http_transfer_get_status", "transfer"))
+		return 0;
+	return transfer->response.status;
 }
 
 const char *spudnet_http_transfer_get_header(
@@ -465,7 +491,11 @@ const char *spudnet_http_transfer_get_header(
 }
 
 uint32_t spudnet_http_transfer_get_header_count(spudnet_http_transfer transfer) {
-	return transfer ? (uint32_t)transfer->response.entries.count : 0;
+	if (!transfer)
+		return 0;
+	if (SPUD_STALE(transfer, "spudnet_http_transfer_get_header_count", "transfer"))
+		return 0;
+	return (uint32_t)transfer->response.entries.count;
 }
 
 SPUDRESULT spudnet_http_transfer_get_header_at(
@@ -477,7 +507,11 @@ SPUDRESULT spudnet_http_transfer_get_header_at(
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
 	*out_name  = NULL;
 	*out_value = NULL;
-	if (!transfer || index >= transfer->response.entries.count)
+	if (!transfer)
+		return SPUDRESULT_INDEX_OUT_OF_RANGE;
+	if (SPUD_STALE(transfer, "spudnet_http_transfer_get_header_at", "transfer"))
+		return SPUDRESULT_INDEX_OUT_OF_RANGE;
+	if (index >= transfer->response.entries.count)
 		return SPUDRESULT_INDEX_OUT_OF_RANGE;
 	*out_name  = transfer->response.entries.data[index].name;
 	*out_value = transfer->response.entries.data[index].value;
@@ -494,6 +528,8 @@ SPUDRESULT spudnet_http_transfer_recv(
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
 	*out_received = 0;
 	if (!transfer)
+		return SPUDRESULT_SPUDNET_INVALID_HTTP_TRANSFER;
+	if (SPUD_STALE(transfer, "spudnet_http_transfer_recv", "transfer"))
 		return SPUDRESULT_SPUDNET_INVALID_HTTP_TRANSFER;
 	if (spudnet_http_backend_aborted(transfer))
 		return SPUDRESULT_SPUDNET_ABORTED;

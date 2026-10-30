@@ -622,8 +622,11 @@ static void CALLBACK spudnet_win_http_callback(
 void spudnet_http_client_destroy(spudnet_http_client client) {
 	if (!client)
 		return;
+	if (SPUD_STALE(client, "spudnet_http_client_destroy", "client"))
+		return;
 	if (client->session)
 		WinHttpCloseHandle(client->session);
+	SPUD_KILL(client);
 	const SPUD_ALLOCATOR allocator = client->head.allocator;
 	spudnet_win_tls_free(&allocator, &client->tls);
 	spud_string_free(&allocator, client->head.debug_name);
@@ -638,6 +641,8 @@ SPUDRESULT spudnet_http_client_create(
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
 	*out_client = NULL;
 	if (!instance)
+		return SPUDRESULT_SPUDNET_INVALID_INSTANCE;
+	if (SPUD_STALE(instance, "spudnet_http_client_create", "instance"))
 		return SPUDRESULT_SPUDNET_INVALID_INSTANCE;
 	if (!desc)
 		return SPUDRESULT_NULL_DESC;
@@ -658,6 +663,7 @@ SPUDRESULT spudnet_http_client_create(
 		return SPUDRESULT_OUT_OF_MEMORY;
 	}
 	client->head.allocator = *allocator;
+	SPUD_BIRTH(client);
 	result                 = spudnet_win_tls_create(allocator, &desc->tls, &client->tls);
 	if (!SPUDFAIL(result)) {
 		client->session = spudnet_win_open_session(allocator, &proxy);
@@ -1320,6 +1326,8 @@ static void spudnet_win_websocket_kill(struct spudnet_websocket_t *socket) {
 void spudnet_websocket_destroy(spudnet_websocket socket) {
 	if (!socket)
 		return;
+	if (SPUD_STALE(socket, "spudnet_websocket_destroy", "socket"))
+		return;
 	spudnet_win_websocket_kill(socket);
 	if (socket->has_context_handles)
 		WaitForSingleObject(socket->handles_closed_event, INFINITE);
@@ -1340,6 +1348,7 @@ void spudnet_websocket_destroy(spudnet_websocket socket) {
 		CloseHandle(socket->send_event);
 	// After every handle with this as its context has closed: no callback
 	// reaches it now.
+	SPUD_KILL(socket);
 	const SPUD_ALLOCATOR allocator = socket->head.allocator;
 	spudnet_win_tls_free(&allocator, &socket->tls);
 	DeleteCriticalSection(&socket->lock);
@@ -1357,11 +1366,14 @@ SPUDRESULT spudnet_websocket_create(
 	*out_socket = NULL;
 	if (!instance)
 		return SPUDRESULT_SPUDNET_INVALID_INSTANCE;
+	if (SPUD_STALE(instance, "spudnet_websocket_create", "instance"))
+		return SPUDRESULT_SPUDNET_INVALID_INSTANCE;
 
 	struct spudnet_websocket_t *socket = SPUD_NEW_ZEROED(&instance->head.allocator, struct spudnet_websocket_t);
 	if (!socket)
 		return SPUDRESULT_OUT_OF_MEMORY;
 	socket->head.allocator = instance->head.allocator;
+	SPUD_BIRTH(socket);
 	socket->instance       = instance;
 	InitializeCriticalSection(&socket->lock);
 	socket->handles_closed_event = CreateEventW(NULL, TRUE, FALSE, NULL);
@@ -1382,12 +1394,22 @@ void spudnet_websocket_get_error(
     spudnet_websocket socket,
     SPUDNET_ERROR_SIDE side,
     spudnet_error *out_error) {
-	bool known = socket && (side == SPUDNET_ERROR_SIDE_RECEIVING || side == SPUDNET_ERROR_SIDE_SENDING);
+	if (!socket) {
+		spudnet_error_get(NULL, out_error);
+		return;
+	}
+	if (SPUD_STALE(socket, "spudnet_websocket_get_error", "socket")) {
+		spudnet_error_get(NULL, out_error);
+		return;
+	}
+	bool known = side == SPUDNET_ERROR_SIDE_RECEIVING || side == SPUDNET_ERROR_SIDE_SENDING;
 	spudnet_error_get(known ? &socket->errors[side] : NULL, out_error);
 }
 
 void spudnet_websocket_abort(spudnet_websocket socket) {
 	if (!socket)
+		return;
+	if (SPUD_STALE(socket, "spudnet_websocket_abort", "socket"))
 		return;
 	EnterCriticalSection(&socket->lock);
 	socket->aborted = true;
@@ -1416,6 +1438,8 @@ SPUDRESULT spudnet_websocket_connect(
 	if (out_http_status)
 		*out_http_status = 0;
 	if (!socket)
+		return SPUDRESULT_SPUDNET_INVALID_WEBSOCKET;
+	if (SPUD_STALE(socket, "spudnet_websocket_connect", "socket"))
 		return SPUDRESULT_SPUDNET_INVALID_WEBSOCKET;
 	if (!desc)
 		return SPUDRESULT_NULL_DESC;
@@ -1623,6 +1647,8 @@ SPUDRESULT spudnet_websocket_send(
     uint32_t timeout_ms) {
 	if (!socket)
 		return SPUDRESULT_SPUDNET_INVALID_WEBSOCKET;
+	if (SPUD_STALE(socket, "spudnet_websocket_send", "socket"))
+		return SPUDRESULT_SPUDNET_INVALID_WEBSOCKET;
 	if ((size > 0 && !data) || size > SPUD_UINT32_MAX)
 		return SPUDRESULT_SPUDNET_SEND_FAILED;
 
@@ -1757,6 +1783,8 @@ SPUDRESULT spudnet_websocket_recv(
 	*out_message_complete = false;
 	if (!socket)
 		return SPUDRESULT_SPUDNET_INVALID_WEBSOCKET;
+	if (SPUD_STALE(socket, "spudnet_websocket_recv", "socket"))
+		return SPUDRESULT_SPUDNET_INVALID_WEBSOCKET;
 	if (!data || size == 0)
 		return SPUDRESULT_ZERO_SIZE;
 
@@ -1858,6 +1886,8 @@ SPUDRESULT spudnet_websocket_close(
     const char *reason) {
 	if (!socket)
 		return SPUDRESULT_SPUDNET_INVALID_WEBSOCKET;
+	if (SPUD_STALE(socket, "spudnet_websocket_close", "socket"))
+		return SPUDRESULT_SPUDNET_INVALID_WEBSOCKET;
 	size_t reason_length = reason ? strlen(reason) : 0;
 	if (reason_length > 123)
 		return SPUDRESULT_SPUDNET_SEND_FAILED;
@@ -1890,6 +1920,8 @@ SPUDRESULT spudnet_websocket_close(
 
 uint16_t spudnet_websocket_get_close_code(spudnet_websocket socket) {
 	if (!socket)
+		return 0;
+	if (SPUD_STALE(socket, "spudnet_websocket_get_close_code", "socket"))
 		return 0;
 	EnterCriticalSection(&socket->lock);
 	// Only a close the peer made has a code to report.

@@ -12,14 +12,17 @@ static void spudgpu_d3d12___release_swap_chain(spudgpu_swap_chain_d3d12 *swap_ch
 	const uint32_t count           = swap_chain->_desc.buffer_count;
 	if (swap_chain->_back_buffer_images) {
 		for (uint32_t i = 0; i < count; ++i) {
+			SPUD_KILL(&swap_chain->_back_buffer_images[i]);
 			spud_string_free(&allocator, swap_chain->_back_buffer_images[i].head.debug_name);
 			swap_chain->_back_buffer_images[i].~spudgpu_image_d3d12();
 		}
 		SPUD_DELETE_ARRAY(&allocator, spudgpu_image_d3d12, swap_chain->_back_buffer_images, count);
 	}
 	if (swap_chain->_back_buffer_image_views) {
-		for (uint32_t i = 0; i < count; ++i)
+		for (uint32_t i = 0; i < count; ++i) {
+			SPUD_KILL(&swap_chain->_back_buffer_image_views[i]);
 			spud_string_free(&allocator, swap_chain->_back_buffer_image_views[i].head.debug_name);
+		}
 	}
 	SPUD_DELETE_ARRAY(&allocator, spudgpu_image_view_d3d12, swap_chain->_back_buffer_image_views, count);
 	spud_string_free(&allocator, swap_chain->head.debug_name);
@@ -47,6 +50,8 @@ SPUDRESULT spudgpu_get_surface_present_scalings(
     uint32_t *out_scalings) {
 	if (!device)
 		return SPUDRESULT_GPU_INVALID_DEVICE;
+	if (SPUD_STALE(device, "spudgpu_get_surface_present_scalings", "device"))
+		return SPUDRESULT_GPU_INVALID_DEVICE;
 	const SPUDRESULT sr = spudgpu___internal_check_surface_present_scalings(device->_features, surface, out_scalings);
 	if (sr != SPUD_SUCCESS)
 		return sr;
@@ -60,6 +65,8 @@ SPUDRESULT spudgpu_create_swap_chain(
     spudgpu_swap_chain *out_swap_chain) {
 	if (!device)
 		return SPUDRESULT_GPU_INVALID_DEVICE;
+	if (SPUD_STALE(device, "spudgpu_create_swap_chain", "device"))
+		return SPUDRESULT_GPU_INVALID_DEVICE;
 	const SPUDRESULT desc_sr = spudgpu___internal_check_swap_chain_desc(device->_features, desc, out_swap_chain);
 	if (desc_sr != SPUD_SUCCESS)
 		return desc_sr;
@@ -72,6 +79,7 @@ SPUDRESULT spudgpu_create_swap_chain(
 		return SPUDRESULT_OUT_OF_MEMORY;
 	pResult                 = new (pResult) spudgpu_swap_chain_d3d12();
 	pResult->head.allocator = device->head.allocator;
+	SPUD_BIRTH(pResult);
 	pResult->_device        = device;
 	pResult->_desc          = *desc;
 
@@ -139,6 +147,7 @@ SPUDRESULT spudgpu_create_swap_chain(
 	for (uint32_t i = 0; i < desc->buffer_count; ++i) {
 		new (&images[i]) spudgpu_image_d3d12();
 		images[i].head.allocator      = pResult->head.allocator;
+		SPUD_BIRTH(&images[i]);
 		images[i]._subresource_states = eq::array<D3D12_RESOURCE_STATES>(&device->_eq_allocator);
 	}
 	pResult->_back_buffer_images = images;
@@ -149,8 +158,10 @@ SPUDRESULT spudgpu_create_swap_chain(
 		spudgpu_d3d12___release_swap_chain(pResult);
 		return SPUDRESULT_OUT_OF_MEMORY;
 	}
-	for (uint32_t i = 0; i < desc->buffer_count; ++i)
+	for (uint32_t i = 0; i < desc->buffer_count; ++i) {
 		pResult->_back_buffer_image_views[i].head.allocator = pResult->head.allocator;
+		SPUD_BIRTH(&pResult->_back_buffer_image_views[i]);
+	}
 
 	DXGI_FORMAT fmt = spudgpu_d3d12_get_dxgi_format(desc->format);
 
@@ -212,13 +223,18 @@ SPUDRESULT spudgpu_create_swap_chain(
 void spudgpu_destroy_swap_chain(spudgpu_swap_chain swap_chain) {
 	if (!swap_chain)
 		return;
+	if (SPUD_STALE(swap_chain, "spudgpu_destroy_swap_chain", "swap_chain"))
+		return;
 	SPUDGPU___LIVE_REMOVE(&swap_chain->_device->_live, SPUDGPU___OBJECT_SWAP_CHAIN);
+	SPUD_KILL(swap_chain);
 	spudgpu_d3d12___release_swap_chain(swap_chain);
 }
 
 SPUDRESULT spudgpu_get_swap_chain_desc(
     spudgpu_swap_chain swap_chain, spudgpu_swap_chain_desc *out_desc) {
 	if (!swap_chain)
+		return SPUDRESULT_GPU_INVALID_SWAP_CHAIN;
+	if (SPUD_STALE(swap_chain, "spudgpu_get_swap_chain_desc", "swap_chain"))
 		return SPUDRESULT_GPU_INVALID_SWAP_CHAIN;
 	if (!out_desc)
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
@@ -229,6 +245,8 @@ SPUDRESULT spudgpu_get_swap_chain_desc(
 
 uint32_t spudgpu_swap_chain_acquire_next_image(spudgpu_swap_chain swap_chain) {
 	if (!swap_chain)
+		return SPUD_UINT32_MAX;
+	if (SPUD_STALE(swap_chain, "spudgpu_swap_chain_acquire_next_image", "swap_chain"))
 		return SPUD_UINT32_MAX;
 
 	// The in-flight-fence half of spudgpu_submit_command_lists_synced's
@@ -252,6 +270,8 @@ uint32_t spudgpu_swap_chain_acquire_next_image(spudgpu_swap_chain swap_chain) {
 void spudgpu_swap_chain_present(spudgpu_swap_chain swap_chain) {
 	if (!swap_chain)
 		return;
+	if (SPUD_STALE(swap_chain, "spudgpu_swap_chain_present", "swap_chain"))
+		return;
 	UINT syncInterval =
 	    (swap_chain->_desc.present_mode == SPUDGPU_PRESENT_MODE_IMMEDIATE) ? 0
 	                                                                       : 1;
@@ -263,9 +283,49 @@ void spudgpu_swap_chain_present(spudgpu_swap_chain swap_chain) {
 
 spudgpu_image_view spudgpu_get_swap_chain_image_view(
     spudgpu_swap_chain swap_chain, uint32_t image_index) {
-	if (!swap_chain || image_index >= swap_chain->_desc.buffer_count)
+	if (!swap_chain)
+		return nullptr;
+	if (SPUD_STALE(swap_chain, "spudgpu_get_swap_chain_image_view", "swap_chain"))
+		return nullptr;
+	if (image_index >= swap_chain->_desc.buffer_count)
 		return nullptr;
 	return &swap_chain->_back_buffer_image_views[image_index];
+}
+
+// The three calls below are declared for every backend and not implemented
+// by this one (spudgpu.h says so on each). They are defined, refusing as
+// their header says, so that a caller naming one links on D3D12 as on the
+// others. A D3D12 swap chain synchronizes through its own fence per present
+// (spudgpu_swap_chain_d3d12), not through semaphores a caller passes on.
+
+spudgpu_surface spudgpu_create_surface_from_callback(
+    spudgpu_instance instance,
+    void *user_data,
+    spudgpu_surface_create_fn create_fn) {
+	(void)user_data;
+	if (!instance || !create_fn)
+		return nullptr;
+	if (SPUD_STALE(instance, "spudgpu_create_surface_from_callback", "instance"))
+		return nullptr;
+	return nullptr;
+}
+
+spudgpu_semaphore spudgpu_swap_chain_get_image_available_semaphore(spudgpu_swap_chain swap_chain) {
+	// D3D12's swap chain has no semaphores: null for every swap chain.
+	if (!swap_chain)
+		return nullptr;
+	if (SPUD_STALE(swap_chain, "spudgpu_swap_chain_get_image_available_semaphore", "swap_chain"))
+		return nullptr;
+	return nullptr;
+}
+
+spudgpu_semaphore spudgpu_swap_chain_get_render_finished_semaphore(spudgpu_swap_chain swap_chain) {
+	// D3D12's swap chain has no semaphores: null for every swap chain.
+	if (!swap_chain)
+		return nullptr;
+	if (SPUD_STALE(swap_chain, "spudgpu_swap_chain_get_render_finished_semaphore", "swap_chain"))
+		return nullptr;
+	return nullptr;
 }
 }
 

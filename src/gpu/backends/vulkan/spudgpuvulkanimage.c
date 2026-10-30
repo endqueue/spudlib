@@ -152,6 +152,7 @@ SPUDRESULT spudgpu_create_image(
     const spudgpu_image_desc *desc,
     spudgpu_image *out_image) {
     if (!device) return SPUDRESULT_GPU_INVALID_DEVICE;
+    if (SPUD_STALE(device, "spudgpu_create_image", "device")) return SPUDRESULT_GPU_INVALID_DEVICE;
     if (!desc) return SPUDRESULT_NULL_DESC;
     const SPUDRESULT base_sr = spud_struct_check(&desc->base, SPUD_STRUCT_TYPE_GPU_IMAGE_DESC);
     if (base_sr != SPUD_SUCCESS) return base_sr;
@@ -163,6 +164,7 @@ SPUDRESULT spudgpu_create_image(
     // Create the result struct
     spudgpu_image_vulkan result = {0};
     result.head.allocator = device->head.allocator;
+    SPUD_BIRTH(&result);
     result._device = *device;
     result._desc = *desc;
     result._format_vk = convert_spud_to_vulkan_format(result._desc.format);
@@ -245,6 +247,7 @@ SPUDRESULT spudgpu_get_image_desc(
     spudgpu_image image,
     spudgpu_image_desc *out_desc) {
     if (!image) return SPUDRESULT_GPU_INVALID_IMAGE;
+    if (SPUD_STALE(image, "spudgpu_get_image_desc", "image")) return SPUDRESULT_GPU_INVALID_IMAGE;
     if (!out_desc) return SPUDRESULT_NULL_OUTPUT_PARAMETER;
     *out_desc = image->_desc;
     out_desc->base = spud_struct_base(SPUD_STRUCT_TYPE_GPU_IMAGE_DESC);
@@ -254,6 +257,7 @@ SPUDRESULT spudgpu_get_image_desc(
 void spudgpu_destroy_image(
     spudgpu_image image) {
     if (!image) return;
+    if (SPUD_STALE(image, "spudgpu_destroy_image", "image")) return;
     vkDestroyImage(image->_device._logical_device_vk, image->_image_vk, NULL);
     // A placed image's memory is its heap's.
     if (!image->_heap)
@@ -263,6 +267,7 @@ void spudgpu_destroy_image(
         image->_heap->_placed_count--;
 #endif
     SPUDGPU___LIVE_REMOVE(&image->_device._shared->live, SPUDGPU___OBJECT_IMAGE);
+    SPUD_KILL(image);
     const SPUD_ALLOCATOR allocator = image->head.allocator;
     spud_string_free(&allocator, image->head.debug_name);
     SPUD_DELETE(&allocator, spudgpu_image_vulkan, image);
@@ -288,6 +293,7 @@ SPUDRESULT spudgpu_create_image_view(
     const spudgpu_image_view_desc *desc,
     spudgpu_image_view *out_image_view) {
     if (!image) return SPUDRESULT_GPU_INVALID_IMAGE;
+    if (SPUD_STALE(image, "spudgpu_create_image_view", "image")) return SPUDRESULT_GPU_INVALID_IMAGE;
     if (!desc) return SPUDRESULT_NULL_DESC;
     const SPUDRESULT base_sr = spud_struct_check(&desc->base, SPUD_STRUCT_TYPE_GPU_IMAGE_VIEW_DESC);
     if (base_sr != SPUD_SUCCESS) return base_sr;
@@ -312,6 +318,7 @@ SPUDRESULT spudgpu_create_image_view(
 
     spudgpu_image_view_vulkan result = {0};
     result.head.allocator = image->head.allocator;
+    SPUD_BIRTH(&result);
     result._desc = *desc;
     result._desc.parent_image = image;
 
@@ -362,8 +369,10 @@ SPUDRESULT spudgpu_create_image_view(
 
 void spudgpu_destroy_image_view(spudgpu_image_view image_view) {
     if (!image_view) return;
+    if (SPUD_STALE(image_view, "spudgpu_destroy_image_view", "image_view")) return;
     vkDestroyImageView(image_view->_desc.parent_image->_device._logical_device_vk, image_view->_image_view_vk, NULL);
     SPUDGPU___LIVE_REMOVE(&image_view->_shared->live, SPUDGPU___OBJECT_IMAGE_VIEW);
+    SPUD_KILL(image_view);
     const SPUD_ALLOCATOR allocator = image_view->head.allocator;
     spud_string_free(&allocator, image_view->head.debug_name);
     SPUD_DELETE(&allocator, spudgpu_image_view_vulkan, image_view);
@@ -373,6 +382,7 @@ SPUDRESULT spudgpu_get_image_view_desc(
     spudgpu_image_view image_view,
     spudgpu_image_view_desc *out_desc) {
     if (!image_view) return SPUDRESULT_GPU_INVALID_IMAGE_VIEW;
+    if (SPUD_STALE(image_view, "spudgpu_get_image_view_desc", "image_view")) return SPUDRESULT_GPU_INVALID_IMAGE_VIEW;
     if (!out_desc) return SPUDRESULT_NULL_OUTPUT_PARAMETER;
     *out_desc = image_view->_desc;
     out_desc->base = spud_struct_base(SPUD_STRUCT_TYPE_GPU_IMAGE_VIEW_DESC);

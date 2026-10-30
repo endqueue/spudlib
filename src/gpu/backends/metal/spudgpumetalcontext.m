@@ -130,6 +130,7 @@ static void spudgpumetal___internal_destroy_adapters(spudgpu_instance_metal *ins
 		spudgpu_adapter_metal *adapter = (spudgpu_adapter_metal *)instance->_adapters[i];
 		if (!adapter)
 			continue;
+		SPUD_KILL(adapter);
 		[adapter->_device_mtl release];
 		const SPUD_ALLOCATOR allocator = adapter->head.allocator;
 		spud_string_free(&allocator, adapter->head.debug_name);
@@ -171,6 +172,7 @@ static SPUDRESULT spudgpumetal___internal_list_adapters(spudgpu_instance_metal *
 			return SPUDRESULT_OUT_OF_MEMORY;
 		}
 		adapter->head.allocator = instance->head.allocator;
+		SPUD_BIRTH(adapter);
 		adapter->_device_mtl    = [mtl_devices[i] retain];
 		atomic_init(&adapter->_in_use, false);
 		spudgpumetal___internal_read_adapter_facts(adapter);
@@ -194,6 +196,7 @@ SPUDRESULT spudgpu_create_instance(
 	if (!instance)
 		return SPUDRESULT_OUT_OF_MEMORY;
 	instance->head.allocator = *desc->allocator;
+	SPUD_BIRTH(instance);
 
 	const SPUDRESULT list_sr = spudgpumetal___internal_list_adapters(instance);
 	if (list_sr != SPUD_SUCCESS) {
@@ -208,7 +211,10 @@ SPUDRESULT spudgpu_create_instance(
 SPUDRESULT spudgpu_destroy_instance(spudgpu_instance instance) {
 	if (!instance)
 		return SPUD_SUCCESS;
+	if (SPUD_STALE(instance, "spudgpu_destroy_instance", "instance"))
+		return SPUD_SUCCESS;
 	spudgpumetal___internal_destroy_adapters(instance);
+	SPUD_KILL(instance);
 	const SPUD_ALLOCATOR allocator = instance->head.allocator;
 	spud_string_free(&allocator, instance->head.debug_name);
 	SPUD_DELETE(&allocator, spudgpu_instance_metal, instance);
@@ -220,6 +226,8 @@ SPUDRESULT spudgpu_enumerate_adapters(
     const spudgpu_adapter **out_adapters,
     uint32_t *out_adapters_count) {
 	if (!instance)
+		return SPUDRESULT_GPU_INVALID_INSTANCE;
+	if (SPUD_STALE(instance, "spudgpu_enumerate_adapters", "instance"))
 		return SPUDRESULT_GPU_INVALID_INSTANCE;
 	if (!out_adapters)
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
@@ -235,6 +243,8 @@ SPUDRESULT spudgpu_get_adapter_properties(
     SPUDGPU_ADAPTER_PROPERTIES *out_properties) {
 	if (!adapter)
 		return SPUDRESULT_GPU_INVALID_ADAPTER;
+	if (SPUD_STALE(adapter, "spudgpu_get_adapter_properties", "adapter"))
+		return SPUDRESULT_GPU_INVALID_ADAPTER;
 	return spudgpu___internal_get_adapter_properties(&adapter->_facts, out_properties);
 }
 
@@ -244,7 +254,11 @@ SPUDRESULT spudgpu_adapter_supports_surface(
     bool *out_supported) {
 	if (!adapter)
 		return SPUDRESULT_GPU_INVALID_ADAPTER;
+	if (SPUD_STALE(adapter, "spudgpu_adapter_supports_surface", "adapter"))
+		return SPUDRESULT_GPU_INVALID_ADAPTER;
 	if (!surface)
+		return SPUDRESULT_GPU_INVALID_SURFACE;
+	if (SPUD_STALE(surface, "spudgpu_adapter_supports_surface", "surface"))
 		return SPUDRESULT_GPU_INVALID_SURFACE;
 	if (!out_supported)
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
@@ -264,6 +278,7 @@ static void spudgpumetal___internal_destroy_queues(spudgpu_device_metal *device,
 		spudgpu_command_queue_metal *queue = (spudgpu_command_queue_metal *)queues[i];
 		if (!queue)
 			continue;
+		SPUD_KILL(queue);
 		[queue->_command_queue_mtl release];
 		const SPUD_ALLOCATOR allocator = queue->head.allocator;
 		spud_string_free(&allocator, queue->head.debug_name);
@@ -290,6 +305,7 @@ static SPUDRESULT spudgpumetal___internal_create_queues(
 			return SPUDRESULT_OUT_OF_MEMORY;
 		}
 		queue->head.allocator     = device->head.allocator;
+		SPUD_BIRTH(queue);
 		queue->_parent_device     = device;
 		queue->_command_queue_mtl = [device->_device_mtl newCommandQueue];
 		queues[i]                 = (spudgpu_command_queue)queue;
@@ -323,6 +339,8 @@ SPUDRESULT spudgpu_create_device(
     spudgpu_device *out_device) {
 	if (!adapter)
 		return SPUDRESULT_GPU_INVALID_ADAPTER;
+	if (SPUD_STALE(adapter, "spudgpu_create_device", "adapter"))
+		return SPUDRESULT_GPU_INVALID_ADAPTER;
 	const SPUDRESULT check_sr = spudgpu___internal_check_device_desc(&adapter->_facts, desc, out_device);
 	if (check_sr != SPUD_SUCCESS)
 		return check_sr;
@@ -336,6 +354,7 @@ SPUDRESULT spudgpu_create_device(
 		return SPUDRESULT_OUT_OF_MEMORY;
 	}
 	device->head.allocator = adapter->head.allocator;
+	SPUD_BIRTH(device);
 	device->_adapter       = adapter;
 	device->_device_mtl    = [adapter->_device_mtl retain];
 	device->_features      = desc->required_features;
@@ -380,23 +399,32 @@ SPUDRESULT spudgpu_create_device(
 void spudgpu_destroy_device(spudgpu_device device) {
 	if (!device)
 		return;
+	if (SPUD_STALE(device, "spudgpu_destroy_device", "device"))
+		return;
 #if _DEBUG
 	spudgpu___internal_live_check_none(&device->_live, device->head.debug_name);
 	spudgpu___internal_live_destroy(&device->_live);
 #endif
+	SPUD_KILL(device);
 	spudgpumetal___internal_free_device(device, true);
 }
 
 spudgpu_adapter spudgpu_get_device_adapter(spudgpu_device device) {
-	return device ? (spudgpu_adapter)device->_adapter : NULL;
+	if (!device) return NULL;
+	if (SPUD_STALE(device, "spudgpu_get_device_adapter", "device")) return NULL;
+	return (spudgpu_adapter)device->_adapter;
 }
 
 SPUDGPU_FEATURES spudgpu_get_device_features(spudgpu_device device) {
-	return device ? device->_features : 0;
+	if (!device) return 0;
+	if (SPUD_STALE(device, "spudgpu_get_device_features", "device")) return 0;
+	return device->_features;
 }
 
 SPUDGPU_NATIVE_API spudgpu_get_native_gpu_api(spudgpu_instance instance) {
-	return instance ? SPUDGPU_NATIVE_API_METAL : SPUDGPU_NATIVE_API_NONE;
+	if (!instance) return SPUDGPU_NATIVE_API_NONE;
+	if (SPUD_STALE(instance, "spudgpu_get_native_gpu_api", "instance")) return SPUDGPU_NATIVE_API_NONE;
+	return SPUDGPU_NATIVE_API_METAL;
 }
 
 #endif // SPUDGPU_COMPILE_METAL_API

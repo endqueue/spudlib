@@ -553,6 +553,7 @@ SPUDRESULT spudaudio_create_instance(
 	if (!inst)
 		return SPUDRESULT_OUT_OF_MEMORY;
 	inst->head.allocator = *desc->allocator;
+	SPUD_BIRTH(inst);
 	*out_instance        = inst;
 	return SPUD_SUCCESS;
 }
@@ -560,13 +561,17 @@ SPUDRESULT spudaudio_create_instance(
 SPUDRESULT spudaudio_destroy_instance(spudaudio_instance instance) {
 	if (!instance)
 		return SPUDRESULT_SAUD_INVALID_INSTANCE;
+	if (SPUD_STALE(instance, "spudaudio_destroy_instance", "instance"))
+		return SPUDRESULT_SAUD_INVALID_INSTANCE;
 	if (alsa_in_device_event_callback(instance))
 		return SPUDRESULT_GENERAL_FAILURE;
 	alsa_watch_destroy(instance->watch);
+	SPUD_KILL(instance);
 	const SPUD_ALLOCATOR allocator = instance->head.allocator;
 	struct spudaudio_device_t *dev = instance->devices;
 	while (dev) {
 		struct spudaudio_device_t *next = dev->next;
+		SPUD_KILL(dev);
 		spud_string_free(&allocator, dev->head.debug_name);
 		SPUD_DELETE(&allocator, struct spudaudio_device_t, dev);
 		dev = next;
@@ -579,7 +584,11 @@ SPUDRESULT spudaudio_destroy_instance(spudaudio_instance instance) {
 }
 
 SPUDAUDIO_NATIVE_API spudaudio_get_native_api(spudaudio_instance instance) {
-	return instance ? SPUDAUDIO_NATIVE_API_ALSA : SPUDAUDIO_NATIVE_API_NONE;
+	if (!instance)
+		return SPUDAUDIO_NATIVE_API_NONE;
+	if (SPUD_STALE(instance, "spudaudio_get_native_api", "instance"))
+		return SPUDAUDIO_NATIVE_API_NONE;
+	return SPUDAUDIO_NATIVE_API_ALSA;
 }
 
 // Returns the instance's existing handle for this PCM name, or adds one,
@@ -597,6 +606,7 @@ static struct spudaudio_device_t *alsa_find_or_add_device(
 	if (!d)
 		return NULL;
 	d->head.allocator = instance->head.allocator;
+	SPUD_BIRTH(d);
 	d->direction      = direction;
 	strncpy(d->persistent_id, name, sizeof(d->persistent_id) - 1);
 	// DESC is multi-line ("card, device\nwhat it is"); join it into one.
@@ -619,6 +629,8 @@ SPUDRESULT spudaudio_enumerate_devices(
 	*out_devices      = NULL;
 	*out_device_count = 0;
 	if (!instance)
+		return SPUDRESULT_SAUD_INVALID_INSTANCE;
+	if (SPUD_STALE(instance, "spudaudio_enumerate_devices", "instance"))
 		return SPUDRESULT_SAUD_INVALID_INSTANCE;
 	if (direction != SPUDAUDIO_DIRECTION_OUTPUT && direction != SPUDAUDIO_DIRECTION_INPUT)
 		return SPUDRESULT_DESC_INVALID_PARAMETERS;
@@ -686,6 +698,8 @@ SPUDRESULT spudaudio_get_device_properties(
 	out_properties->base = spud_struct_base_out(SPUD_STRUCT_TYPE_AUDIO_DEVICE_PROPERTIES);
 	if (!device)
 		return SPUDRESULT_SAUD_INVALID_DEVICE;
+	if (SPUD_STALE(device, "spudaudio_get_device_properties", "device"))
+		return SPUDRESULT_SAUD_INVALID_DEVICE;
 	memcpy(out_properties->name, device->name, sizeof(out_properties->name));
 	memcpy(out_properties->persistent_id, device->persistent_id, sizeof(out_properties->persistent_id));
 	out_properties->direction     = device->direction;
@@ -718,6 +732,8 @@ SPUDRESULT spudaudio_get_timing_caps(
 	if (!format)
 		return SPUDRESULT_NULL_DESC;
 	if (!device)
+		return SPUDRESULT_SAUD_INVALID_DEVICE;
+	if (SPUD_STALE(device, "spudaudio_get_timing_caps", "device"))
 		return SPUDRESULT_SAUD_INVALID_DEVICE;
 	return SPUDRESULT_NOT_IMPLEMENTED_YET;
 }
@@ -1082,6 +1098,7 @@ SPUDRESULT spudaudio_create_stream(
 	if (!s)
 		return SPUDRESULT_OUT_OF_MEMORY;
 	s->head.allocator      = desc->device->head.allocator;
+	SPUD_BIRTH(s);
 	s->stop_fd             = -1;
 	s->direction           = desc->device->direction;
 	s->callback            = desc->callback;
@@ -1404,6 +1421,8 @@ static void alsa_join_thread(struct spudaudio_stream_t *s) {
 SPUDRESULT spudaudio_stream_start(spudaudio_stream stream) {
 	if (!stream)
 		return SPUDRESULT_SAUD_INVALID_STREAM;
+	if (SPUD_STALE(stream, "spudaudio_stream_start", "stream"))
+		return SPUDRESULT_SAUD_INVALID_STREAM;
 	if (alsa_on_audio_thread(stream))
 		return SPUDRESULT_GENERAL_FAILURE; // would deadlock
 	unsigned int state = atomic_load(&stream->state);
@@ -1446,6 +1465,8 @@ SPUDRESULT spudaudio_stream_start(spudaudio_stream stream) {
 SPUDRESULT spudaudio_stream_stop(spudaudio_stream stream) {
 	if (!stream)
 		return SPUDRESULT_SAUD_INVALID_STREAM;
+	if (SPUD_STALE(stream, "spudaudio_stream_stop", "stream"))
+		return SPUDRESULT_SAUD_INVALID_STREAM;
 	if (alsa_on_audio_thread(stream))
 		return SPUDRESULT_GENERAL_FAILURE; // would deadlock
 	if (!stream->has_thread)
@@ -1460,7 +1481,10 @@ SPUDRESULT spudaudio_stream_stop(spudaudio_stream stream) {
 void spudaudio_destroy_stream(spudaudio_stream stream) {
 	if (!stream)
 		return;
+	if (SPUD_STALE(stream, "spudaudio_destroy_stream", "stream"))
+		return;
 	spudaudio_stream_stop(stream);
+	SPUD_KILL(stream);
 	alsa_free_stream(stream);
 }
 
@@ -1474,6 +1498,8 @@ SPUDRESULT spudaudio_stream_get_config(
 		return base_sr;
 	if (!stream)
 		return SPUDRESULT_SAUD_INVALID_STREAM;
+	if (SPUD_STALE(stream, "spudaudio_stream_get_config", "stream"))
+		return SPUDRESULT_SAUD_INVALID_STREAM;
 	*out_config = stream->config; // fixed at creation
 	out_config->base = spud_struct_base_out(SPUD_STRUCT_TYPE_AUDIO_STREAM_CONFIG);
 	return SPUD_SUCCESS;
@@ -1485,6 +1511,8 @@ SPUDRESULT spudaudio_stream_get_status(
 	if (!out_status)
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
 	if (!stream)
+		return SPUDRESULT_SAUD_INVALID_STREAM;
+	if (SPUD_STALE(stream, "spudaudio_stream_get_status", "stream"))
 		return SPUDRESULT_SAUD_INVALID_STREAM;
 	out_status->state           = (SPUDAUDIO_STREAM_STATE)atomic_load(&stream->state);
 	out_status->error           = (SPUDRESULT)atomic_load(&stream->error);
@@ -1505,6 +1533,8 @@ SPUDRESULT spudaudio_stream_get_latency_frames(
 	*out_latency_frames = 0;
 	if (!stream)
 		return SPUDRESULT_SAUD_INVALID_STREAM;
+	if (SPUD_STALE(stream, "spudaudio_stream_get_latency_frames", "stream"))
+		return SPUDRESULT_SAUD_INVALID_STREAM;
 	snd_pcm_sframes_t delay = 0;
 	int err                 = snd_pcm_delay(stream->pcm, &delay);
 	if (err < 0)
@@ -1518,6 +1548,8 @@ SPUDRESULT spudaudio_stream_get_latency_frames(
 SPUDRESULT spudaudio_set_device_sample_rate(spudaudio_device device, uint32_t sample_rate) {
 	if (!device)
 		return SPUDRESULT_SAUD_INVALID_DEVICE;
+	if (SPUD_STALE(device, "spudaudio_set_device_sample_rate", "device"))
+		return SPUDRESULT_SAUD_INVALID_DEVICE;
 	if (sample_rate == 0)
 		return SPUDRESULT_DESC_INVALID_PARAMETERS;
 	return SPUDRESULT_SAUD_SAMPLE_RATE_NOT_SETTABLE;
@@ -1528,6 +1560,8 @@ SPUDRESULT spudaudio_set_device_event_callback(
     SPUDAUDIO_DEVICE_EVENT_CALLBACK callback,
     void *user_data) {
 	if (!instance)
+		return SPUDRESULT_SAUD_INVALID_INSTANCE;
+	if (SPUD_STALE(instance, "spudaudio_set_device_event_callback", "instance"))
 		return SPUDRESULT_SAUD_INVALID_INSTANCE;
 	if (alsa_in_device_event_callback(instance))
 		return SPUDRESULT_GENERAL_FAILURE;

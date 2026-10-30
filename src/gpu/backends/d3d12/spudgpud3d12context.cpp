@@ -205,6 +205,7 @@ static void spudgpu_d3d12___destroy_adapters(spudgpu_instance_d3d12 *instance) {
 		spudgpu_adapter_d3d12 *adapter = instance->_adapters[i];
 		if (!adapter)
 			continue;
+		SPUD_KILL(adapter);
 		const SPUD_ALLOCATOR allocator = adapter->head.allocator;
 		spud_string_free(&allocator, adapter->head.debug_name);
 		adapter->~spudgpu_adapter_d3d12();
@@ -236,6 +237,7 @@ static SPUDRESULT spudgpu_d3d12___list_adapters(spudgpu_instance_d3d12 *instance
 		}
 		adapter                 = new (adapter) spudgpu_adapter_d3d12();
 		adapter->head.allocator = instance->head.allocator;
+		SPUD_BIRTH(adapter);
 		adapter->_instance      = instance;
 		adapter->_dxgi_adapter  = dxgi_adapter;
 		if (!spudgpu_d3d12___read_adapter_facts(adapter)) {
@@ -285,6 +287,7 @@ SPUDRESULT spudgpu_create_instance(
 		return SPUDRESULT_OUT_OF_MEMORY;
 	pResult                      = new (pResult) spudgpu_instance_d3d12();
 	pResult->head.allocator      = *desc->allocator;
+	SPUD_BIRTH(pResult);
 	pResult->application_name    = desc->application_name;
 	pResult->application_version = desc->application_version;
 	pResult->engine_name         = desc->engine_name;
@@ -327,6 +330,9 @@ SPUDRESULT spudgpu_create_instance(
 SPUDRESULT spudgpu_destroy_instance(spudgpu_instance instance) {
 	if (!instance)
 		return SPUD_SUCCESS;
+	if (SPUD_STALE(instance, "spudgpu_destroy_instance", "instance"))
+		return SPUD_SUCCESS;
+	SPUD_KILL(instance);
 	const SPUD_ALLOCATOR allocator = instance->head.allocator;
 	spudgpu_d3d12___destroy_adapters(instance);
 	spud_string_free(&allocator, instance->head.debug_name);
@@ -340,6 +346,8 @@ SPUDRESULT spudgpu_enumerate_adapters(
     const spudgpu_adapter **out_adapters,
     uint32_t *out_adapters_count) {
 	if (!instance)
+		return SPUDRESULT_GPU_INVALID_INSTANCE;
+	if (SPUD_STALE(instance, "spudgpu_enumerate_adapters", "instance"))
 		return SPUDRESULT_GPU_INVALID_INSTANCE;
 	if (!out_adapters)
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
@@ -355,6 +363,8 @@ SPUDRESULT spudgpu_get_adapter_properties(
     SPUDGPU_ADAPTER_PROPERTIES *out_properties) {
 	if (!adapter)
 		return SPUDRESULT_GPU_INVALID_ADAPTER;
+	if (SPUD_STALE(adapter, "spudgpu_get_adapter_properties", "adapter"))
+		return SPUDRESULT_GPU_INVALID_ADAPTER;
 	return spudgpu___internal_get_adapter_properties(&adapter->_facts, out_properties);
 }
 
@@ -364,7 +374,11 @@ SPUDRESULT spudgpu_adapter_supports_surface(
     bool *out_supported) {
 	if (!adapter)
 		return SPUDRESULT_GPU_INVALID_ADAPTER;
+	if (SPUD_STALE(adapter, "spudgpu_adapter_supports_surface", "adapter"))
+		return SPUDRESULT_GPU_INVALID_ADAPTER;
 	if (!surface)
+		return SPUDRESULT_GPU_INVALID_SURFACE;
+	if (SPUD_STALE(surface, "spudgpu_adapter_supports_surface", "surface"))
 		return SPUDRESULT_GPU_INVALID_SURFACE;
 	if (!out_supported)
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
@@ -386,6 +400,7 @@ static void spudgpu_d3d12___destroy_queues(spudgpu_device_d3d12 *device, spudgpu
 		spudgpu_command_queue_d3d12 *queue = queues[i];
 		if (!queue)
 			continue;
+		SPUD_KILL(queue);
 		const SPUD_ALLOCATOR allocator = queue->head.allocator;
 		spud_string_free(&allocator, queue->head.debug_name);
 		queue->~spudgpu_command_queue_d3d12();
@@ -420,7 +435,9 @@ static SPUDRESULT spudgpu_d3d12___create_queues(
 		}
 		queue                 = new (queue) spudgpu_command_queue_d3d12();
 		queue->head.allocator = device->head.allocator;
+		SPUD_BIRTH(queue);
 		queue->_device        = device;
+		queue->_scratch_lists = eq::array<ID3D12CommandList *>(&device->_eq_allocator);
 		queues[i]             = queue;
 		if (FAILED(device->_d3d_device->CreateCommandQueue(&desc, IID_PPV_ARGS(&queue->_d3d_cmd_queue)))) {
 			spudgpu_d3d12___destroy_queues(device, queues, count);
@@ -444,8 +461,10 @@ static void spudgpu_d3d12___free_device(spudgpu_device_d3d12 *device) {
 	spudgpu_d3d12___destroy_queues(device, device->_cmd_queues_compute, device->_cmd_queue_count_compute);
 	spudgpu_d3d12___destroy_queues(device, device->_cmd_queues_copy, device->_cmd_queue_count_copy);
 	if (spudgpu_bindless_state_d3d12 *bindless = device->_bindless) {
-		if (bindless->layout)
+		if (bindless->layout) {
+			SPUD_KILL(bindless->layout);
 			spud_string_free(&allocator, bindless->layout->head.debug_name);
+		}
 		SPUD_DELETE(&allocator, spudgpu_descriptor_set_layout_d3d12, bindless->layout);
 		bindless->~spudgpu_bindless_state_d3d12();
 		SPUD_DELETE(&allocator, spudgpu_bindless_state_d3d12, bindless);
@@ -479,6 +498,8 @@ SPUDRESULT spudgpu_create_device(
     spudgpu_device *out_device) {
 	if (!adapter)
 		return SPUDRESULT_GPU_INVALID_ADAPTER;
+	if (SPUD_STALE(adapter, "spudgpu_create_device", "adapter"))
+		return SPUDRESULT_GPU_INVALID_ADAPTER;
 	const SPUDRESULT check_sr = spudgpu___internal_check_device_desc(&adapter->_facts, desc, out_device);
 	if (check_sr != SPUD_SUCCESS)
 		return check_sr;
@@ -493,6 +514,7 @@ SPUDRESULT spudgpu_create_device(
 	}
 	device                 = new (device) spudgpu_device_d3d12();
 	device->head.allocator = adapter->head.allocator;
+	SPUD_BIRTH(device);
 	device->_eq_allocator  = spud_eq_allocator(&device->head.allocator);
 	eq_array_init(&device->_csv_heap.free_ranges, &device->_eq_allocator);
 	eq_array_init(&device->_sampler_heap.free_ranges, &device->_eq_allocator);
@@ -554,23 +576,32 @@ SPUDRESULT spudgpu_create_device(
 void spudgpu_destroy_device(spudgpu_device device) {
 	if (!device)
 		return;
+	if (SPUD_STALE(device, "spudgpu_destroy_device", "device"))
+		return;
 #if _DEBUG
 	spudgpu___internal_live_check_none(&device->_live, device->head.debug_name);
 	spudgpu___internal_live_destroy(&device->_live);
 #endif
+	SPUD_KILL(device);
 	spudgpu_d3d12___free_device(device);
 }
 
 spudgpu_adapter spudgpu_get_device_adapter(spudgpu_device device) {
-	return device ? device->_adapter : nullptr;
+	if (!device) return nullptr;
+	if (SPUD_STALE(device, "spudgpu_get_device_adapter", "device")) return nullptr;
+	return device->_adapter;
 }
 
 SPUDGPU_FEATURES spudgpu_get_device_features(spudgpu_device device) {
-	return device ? device->_features : 0;
+	if (!device) return 0;
+	if (SPUD_STALE(device, "spudgpu_get_device_features", "device")) return 0;
+	return device->_features;
 }
 
 SPUDGPU_NATIVE_API spudgpu_get_native_gpu_api(spudgpu_instance instance) {
-	return instance ? SPUDGPU_NATIVE_API_D3D12 : SPUDGPU_NATIVE_API_NONE;
+	if (!instance) return SPUDGPU_NATIVE_API_NONE;
+	if (SPUD_STALE(instance, "spudgpu_get_native_gpu_api", "instance")) return SPUDGPU_NATIVE_API_NONE;
+	return SPUDGPU_NATIVE_API_D3D12;
 }
 
 SPUDRESULT spudgpu_create_surface(
@@ -579,6 +610,8 @@ SPUDRESULT spudgpu_create_surface(
     void *display_handle,
     spudgpu_surface *out_surface) {
 	if (!instance)
+		return SPUDRESULT_GPU_INVALID_INSTANCE;
+	if (SPUD_STALE(instance, "spudgpu_create_surface", "instance"))
 		return SPUDRESULT_GPU_INVALID_INSTANCE;
 	if (!window_handle)
 		return SPUDRESULT_GPU_INVALID_WINDOW_HANDLE;
@@ -589,6 +622,7 @@ SPUDRESULT spudgpu_create_surface(
 	if (!pResult)
 		return SPUDRESULT_OUT_OF_MEMORY;
 	pResult->head.allocator = instance->head.allocator;
+	SPUD_BIRTH(pResult);
 	pResult->_hwnd          = (HWND)window_handle;
 	pResult->_instance      = instance;
 	*out_surface            = pResult;
@@ -597,6 +631,9 @@ SPUDRESULT spudgpu_create_surface(
 void spudgpu_destroy_surface(spudgpu_surface surface) {
 	if (!surface)
 		return;
+	if (SPUD_STALE(surface, "spudgpu_destroy_surface", "surface"))
+		return;
+	SPUD_KILL(surface);
 	const SPUD_ALLOCATOR allocator = surface->head.allocator;
 	spud_string_free(&allocator, surface->head.debug_name);
 	SPUD_DELETE(&allocator, spudgpu_surface_d3d12, surface);

@@ -13,7 +13,7 @@ static SPUDRESULT spudfile_windows_wide(spudfile_instance instance, const char *
 	const int count = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, utf8, -1, NULL, 0);
 	if (count <= 0)
 		return SPUDRESULT_SPUDFILE_NOT_FOUND; // not UTF-8: no file can have that name
-	wchar_t *wide = SPUD_NEW_ARRAY(&instance->allocator, wchar_t, (size_t)count);
+	wchar_t *wide = SPUD_NEW_ARRAY(&instance->head.allocator, wchar_t, (size_t)count);
 	if (!wide)
 		return SPUDRESULT_OUT_OF_MEMORY;
 	MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, utf8, -1, wide, count);
@@ -24,7 +24,7 @@ static SPUDRESULT spudfile_windows_wide(spudfile_instance instance, const char *
 
 static void spudfile_windows_free_wide(spudfile_instance instance, wchar_t *wide, int count) {
 	if (wide)
-		SPUD_DELETE_ARRAY(&instance->allocator, wchar_t, wide, (size_t)count);
+		SPUD_DELETE_ARRAY(&instance->head.allocator, wchar_t, wide, (size_t)count);
 }
 
 static bool spudfile_windows_is_directory(const wchar_t *path) {

@@ -3184,7 +3184,7 @@ typedef bool (*spudgpu_surface_create_fn)(
  * For windowing libraries that create the native surface themselves: `create_fn`
  * is called once, during this call, with the instance's native handle.
  *
- * @note Not implemented by the D3D12 backend.
+ * @note Not implemented by the D3D12 backend, where it returns NULL.
  *
  * @param[in] instance  Instance to create the surface on.
  * @param[in] user_data Passed through to `create_fn` unchanged.
@@ -3564,7 +3564,7 @@ spudgpu_image_view spudgpu_get_swap_chain_image_view(
  * wait semaphore in spudgpu_submit_desc. The swap chain owns it; do not destroy
  * it.
  *
- * @note Not implemented by the D3D12 backend.
+ * @note Not implemented by the D3D12 backend, where it returns NULL.
  *
  * @param[in] swap_chain Swap chain to get the semaphore from.
  *
@@ -3579,7 +3579,7 @@ spudgpu_semaphore spudgpu_swap_chain_get_image_available_semaphore(spudgpu_swap_
  * Pass it as a signal semaphore in spudgpu_submit_desc so presentation waits
  * for rendering. The swap chain owns it; do not destroy it.
  *
- * @note Not implemented by the D3D12 backend.
+ * @note Not implemented by the D3D12 backend, where it returns NULL.
  *
  * @param[in] swap_chain Swap chain to get the semaphore from.
  *

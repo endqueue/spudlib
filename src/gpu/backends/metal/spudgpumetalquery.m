@@ -35,7 +35,11 @@ SPUDRESULT spudgpu_create_timestamp_set(
     spudgpu_timestamp_set *out_set) {
 	if (!device)
 		return SPUDRESULT_GPU_INVALID_DEVICE;
+	if (SPUD_STALE(device, "spudgpu_create_timestamp_set", "device"))
+		return SPUDRESULT_GPU_INVALID_DEVICE;
 	if (!queue)
+		return SPUDRESULT_GPU_INVALID_COMMAND_QUEUE;
+	if (SPUD_STALE(queue, "spudgpu_create_timestamp_set", "queue"))
 		return SPUDRESULT_GPU_INVALID_COMMAND_QUEUE;
 	if (count == 0)
 		return SPUDRESULT_ZERO_SIZE;
@@ -49,6 +53,7 @@ SPUDRESULT spudgpu_create_timestamp_set(
 	if (!set)
 		return SPUDRESULT_OUT_OF_MEMORY;
 	set->head.allocator = device_metal->head.allocator;
+	SPUD_BIRTH(set);
 
 	MTLCounterSampleBufferDescriptor *buffer_desc = [[MTLCounterSampleBufferDescriptor alloc] init];
 	id<MTLCounterSet> counter_set                 = spudgpumetal___internal_timestamp_counter_set(device_metal->_device_mtl);
@@ -77,10 +82,13 @@ SPUDRESULT spudgpu_create_timestamp_set(
 void spudgpu_destroy_timestamp_set(spudgpu_timestamp_set set) {
 	if (!set)
 		return;
+	if (SPUD_STALE(set, "spudgpu_destroy_timestamp_set", "set"))
+		return;
 	spudgpu_timestamp_set_metal *set_metal = (spudgpu_timestamp_set_metal *)set;
 	SPUDGPU___LIVE_REMOVE(&set_metal->_parent_device->_live, SPUDGPU___OBJECT_TIMESTAMP_SET);
 	[set_metal->_sample_buffer_mtl release];
 	[set_metal->_device_mtl release];
+	SPUD_KILL(set);
 	const SPUD_ALLOCATOR allocator = set_metal->head.allocator;
 	spud_string_free(&allocator, set_metal->head.debug_name);
 	SPUD_DELETE(&allocator, spudgpu_timestamp_set_metal, set_metal);
@@ -92,8 +100,12 @@ void spudgpu_cmd_reset_timestamps(
     uint32_t first,
     uint32_t count) {
 	// A sample overwrites what the entry held: nothing to reset.
-	(void)cmd;
-	(void)set;
+	if (!cmd || !set)
+		return;
+	if (SPUD_STALE(cmd, "spudgpu_cmd_reset_timestamps", "cmd"))
+		return;
+	if (SPUD_STALE(set, "spudgpu_cmd_reset_timestamps", "set"))
+		return;
 	(void)first;
 	(void)count;
 }
@@ -104,8 +116,12 @@ void spudgpu_cmd_resolve_timestamps(
     uint32_t first,
     uint32_t count) {
 	// Resolved on the CPU from shared storage (spudgpu_get_timestamps).
-	(void)cmd;
-	(void)set;
+	if (!cmd || !set)
+		return;
+	if (SPUD_STALE(cmd, "spudgpu_cmd_resolve_timestamps", "cmd"))
+		return;
+	if (SPUD_STALE(set, "spudgpu_cmd_resolve_timestamps", "set"))
+		return;
 	(void)first;
 	(void)count;
 }
@@ -116,6 +132,8 @@ SPUDRESULT spudgpu_get_timestamps(
     uint32_t count,
     uint64_t *out_ns) {
 	if (!set)
+		return SPUDRESULT_GPU_INVALID_TIMESTAMP_SET;
+	if (SPUD_STALE(set, "spudgpu_get_timestamps", "set"))
 		return SPUDRESULT_GPU_INVALID_TIMESTAMP_SET;
 	if (count == 0)
 		return SPUDRESULT_ZERO_SIZE;

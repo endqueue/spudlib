@@ -248,6 +248,7 @@ static struct spudnet_tcp_socket_t *spudnet_posix_socket_alloc(spudnet_instance 
 	if (!socket)
 		return NULL;
 	socket->head.allocator = *allocator;
+	SPUD_BIRTH(socket);
 	socket->instance       = instance;
 	socket->fd             = -1;
 	atomic_init(&socket->connect_called, false);
@@ -287,9 +288,12 @@ spudnet_instance spudnet_tcp_listener_instance(spudnet_tcp_listener listener) { 
 void spudnet_tcp_listener_destroy(spudnet_tcp_listener listener) {
 	if (!listener)
 		return;
+	if (SPUD_STALE(listener, "spudnet_tcp_listener_destroy", "listener"))
+		return;
 	if (listener->fd >= 0)
 		close(listener->fd);
 	spudnet_posix_abort_free(&listener->abort);
+	SPUD_KILL(listener);
 	const SPUD_ALLOCATOR allocator = listener->head.allocator;
 	spud_string_free(&allocator, listener->head.debug_name);
 	SPUD_DELETE(&allocator, struct spudnet_tcp_listener_t, listener);
@@ -305,6 +309,8 @@ SPUDRESULT spudnet_tcp_listener_create(
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
 	*out_listener = NULL;
 	if (!instance)
+		return SPUDRESULT_SPUDNET_INVALID_INSTANCE;
+	if (SPUD_STALE(instance, "spudnet_tcp_listener_create", "instance"))
 		return SPUDRESULT_SPUDNET_INVALID_INSTANCE;
 	if (!desc)
 		return SPUDRESULT_NULL_DESC;
@@ -323,6 +329,7 @@ SPUDRESULT spudnet_tcp_listener_create(
 	if (!listener)
 		return SPUDRESULT_OUT_OF_MEMORY;
 	listener->head.allocator = instance->head.allocator;
+	SPUD_BIRTH(listener);
 	listener->instance       = instance;
 	listener->fd             = -1;
 	if (!spudnet_posix_abort_init(&listener->abort)) {
@@ -381,6 +388,8 @@ SPUDRESULT spudnet_tcp_listener_get_port(
 	*out_port = 0;
 	if (!listener)
 		return SPUDRESULT_SPUDNET_INVALID_TCP_LISTENER;
+	if (SPUD_STALE(listener, "spudnet_tcp_listener_get_port", "listener"))
+		return SPUDRESULT_SPUDNET_INVALID_TCP_LISTENER;
 
 	struct sockaddr_storage storage;
 	socklen_t               length = sizeof(storage);
@@ -401,6 +410,8 @@ SPUDRESULT spudnet_tcp_listener_accept(
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
 	*out_socket = NULL;
 	if (!listener)
+		return SPUDRESULT_SPUDNET_INVALID_TCP_LISTENER;
+	if (SPUD_STALE(listener, "spudnet_tcp_listener_accept", "listener"))
 		return SPUDRESULT_SPUDNET_INVALID_TCP_LISTENER;
 
 	uint64_t start = spudnet_posix_now_ms();
@@ -443,13 +454,23 @@ SPUDRESULT spudnet_tcp_listener_accept(
 void spudnet_tcp_listener_abort(spudnet_tcp_listener listener) {
 	if (!listener)
 		return;
+	if (SPUD_STALE(listener, "spudnet_tcp_listener_abort", "listener"))
+		return;
 	spudnet_posix_abort_set(&listener->abort);
 }
 
 void spudnet_tcp_listener_get_error(
     spudnet_tcp_listener listener,
     spudnet_error *out_error) {
-	spudnet_error_get(listener ? &listener->error : NULL, out_error);
+	if (!listener) {
+		spudnet_error_get(NULL, out_error);
+		return;
+	}
+	if (SPUD_STALE(listener, "spudnet_tcp_listener_get_error", "listener")) {
+		spudnet_error_get(NULL, out_error);
+		return;
+	}
+	spudnet_error_get(&listener->error, out_error);
 }
 
 // --------------------------------------------------------------------------
@@ -464,6 +485,8 @@ SPUDRESULT spudnet_tcp_socket_create(
 	*out_socket = NULL;
 	if (!instance)
 		return SPUDRESULT_SPUDNET_INVALID_INSTANCE;
+	if (SPUD_STALE(instance, "spudnet_tcp_socket_create", "instance"))
+		return SPUDRESULT_SPUDNET_INVALID_INSTANCE;
 	*out_socket = spudnet_posix_socket_alloc(instance, &instance->head.allocator);
 	return *out_socket ? SPUD_SUCCESS : SPUDRESULT_OUT_OF_MEMORY;
 }
@@ -471,9 +494,12 @@ SPUDRESULT spudnet_tcp_socket_create(
 void spudnet_tcp_socket_destroy(spudnet_tcp_socket socket) {
 	if (!socket)
 		return;
+	if (SPUD_STALE(socket, "spudnet_tcp_socket_destroy", "socket"))
+		return;
 	if (socket->fd >= 0)
 		close(socket->fd);
 	spudnet_posix_abort_free(&socket->abort);
+	SPUD_KILL(socket);
 	const SPUD_ALLOCATOR allocator = socket->head.allocator;
 	spud_string_free(&allocator, socket->head.debug_name);
 	SPUD_DELETE(&allocator, struct spudnet_tcp_socket_t, socket);
@@ -482,6 +508,8 @@ void spudnet_tcp_socket_destroy(spudnet_tcp_socket socket) {
 void spudnet_tcp_socket_abort(spudnet_tcp_socket socket) {
 	if (!socket)
 		return;
+	if (SPUD_STALE(socket, "spudnet_tcp_socket_abort", "socket"))
+		return;
 	spudnet_posix_abort_set(&socket->abort);
 }
 
@@ -489,14 +517,26 @@ void spudnet_tcp_socket_get_error(
     spudnet_tcp_socket socket,
     SPUDNET_ERROR_SIDE side,
     spudnet_error *out_error) {
-	bool known = socket && (side == SPUDNET_ERROR_SIDE_RECEIVING || side == SPUDNET_ERROR_SIDE_SENDING);
+	if (!socket) {
+		spudnet_error_get(NULL, out_error);
+		return;
+	}
+	if (SPUD_STALE(socket, "spudnet_tcp_socket_get_error", "socket")) {
+		spudnet_error_get(NULL, out_error);
+		return;
+	}
+	bool known = side == SPUDNET_ERROR_SIDE_RECEIVING || side == SPUDNET_ERROR_SIDE_SENDING;
 	spudnet_error_get(known ? &socket->errors[side] : NULL, out_error);
 }
 
 /* What a call on a socket that can't carry it returns, or SPUD_SUCCESS for
- * one that can. */
-static SPUDRESULT spudnet_posix_socket_usable(struct spudnet_tcp_socket_t *socket) {
+ * one that can. [function] is the public call's name, for the line a
+ * destroyed socket prints (spudstale.h). */
+static SPUDRESULT spudnet_posix_socket_usable(struct spudnet_tcp_socket_t *socket, const char *function) {
+	(void)function; // read by the stale check only, which a Release build has none of
 	if (!socket)
+		return SPUDRESULT_SPUDNET_INVALID_TCP_SOCKET;
+	if (SPUD_STALE(socket, function, "socket"))
 		return SPUDRESULT_SPUDNET_INVALID_TCP_SOCKET;
 	if (atomic_load(&socket->abort.aborted))
 		return SPUDRESULT_SPUDNET_ABORTED;
@@ -509,6 +549,8 @@ SPUDRESULT spudnet_tcp_socket_connect(
     spudnet_tcp_socket socket,
     const spudnet_tcp_socket_connect_desc *desc) {
 	if (!socket)
+		return SPUDRESULT_SPUDNET_INVALID_TCP_SOCKET;
+	if (SPUD_STALE(socket, "spudnet_tcp_socket_connect", "socket"))
 		return SPUDRESULT_SPUDNET_INVALID_TCP_SOCKET;
 	if (!desc)
 		return SPUDRESULT_NULL_DESC;
@@ -569,7 +611,7 @@ SPUDRESULT spudnet_tcp_socket_send(
 	if (!out_sent)
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
 	*out_sent         = 0;
-	SPUDRESULT usable = spudnet_posix_socket_usable(socket);
+	SPUDRESULT usable = spudnet_posix_socket_usable(socket, "spudnet_tcp_socket_send");
 	if (SPUDFAIL(usable))
 		return usable;
 	if (!data || size == 0)
@@ -603,7 +645,7 @@ SPUDRESULT spudnet_tcp_socket_recv(
 	if (!out_received)
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
 	*out_received     = 0;
-	SPUDRESULT usable = spudnet_posix_socket_usable(socket);
+	SPUDRESULT usable = spudnet_posix_socket_usable(socket, "spudnet_tcp_socket_recv");
 	if (SPUDFAIL(usable))
 		return usable;
 	if (!data || size == 0)
@@ -629,7 +671,7 @@ SPUDRESULT spudnet_tcp_socket_recv(
 }
 
 SPUDRESULT spudnet_tcp_socket_finish_sending(spudnet_tcp_socket socket) {
-	SPUDRESULT usable = spudnet_posix_socket_usable(socket);
+	SPUDRESULT usable = spudnet_posix_socket_usable(socket, "spudnet_tcp_socket_finish_sending");
 	if (SPUDFAIL(usable))
 		return usable;
 	if (shutdown(socket->fd, SHUT_WR) != 0)
@@ -640,7 +682,7 @@ SPUDRESULT spudnet_tcp_socket_finish_sending(spudnet_tcp_socket socket) {
 SPUDRESULT spudnet_tcp_socket_set_no_delay(
     spudnet_tcp_socket socket,
     bool no_delay) {
-	SPUDRESULT usable = spudnet_posix_socket_usable(socket);
+	SPUDRESULT usable = spudnet_posix_socket_usable(socket, "spudnet_tcp_socket_set_no_delay");
 	if (SPUDFAIL(usable))
 		return usable;
 	int value = no_delay ? 1 : 0;
@@ -657,7 +699,7 @@ SPUDRESULT spudnet_tcp_socket_get_peer_address(
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
 	out_address[0]    = '\0';
 	*out_port         = 0;
-	SPUDRESULT usable = spudnet_posix_socket_usable(socket);
+	SPUDRESULT usable = spudnet_posix_socket_usable(socket, "spudnet_tcp_socket_get_peer_address");
 	if (SPUDFAIL(usable))
 		return usable;
 
@@ -757,6 +799,8 @@ SPUDRESULT spudnet_resolver_create(
 	*out_resolver = NULL;
 	if (!instance)
 		return SPUDRESULT_SPUDNET_INVALID_INSTANCE;
+	if (SPUD_STALE(instance, "spudnet_resolver_create", "instance"))
+		return SPUDRESULT_SPUDNET_INVALID_INSTANCE;
 	if (!desc)
 		return SPUDRESULT_NULL_DESC;
 	const SPUDRESULT base_sr = spud_struct_check(&desc->base, SPUD_STRUCT_TYPE_NET_RESOLVER_DESC);
@@ -769,6 +813,7 @@ SPUDRESULT spudnet_resolver_create(
 	if (!resolver)
 		return SPUDRESULT_OUT_OF_MEMORY;
 	resolver->head.allocator = instance->head.allocator;
+	SPUD_BIRTH(resolver);
 	// One for this function's failure paths to let go of; the second is
 	// added only once there is a resolver to hand out.
 	atomic_init(&resolver->references, 1);
@@ -801,11 +846,17 @@ SPUDRESULT spudnet_resolver_create(
 void spudnet_resolver_destroy(spudnet_resolver resolver) {
 	if (!resolver)
 		return;
+	if (SPUD_STALE(resolver, "spudnet_resolver_destroy", "resolver"))
+		return;
+	// Dead from here, though the run may still hold the memory.
+	SPUD_KILL(resolver);
 	spudnet_posix_resolver_release(resolver);
 }
 
 void spudnet_resolver_abort(spudnet_resolver resolver) {
 	if (!resolver)
+		return;
+	if (SPUD_STALE(resolver, "spudnet_resolver_abort", "resolver"))
 		return;
 	spudnet_posix_abort_set(&resolver->abort);
 }
@@ -814,6 +865,10 @@ void spudnet_resolver_get_error(
     spudnet_resolver resolver,
     spudnet_error *out_error) {
 	if (!resolver) {
+		spudnet_error_get(NULL, out_error);
+		return;
+	}
+	if (SPUD_STALE(resolver, "spudnet_resolver_get_error", "resolver")) {
 		spudnet_error_get(NULL, out_error);
 		return;
 	}
@@ -826,6 +881,9 @@ void spudnet_resolver_get_error(
 SPUDRESULT spudnet_resolver_run(spudnet_resolver resolver) {
 	if (!resolver)
 		return SPUDRESULT_SPUDNET_INVALID_RESOLVER;
+	// No stale check: the run may start after the resolver is destroyed
+	// (spudnet.h), which kills its tag at the destroy call while the run's
+	// reference keeps the memory.
 	// A second run has no reference of its own to let go of at the end.
 	if (atomic_exchange(&resolver->run_called, true))
 		return SPUDRESULT_SPUDNET_INVALID_RESOLVER;
@@ -935,6 +993,8 @@ SPUDRESULT spudnet_resolver_wait(
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
 	*out_count = 0;
 	if (!resolver)
+		return SPUDRESULT_SPUDNET_INVALID_RESOLVER;
+	if (SPUD_STALE(resolver, "spudnet_resolver_wait", "resolver"))
 		return SPUDRESULT_SPUDNET_INVALID_RESOLVER;
 
 	// The done pipe is never emptied, so once run has finished every wait

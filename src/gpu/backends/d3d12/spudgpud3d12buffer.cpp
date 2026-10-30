@@ -53,6 +53,8 @@ SPUDRESULT spudgpu_create_buffer(
     spudgpu_buffer *out_buffer) {
 	if (!device)
 		return SPUDRESULT_GPU_INVALID_DEVICE;
+	if (SPUD_STALE(device, "spudgpu_create_buffer", "device"))
+		return SPUDRESULT_GPU_INVALID_DEVICE;
 	if (!desc)
 		return SPUDRESULT_NULL_DESC;
 	const SPUDRESULT base_sr = spud_struct_check(&desc->base, SPUD_STRUCT_TYPE_GPU_BUFFER_DESC);
@@ -70,6 +72,7 @@ SPUDRESULT spudgpu_create_buffer(
 		return SPUDRESULT_OUT_OF_MEMORY;
 	pResult                 = new (pResult) spudgpu_buffer_d3d12();
 	pResult->head.allocator = device->head.allocator;
+	SPUD_BIRTH(pResult);
 	pResult->_device        = device;
 	pResult->_desc          = *desc;
 
@@ -106,11 +109,14 @@ SPUDRESULT spudgpu_create_buffer(
 void spudgpu_destroy_buffer(spudgpu_buffer buffer) {
 	if (!buffer)
 		return;
+	if (SPUD_STALE(buffer, "spudgpu_destroy_buffer", "buffer"))
+		return;
 #if _DEBUG
 	if (buffer->_heap)
 		buffer->_heap->_placed_count--;
 #endif
 	SPUDGPU___LIVE_REMOVE(&buffer->_device->_live, SPUDGPU___OBJECT_BUFFER);
+	SPUD_KILL(buffer);
 	const SPUD_ALLOCATOR allocator = buffer->head.allocator;
 	spud_string_free(&allocator, buffer->head.debug_name);
 	buffer->~spudgpu_buffer_d3d12();
@@ -119,6 +125,8 @@ void spudgpu_destroy_buffer(spudgpu_buffer buffer) {
 SPUDRESULT
 spudgpu_get_buffer_desc(spudgpu_buffer buffer, spudgpu_buffer_desc *out_desc) {
 	if (!buffer)
+		return SPUDRESULT_GPU_INVALID_BUFFER;
+	if (SPUD_STALE(buffer, "spudgpu_get_buffer_desc", "buffer"))
 		return SPUDRESULT_GPU_INVALID_BUFFER;
 	if (!out_desc)
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
@@ -131,6 +139,8 @@ SPUDRESULT
 spudgpu_get_buffer_gpu_address(spudgpu_buffer buffer, uint64_t *out_address) {
 	if (!buffer)
 		return SPUDRESULT_GPU_INVALID_BUFFER;
+	if (SPUD_STALE(buffer, "spudgpu_get_buffer_gpu_address", "buffer"))
+		return SPUDRESULT_GPU_INVALID_BUFFER;
 	if (!out_address)
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
 	*out_address = buffer->_d3d_gpu_address;
@@ -142,6 +152,8 @@ SPUDRESULT spudgpu_create_buffer_view(
     const spudgpu_buffer_view_desc *desc,
     spudgpu_buffer_view *out_buffer_view) {
 	if (!buffer)
+		return SPUDRESULT_GPU_INVALID_BUFFER;
+	if (SPUD_STALE(buffer, "spudgpu_create_buffer_view", "buffer"))
 		return SPUDRESULT_GPU_INVALID_BUFFER;
 	if (!desc)
 		return SPUDRESULT_NULL_DESC;
@@ -160,6 +172,7 @@ SPUDRESULT spudgpu_create_buffer_view(
 	if (!pResult)
 		return SPUDRESULT_OUT_OF_MEMORY;
 	pResult->head.allocator = buffer->_device->head.allocator;
+	SPUD_BIRTH(pResult);
 	pResult->_buffer        = buffer;
 	pResult->_desc          = *desc;
 
@@ -207,7 +220,10 @@ SPUDRESULT spudgpu_create_buffer_view(
 void spudgpu_destroy_buffer_view(spudgpu_buffer_view buffer) {
 	if (!buffer)
 		return;
+	if (SPUD_STALE(buffer, "spudgpu_destroy_buffer_view", "buffer"))
+		return;
 	SPUDGPU___LIVE_REMOVE(&buffer->_device->_live, SPUDGPU___OBJECT_BUFFER_VIEW);
+	SPUD_KILL(buffer);
 	const SPUD_ALLOCATOR allocator = buffer->head.allocator;
 	spud_string_free(&allocator, buffer->head.debug_name);
 	SPUD_DELETE(&allocator, spudgpu_buffer_view_d3d12, buffer);
@@ -215,6 +231,8 @@ void spudgpu_destroy_buffer_view(spudgpu_buffer_view buffer) {
 SPUDRESULT spudgpu_get_buffer_view_desc(
     spudgpu_buffer_view view, spudgpu_buffer_view_desc *out_desc) {
 	if (!view)
+		return SPUDRESULT_GPU_INVALID_BUFFER_VIEW;
+	if (SPUD_STALE(view, "spudgpu_get_buffer_view_desc", "view"))
 		return SPUDRESULT_GPU_INVALID_BUFFER_VIEW;
 	if (!out_desc)
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
@@ -226,6 +244,8 @@ SPUDRESULT spudgpu_get_buffer_view_desc(
 SPUDRESULT spudgpu_map_buffer(
     spudgpu_buffer buffer, uint64_t offset, uint64_t size, void **ppData) {
 	if (!buffer)
+		return SPUDRESULT_GPU_INVALID_BUFFER;
+	if (SPUD_STALE(buffer, "spudgpu_map_buffer", "buffer"))
 		return SPUDRESULT_GPU_INVALID_BUFFER;
 	if (offset + size > buffer->_desc.size)
 		return SPUDRESULT_GPU_MAP_OUT_OF_RANGE;
@@ -251,6 +271,7 @@ SPUDRESULT spudgpu_map_buffer(
 }
 void spudgpu_unmap_buffer(spudgpu_buffer buffer) {
 	if (!buffer) return;
+	if (SPUD_STALE(buffer, "spudgpu_unmap_buffer", "buffer")) return;
 	buffer->_d3d_resource->Unmap(0, nullptr);
 }
 
@@ -259,6 +280,8 @@ void spudgpu_unmap_buffer(spudgpu_buffer buffer) {
 // calls make the checks every backend makes and then have nothing to do.
 SPUDRESULT spudgpu_flush_buffer(spudgpu_buffer buffer, uint64_t offset, uint64_t size) {
 	if (!buffer)
+		return SPUDRESULT_GPU_INVALID_BUFFER;
+	if (SPUD_STALE(buffer, "spudgpu_flush_buffer", "buffer"))
 		return SPUDRESULT_GPU_INVALID_BUFFER;
 	if (buffer->_desc.memory_kind != SPUDGPU_MEMORY_KIND_UPLOAD &&
 	    buffer->_desc.memory_kind != SPUDGPU_MEMORY_KIND_DEVICE_MAPPABLE)
@@ -269,6 +292,8 @@ SPUDRESULT spudgpu_flush_buffer(spudgpu_buffer buffer, uint64_t offset, uint64_t
 }
 SPUDRESULT spudgpu_invalidate_buffer(spudgpu_buffer buffer, uint64_t offset, uint64_t size) {
 	if (!buffer)
+		return SPUDRESULT_GPU_INVALID_BUFFER;
+	if (SPUD_STALE(buffer, "spudgpu_invalidate_buffer", "buffer"))
 		return SPUDRESULT_GPU_INVALID_BUFFER;
 	if (buffer->_desc.memory_kind != SPUDGPU_MEMORY_KIND_READBACK &&
 	    buffer->_desc.memory_kind != SPUDGPU_MEMORY_KIND_DEVICE_MAPPABLE)

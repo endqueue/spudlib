@@ -70,6 +70,7 @@ SPUDRESULT spudnet_instance_create(
 	if (!instance)
 		return SPUDRESULT_OUT_OF_MEMORY;
 	instance->head.allocator = *desc->allocator;
+	SPUD_BIRTH(instance);
 	*out_instance            = instance;
 	return SPUD_SUCCESS;
 }
@@ -77,6 +78,9 @@ SPUDRESULT spudnet_instance_create(
 void spudnet_instance_destroy(spudnet_instance instance) {
 	if (!instance)
 		return;
+	if (SPUD_STALE(instance, "spudnet_instance_destroy", "instance"))
+		return;
+	SPUD_KILL(instance);
 	const SPUD_ALLOCATOR allocator = instance->head.allocator;
 	spud_string_free(&allocator, instance->head.debug_name);
 	SPUD_DELETE(&allocator, struct spudnet_instance_t, instance);
@@ -640,6 +644,8 @@ SPUDRESULT spudnet_http_client_create(
 	*out_client = NULL;
 	if (!instance)
 		return SPUDRESULT_SPUDNET_INVALID_INSTANCE;
+	if (SPUD_STALE(instance, "spudnet_http_client_create", "instance"))
+		return SPUDRESULT_SPUDNET_INVALID_INSTANCE;
 	if (!desc)
 		return SPUDRESULT_NULL_DESC;
 	const SPUDRESULT base_sr = spud_struct_check(&desc->base, SPUD_STRUCT_TYPE_NET_HTTP_CLIENT_DESC);
@@ -666,6 +672,7 @@ SPUDRESULT spudnet_http_client_create(
 		return SPUDRESULT_OUT_OF_MEMORY;
 	}
 	client->head.allocator = *allocator;
+	SPUD_BIRTH(client);
 
 	@autoreleasepool {
 		NSURLSessionConfiguration *configuration = spudnet_apple_configuration(&proxy);
@@ -695,10 +702,13 @@ SPUDRESULT spudnet_http_client_create(
 void spudnet_http_client_destroy(spudnet_http_client client) {
 	if (!client)
 		return;
+	if (SPUD_STALE(client, "spudnet_http_client_destroy", "client"))
+		return;
 	// The session holds its delegate until it is invalidated.
 	[client->session invalidateAndCancel];
 	[client->session release];
 	[client->delegate release];
+	SPUD_KILL(client);
 	const SPUD_ALLOCATOR allocator = client->head.allocator;
 	spud_string_free(&allocator, client->head.debug_name);
 	SPUD_DELETE(&allocator, struct spudnet_http_client_t, client);
@@ -1189,11 +1199,14 @@ SPUDRESULT spudnet_websocket_create(
 	*out_socket = NULL;
 	if (!instance)
 		return SPUDRESULT_SPUDNET_INVALID_INSTANCE;
+	if (SPUD_STALE(instance, "spudnet_websocket_create", "instance"))
+		return SPUDRESULT_SPUDNET_INVALID_INSTANCE;
 
 	struct spudnet_websocket_t *socket = SPUD_NEW_ZEROED(&instance->head.allocator, struct spudnet_websocket_t);
 	if (!socket)
 		return SPUDRESULT_OUT_OF_MEMORY;
 	socket->head.allocator = instance->head.allocator;
+	SPUD_BIRTH(socket);
 	socket->instance       = instance;
 	socket->state          = [[SpudNetWebSocketState alloc] init];
 	if (!socket->state || !socket->state->condition) {
@@ -1209,6 +1222,8 @@ SPUDRESULT spudnet_websocket_create(
 void spudnet_websocket_destroy(spudnet_websocket socket) {
 	if (!socket)
 		return;
+	if (SPUD_STALE(socket, "spudnet_websocket_destroy", "socket"))
+		return;
 	// The state outlives the socket while a callback is on its way; it must
 	// not outlive the socket's place in a wait set.
 	[socket->state->condition lock];
@@ -1219,6 +1234,7 @@ void spudnet_websocket_destroy(spudnet_websocket socket) {
 	[socket->task release];
 	[socket->session release];
 	[socket->state release];
+	SPUD_KILL(socket);
 	const SPUD_ALLOCATOR allocator = socket->head.allocator;
 	spud_string_free(&allocator, socket->head.debug_name);
 	SPUD_DELETE(&allocator, struct spudnet_websocket_t, socket);
@@ -1228,12 +1244,22 @@ void spudnet_websocket_get_error(
     spudnet_websocket socket,
     SPUDNET_ERROR_SIDE side,
     spudnet_error *out_error) {
-	bool known = socket && (side == SPUDNET_ERROR_SIDE_RECEIVING || side == SPUDNET_ERROR_SIDE_SENDING);
+	if (!socket) {
+		spudnet_error_get(NULL, out_error);
+		return;
+	}
+	if (SPUD_STALE(socket, "spudnet_websocket_get_error", "socket")) {
+		spudnet_error_get(NULL, out_error);
+		return;
+	}
+	bool known = side == SPUDNET_ERROR_SIDE_RECEIVING || side == SPUDNET_ERROR_SIDE_SENDING;
 	spudnet_error_get(known ? &socket->errors[side] : NULL, out_error);
 }
 
 void spudnet_websocket_abort(spudnet_websocket socket) {
 	if (!socket)
+		return;
+	if (SPUD_STALE(socket, "spudnet_websocket_abort", "socket"))
 		return;
 	SpudNetWebSocketState *state = socket->state;
 	[state->condition lock];
@@ -1253,6 +1279,8 @@ SPUDRESULT spudnet_websocket_connect(
 	if (out_http_status)
 		*out_http_status = 0;
 	if (!socket)
+		return SPUDRESULT_SPUDNET_INVALID_WEBSOCKET;
+	if (SPUD_STALE(socket, "spudnet_websocket_connect", "socket"))
 		return SPUDRESULT_SPUDNET_INVALID_WEBSOCKET;
 	if (!desc)
 		return SPUDRESULT_NULL_DESC;
@@ -1373,6 +1401,8 @@ SPUDRESULT spudnet_websocket_send(
     uint64_t size,
     uint32_t timeout_ms) {
 	if (!socket)
+		return SPUDRESULT_SPUDNET_INVALID_WEBSOCKET;
+	if (SPUD_STALE(socket, "spudnet_websocket_send", "socket"))
 		return SPUDRESULT_SPUDNET_INVALID_WEBSOCKET;
 	if ((size > 0 && !data) || size > NSUIntegerMax)
 		return SPUDRESULT_SPUDNET_SEND_FAILED;
@@ -1560,6 +1590,8 @@ SPUDRESULT spudnet_websocket_recv(
 	*out_message_complete = false;
 	if (!socket)
 		return SPUDRESULT_SPUDNET_INVALID_WEBSOCKET;
+	if (SPUD_STALE(socket, "spudnet_websocket_recv", "socket"))
+		return SPUDRESULT_SPUDNET_INVALID_WEBSOCKET;
 	if (!data || size == 0)
 		return SPUDRESULT_ZERO_SIZE;
 
@@ -1639,6 +1671,8 @@ SPUDRESULT spudnet_websocket_close(
     const char *reason) {
 	if (!socket)
 		return SPUDRESULT_SPUDNET_INVALID_WEBSOCKET;
+	if (SPUD_STALE(socket, "spudnet_websocket_close", "socket"))
+		return SPUDRESULT_SPUDNET_INVALID_WEBSOCKET;
 	size_t reason_length = reason ? strlen(reason) : 0;
 	if (reason_length > 123)
 		return SPUDRESULT_SPUDNET_SEND_FAILED;
@@ -1677,6 +1711,8 @@ SPUDRESULT spudnet_websocket_close(
 
 uint16_t spudnet_websocket_get_close_code(spudnet_websocket socket) {
 	if (!socket)
+		return 0;
+	if (SPUD_STALE(socket, "spudnet_websocket_get_close_code", "socket"))
 		return 0;
 	SpudNetWebSocketState *state = socket->state;
 	[state->condition lock];

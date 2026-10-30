@@ -351,7 +351,7 @@ static void spudinput_gameinput_read_battery(spudinput_gamepad_record *record) {
 /* ---- Backend ---- */
 
 SPUDINPUT_BACKEND_FUNCTION SPUDRESULT spudinput_gameinput_create(spudinput_instance instance) {
-	const SPUD_ALLOCATOR *allocator       = &instance->allocator;
+	const SPUD_ALLOCATOR *allocator       = &instance->head.allocator;
 	spudinput_gameinput_instance *backend = SPUD_NEW_ZEROED(allocator, spudinput_gameinput_instance);
 	if (!backend)
 		return SPUDRESULT_OUT_OF_MEMORY;
@@ -404,7 +404,7 @@ SPUDINPUT_BACKEND_FUNCTION void spudinput_gameinput_destroy(spudinput_instance i
 	eq_array_free(&backend->connected);
 	backend->dispatcher->lpVtbl->Release(backend->dispatcher);
 	backend->game_input->lpVtbl->Release(backend->game_input);
-	SPUD_DELETE(&instance->allocator, spudinput_gameinput_instance, backend);
+	SPUD_DELETE(&instance->head.allocator, spudinput_gameinput_instance, backend);
 	instance->backend = NULL;
 }
 
@@ -452,17 +452,17 @@ SPUDINPUT_BACKEND_FUNCTION SPUDRESULT spudinput_gameinput_poll(spudinput_instanc
 
 	spudinput_gameinput_pad **arrived = NULL;
 	if (arrived_count) {
-		arrived = SPUD_NEW_ARRAY_ZEROED(&instance->allocator, spudinput_gameinput_pad *, arrived_count);
+		arrived = SPUD_NEW_ARRAY_ZEROED(&instance->head.allocator, spudinput_gameinput_pad *, arrived_count);
 		if (!arrived) {
 			ReleaseSRWLockShared(&backend->lock);
 			return SPUDRESULT_OUT_OF_MEMORY;
 		}
 		for (uint32_t i = 0; i < arrived_count; ++i) {
-			arrived[i] = SPUD_NEW_ZEROED(&instance->allocator, spudinput_gameinput_pad);
+			arrived[i] = SPUD_NEW_ZEROED(&instance->head.allocator, spudinput_gameinput_pad);
 			if (!arrived[i]) {
 				for (uint32_t j = 0; j < i; ++j)
-					SPUD_DELETE(&instance->allocator, spudinput_gameinput_pad, arrived[j]);
-				SPUD_DELETE_ARRAY(&instance->allocator, spudinput_gameinput_pad *, arrived, arrived_count);
+					SPUD_DELETE(&instance->head.allocator, spudinput_gameinput_pad, arrived[j]);
+				SPUD_DELETE_ARRAY(&instance->head.allocator, spudinput_gameinput_pad *, arrived, arrived_count);
 				ReleaseSRWLockShared(&backend->lock);
 				return SPUDRESULT_OUT_OF_MEMORY;
 			}
@@ -471,8 +471,8 @@ SPUDINPUT_BACKEND_FUNCTION SPUDRESULT spudinput_gameinput_poll(spudinput_instanc
 	const SPUDRESULT reserved = spudinput_shared_reserve(instance, arrived_count);
 	if (reserved != SPUD_SUCCESS) {
 		for (uint32_t i = 0; i < arrived_count; ++i)
-			SPUD_DELETE(&instance->allocator, spudinput_gameinput_pad, arrived[i]);
-		SPUD_DELETE_ARRAY(&instance->allocator, spudinput_gameinput_pad *, arrived, arrived_count);
+			SPUD_DELETE(&instance->head.allocator, spudinput_gameinput_pad, arrived[i]);
+		SPUD_DELETE_ARRAY(&instance->head.allocator, spudinput_gameinput_pad *, arrived, arrived_count);
 		ReleaseSRWLockShared(&backend->lock);
 		return reserved;
 	}
@@ -510,7 +510,7 @@ SPUDINPUT_BACKEND_FUNCTION SPUDRESULT spudinput_gameinput_poll(spudinput_instanc
 		spudinput_gameinput_read_battery(record);
 	}
 	ReleaseSRWLockShared(&backend->lock);
-	SPUD_DELETE_ARRAY(&instance->allocator, spudinput_gameinput_pad *, arrived, arrived_count);
+	SPUD_DELETE_ARRAY(&instance->head.allocator, spudinput_gameinput_pad *, arrived, arrived_count);
 
 	return SPUD_SUCCESS;
 }
@@ -523,7 +523,7 @@ SPUDINPUT_BACKEND_FUNCTION void spudinput_gameinput_release_gamepad(
 	if (pad->reading)
 		pad->reading->lpVtbl->Release(pad->reading);
 	pad->device->lpVtbl->Release(pad->device);
-	SPUD_DELETE(&instance->allocator, spudinput_gameinput_pad, pad);
+	SPUD_DELETE(&instance->head.allocator, spudinput_gameinput_pad, pad);
 	record->native = NULL;
 }
 

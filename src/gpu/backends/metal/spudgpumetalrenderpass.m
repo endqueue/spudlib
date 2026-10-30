@@ -39,6 +39,10 @@ void spudgpu_cmd_image_barrier(
     SPUDGPU_IMAGE_LAYOUT new_layout) {
 	if (!cmd || !image)
 		return;
+	if (SPUD_STALE(cmd, "spudgpu_cmd_image_barrier", "cmd"))
+		return;
+	if (SPUD_STALE(image, "spudgpu_cmd_image_barrier", "image"))
+		return;
 	if (!spudgpumetal___internal_layout_recognized(old_layout) ||
 	    !spudgpumetal___internal_layout_recognized(new_layout)) {
 		printf("spudgpu: spudgpu_cmd_image_barrier - unrecognized SPUDGPU_IMAGE_LAYOUT value\n");
@@ -54,6 +58,10 @@ void spudgpu_cmd_image_barrier_view(
     SPUDGPU_IMAGE_LAYOUT old_layout,
     SPUDGPU_IMAGE_LAYOUT new_layout) {
 	if (!cmd || !image_view)
+		return;
+	if (SPUD_STALE(cmd, "spudgpu_cmd_image_barrier_view", "cmd"))
+		return;
+	if (SPUD_STALE(image_view, "spudgpu_cmd_image_barrier_view", "image_view"))
 		return;
 	if (!spudgpumetal___internal_layout_recognized(old_layout) ||
 	    !spudgpumetal___internal_layout_recognized(new_layout)) {
@@ -71,6 +79,10 @@ void spudgpu_cmd_image_barrier_subresource(
     SPUDGPU_IMAGE_LAYOUT old_layout,
     SPUDGPU_IMAGE_LAYOUT new_layout) {
 	if (!cmd || !image || !range)
+		return;
+	if (SPUD_STALE(cmd, "spudgpu_cmd_image_barrier_subresource", "cmd"))
+		return;
+	if (SPUD_STALE(image, "spudgpu_cmd_image_barrier_subresource", "image"))
 		return;
 	if (!spudgpumetal___internal_layout_recognized(old_layout) ||
 	    !spudgpumetal___internal_layout_recognized(new_layout)) {
@@ -123,6 +135,12 @@ void spudgpu_cmd_copy_buffer(
     uint64_t size) {
 	if (!cmd || !src_buffer || !dst_buffer)
 		return;
+	if (SPUD_STALE(cmd, "spudgpu_cmd_copy_buffer", "cmd"))
+		return;
+	if (SPUD_STALE(src_buffer, "spudgpu_cmd_copy_buffer", "src_buffer"))
+		return;
+	if (SPUD_STALE(dst_buffer, "spudgpu_cmd_copy_buffer", "dst_buffer"))
+		return;
 
 	spudgpu_command_list_metal *cmd_metal = (spudgpu_command_list_metal *)cmd;
 	spudgpu_buffer_metal *src_metal       = (spudgpu_buffer_metal *)src_buffer;
@@ -142,6 +160,12 @@ void spudgpu_cmd_copy_image_to_buffer(
     spudgpu_buffer dst_buffer,
     const spudgpu_image_buffer_copy_desc *desc) {
 	if (!cmd || !src_image || !dst_buffer || !desc)
+		return;
+	if (SPUD_STALE(cmd, "spudgpu_cmd_copy_image_to_buffer", "cmd"))
+		return;
+	if (SPUD_STALE(src_image, "spudgpu_cmd_copy_image_to_buffer", "src_image"))
+		return;
+	if (SPUD_STALE(dst_buffer, "spudgpu_cmd_copy_image_to_buffer", "dst_buffer"))
 		return;
 
 	spudgpu_command_list_metal *cmd_metal = (spudgpu_command_list_metal *)cmd;
@@ -173,6 +197,12 @@ void spudgpu_cmd_copy_buffer_to_image(
     spudgpu_image dst_image,
     const spudgpu_image_buffer_copy_desc *desc) {
 	if (!cmd || !src_buffer || !dst_image || !desc)
+		return;
+	if (SPUD_STALE(cmd, "spudgpu_cmd_copy_buffer_to_image", "cmd"))
+		return;
+	if (SPUD_STALE(src_buffer, "spudgpu_cmd_copy_buffer_to_image", "src_buffer"))
+		return;
+	if (SPUD_STALE(dst_image, "spudgpu_cmd_copy_buffer_to_image", "dst_image"))
 		return;
 
 	spudgpu_command_list_metal *cmd_metal = (spudgpu_command_list_metal *)cmd;
@@ -209,6 +239,8 @@ void spudgpu_get_image_buffer_copy_size(
     uint64_t *out_total_size) {
 	if (!image)
 		return;
+	if (SPUD_STALE(image, "spudgpu_get_image_buffer_copy_size", "image"))
+		return;
 
 	spudgpu_image_metal *image_metal = (spudgpu_image_metal *)image;
 
@@ -232,6 +264,8 @@ SPUDRESULT spudgpu_get_image_buffer_copy_offset_alignment(
     uint64_t *out_alignment) {
 	if (!image)
 		return SPUDRESULT_GPU_INVALID_IMAGE;
+	if (SPUD_STALE(image, "spudgpu_get_image_buffer_copy_offset_alignment", "image"))
+		return SPUDRESULT_GPU_INVALID_IMAGE;
 	if (!out_alignment)
 		return SPUDRESULT_NULL_OUTPUT_PARAMETER;
 	spudgpu_image_metal *image_metal = (spudgpu_image_metal *)image;
@@ -250,6 +284,12 @@ void spudgpu_cmd_blit_image(
     spudgpu_image dst_image,
     const spudgpu_image_blit_desc *desc) {
 	if (!cmd || !src_image || !dst_image || !desc)
+		return;
+	if (SPUD_STALE(cmd, "spudgpu_cmd_blit_image", "cmd"))
+		return;
+	if (SPUD_STALE(src_image, "spudgpu_cmd_blit_image", "src_image"))
+		return;
+	if (SPUD_STALE(dst_image, "spudgpu_cmd_blit_image", "dst_image"))
 		return;
 
 	spudgpu_command_list_metal *cmd_metal = (spudgpu_command_list_metal *)cmd;
@@ -308,6 +348,8 @@ void spudgpu_cmd_begin_rendering(
     spudgpu_command_list cmd,
     const spudgpu_rendering_begin_desc *desc) {
 	if (!cmd || !desc)
+		return;
+	if (SPUD_STALE(cmd, "spudgpu_cmd_begin_rendering", "cmd"))
 		return;
 	if (spud_struct_check(&desc->base, SPUD_STRUCT_TYPE_GPU_RENDERING_BEGIN_DESC) != SPUD_SUCCESS)
 		return;
@@ -398,6 +440,8 @@ void spudgpu_cmd_begin_rendering(
 void spudgpu_cmd_end_rendering(spudgpu_command_list cmd) {
 	if (!cmd)
 		return;
+	if (SPUD_STALE(cmd, "spudgpu_cmd_end_rendering", "cmd"))
+		return;
 
 	spudgpu_command_list_metal *cmd_metal = (spudgpu_command_list_metal *)cmd;
 	if (!cmd_metal->_active_render_encoder)
@@ -426,6 +470,10 @@ void spudgpu_cmd_clear_color_attachment(
     uint32_t width,
     uint32_t height) {
 	if (!cmd || !attachment)
+		return;
+	if (SPUD_STALE(cmd, "spudgpu_cmd_clear_color_attachment", "cmd"))
+		return;
+	if (SPUD_STALE(attachment, "spudgpu_cmd_clear_color_attachment", "attachment"))
 		return;
 
 	spudgpu_color_attachment_desc color = {0};
@@ -459,6 +507,10 @@ void spudgpu_cmd_clear_depth_attachment(
     uint32_t height) {
 	if (!cmd || !attachment)
 		return;
+	if (SPUD_STALE(cmd, "spudgpu_cmd_clear_depth_attachment", "cmd"))
+		return;
+	if (SPUD_STALE(attachment, "spudgpu_cmd_clear_depth_attachment", "attachment"))
+		return;
 	if (!clear_depth && !clear_stencil)
 		return;
 
@@ -485,6 +537,8 @@ void spudgpu_cmd_pipeline_barrier(
     const spudgpu_image_barrier *image_barriers,
     uint32_t image_barrier_count) {
 	if (!cmd)
+		return;
+	if (SPUD_STALE(cmd, "spudgpu_cmd_pipeline_barrier", "cmd"))
 		return;
 	if (buffer_barrier_count > 0 && !buffer_barriers)
 		return;

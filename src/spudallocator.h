@@ -6,7 +6,8 @@
 // frees and checks it the same way.
 //
 // Every handle's first member is a spud_object_head: the handle's debug name,
-// then a copy of the allocator its instance was made with. A handle frees
+// then a copy of the allocator its instance was made with, then in a Debug
+// build the tag that catches a destroyed handle (spudstale.h). A handle frees
 // through its own copy, its name included, so no destroy call takes an
 // allocator, and a handle that outlasts its instance (a SpudNet resolver whose
 // lookup is still out) still has it. A pointer to a handle converts to a pointer to its head
@@ -19,6 +20,7 @@
 // freed with the same count and needs no case of its own.
 
 #include "spudcore.h"
+#include "spudstale.h"
 #include <assert.h>
 #include <eqstd.h>
 #include <stdbool.h>
@@ -47,6 +49,12 @@ typedef struct spud_object_head {
 	// The allocator the handle was made with and frees through: a copy of
 	// its instance's.
 	SPUD_ALLOCATOR allocator;
+#if _DEBUG
+	// SPUD_LIVE while the handle lives, SPUD_DEAD from its destroy call on
+	// (spudstale.h). Debug builds only: a Release head is the two members
+	// above.
+	uint64_t debug_tag;
+#endif
 } spud_object_head;
 
 // The check a create call makes of a desc's allocator, right after the

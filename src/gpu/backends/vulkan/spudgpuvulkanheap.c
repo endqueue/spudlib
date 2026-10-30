@@ -233,6 +233,7 @@ SPUDRESULT spudgpu_create_heap(
     const spudgpu_heap_desc *desc,
     spudgpu_heap *out_heap) {
     if (!device) return SPUDRESULT_GPU_INVALID_DEVICE;
+    if (SPUD_STALE(device, "spudgpu_create_heap", "device")) return SPUDRESULT_GPU_INVALID_DEVICE;
     if (!desc) return SPUDRESULT_NULL_DESC;
     const SPUDRESULT base_sr = spud_struct_check(&desc->base, SPUD_STRUCT_TYPE_GPU_HEAP_DESC);
     if (base_sr != SPUD_SUCCESS) return base_sr;
@@ -292,6 +293,7 @@ SPUDRESULT spudgpu_create_heap(
         return SPUDRESULT_OUT_OF_MEMORY;
     }
     heap->head.allocator = device->head.allocator;
+    SPUD_BIRTH(heap);
     heap->_memory_vk = memory;
     heap->_memory_type_index_vk = memoryTypeIndex;
     heap->_memory_properties_vk = memoryProperties;
@@ -312,6 +314,7 @@ SPUDRESULT spudgpu_create_heap(
 
 void spudgpu_destroy_heap(spudgpu_heap heap) {
     if (!heap) return;
+    if (SPUD_STALE(heap, "spudgpu_destroy_heap", "heap")) return;
 #if _DEBUG
     // Every buffer and image placed in the heap is destroyed first (see
     // spudgpu.h).
@@ -321,6 +324,7 @@ void spudgpu_destroy_heap(spudgpu_heap heap) {
         vkUnmapMemory(heap->_device._logical_device_vk, heap->_memory_vk);
     vkFreeMemory(heap->_device._logical_device_vk, heap->_memory_vk, NULL);
     SPUDGPU___LIVE_REMOVE(&heap->_device._shared->live, SPUDGPU___OBJECT_HEAP);
+    SPUD_KILL(heap);
     const SPUD_ALLOCATOR allocator = heap->head.allocator;
     spud_string_free(&allocator, heap->head.debug_name);
     SPUD_DELETE(&allocator, spudgpu_heap_vulkan, heap);
@@ -330,6 +334,7 @@ SPUDRESULT spudgpu_get_heap_desc(
     spudgpu_heap heap,
     spudgpu_heap_desc *out_desc) {
     if (!heap) return SPUDRESULT_GPU_INVALID_HEAP;
+    if (SPUD_STALE(heap, "spudgpu_get_heap_desc", "heap")) return SPUDRESULT_GPU_INVALID_HEAP;
     if (!out_desc) return SPUDRESULT_NULL_OUTPUT_PARAMETER;
     *out_desc = heap->_desc;
     out_desc->base = spud_struct_base(SPUD_STRUCT_TYPE_GPU_HEAP_DESC);
@@ -341,6 +346,7 @@ SPUDRESULT spudgpu_get_buffer_placement_requirements(
     const spudgpu_buffer_desc *desc,
     spudgpu_placement_requirements *out_requirements) {
     if (!heap) return SPUDRESULT_GPU_INVALID_HEAP;
+    if (SPUD_STALE(heap, "spudgpu_get_buffer_placement_requirements", "heap")) return SPUDRESULT_GPU_INVALID_HEAP;
     if (!desc) return SPUDRESULT_NULL_DESC;
     const SPUDRESULT desc_base_sr = spud_struct_check(&desc->base, SPUD_STRUCT_TYPE_GPU_BUFFER_DESC);
     if (desc_base_sr != SPUD_SUCCESS) return desc_base_sr;
@@ -373,6 +379,7 @@ SPUDRESULT spudgpu_get_image_placement_requirements(
     const spudgpu_image_desc *desc,
     spudgpu_placement_requirements *out_requirements) {
     if (!heap) return SPUDRESULT_GPU_INVALID_HEAP;
+    if (SPUD_STALE(heap, "spudgpu_get_image_placement_requirements", "heap")) return SPUDRESULT_GPU_INVALID_HEAP;
     if (!desc) return SPUDRESULT_NULL_DESC;
     const SPUDRESULT desc_base_sr = spud_struct_check(&desc->base, SPUD_STRUCT_TYPE_GPU_IMAGE_DESC);
     if (desc_base_sr != SPUD_SUCCESS) return desc_base_sr;
@@ -404,6 +411,7 @@ SPUDRESULT spudgpu_create_placed_buffer(
     const spudgpu_buffer_desc *desc,
     spudgpu_buffer *out_buffer) {
     if (!heap) return SPUDRESULT_GPU_INVALID_HEAP;
+    if (SPUD_STALE(heap, "spudgpu_create_placed_buffer", "heap")) return SPUDRESULT_GPU_INVALID_HEAP;
     if (!desc) return SPUDRESULT_NULL_DESC;
     const SPUDRESULT base_sr = spud_struct_check(&desc->base, SPUD_STRUCT_TYPE_GPU_BUFFER_DESC);
     if (base_sr != SPUD_SUCCESS) return base_sr;
@@ -438,6 +446,7 @@ SPUDRESULT spudgpu_create_placed_buffer(
         return SPUDRESULT_OUT_OF_MEMORY;
     }
     buffer->head.allocator = heap->head.allocator;
+    SPUD_BIRTH(buffer);
     buffer->_buffer_vk = vk_buffer;
     buffer->_memory_vk = heap->_memory_vk;
     buffer->_memory_offset_vk = offset;
@@ -474,6 +483,7 @@ SPUDRESULT spudgpu_create_placed_image(
     const spudgpu_image_desc *desc,
     spudgpu_image *out_image) {
     if (!heap) return SPUDRESULT_GPU_INVALID_HEAP;
+    if (SPUD_STALE(heap, "spudgpu_create_placed_image", "heap")) return SPUDRESULT_GPU_INVALID_HEAP;
     if (!desc) return SPUDRESULT_NULL_DESC;
     const SPUDRESULT base_sr = spud_struct_check(&desc->base, SPUD_STRUCT_TYPE_GPU_IMAGE_DESC);
     if (base_sr != SPUD_SUCCESS) return base_sr;
@@ -508,6 +518,7 @@ SPUDRESULT spudgpu_create_placed_image(
         return SPUDRESULT_OUT_OF_MEMORY;
     }
     image->head.allocator = heap->head.allocator;
+    SPUD_BIRTH(image);
     image->_image_vk = vk_image;
     image->_memory_vk = heap->_memory_vk;
     image->_format_vk = info.format;
