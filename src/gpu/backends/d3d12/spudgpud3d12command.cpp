@@ -52,6 +52,8 @@ SPUDRESULT spudgpu_submit_command_lists(
 		return SPUDRESULT_GPU_INVALID_COMMAND_LIST;
 	if (cmd_list_count == 0)
 		return SPUDRESULT_ZERO_SIZE;
+	if (FAILED(queue->_device->_d3d_device->GetDeviceRemovedReason()))
+		return SPUDRESULT_GPU_DEVICE_LOST;
 	ID3D12CommandList **d3dLists =
 	    SPUD_NEW_ARRAY(&queue->head.allocator, ID3D12CommandList *, cmd_list_count);
 	if (!d3dLists)
@@ -641,6 +643,8 @@ SPUDRESULT spudgpu_queue_submit(
 		return SPUDRESULT_GPU_INVALID_COMMAND_LIST;
 	if (desc->cmd_list_count == 0)
 		return SPUDRESULT_ZERO_SIZE;
+	if (FAILED(queue->_device->_d3d_device->GetDeviceRemovedReason()))
+		return SPUDRESULT_GPU_DEVICE_LOST;
 	// Allocated before the waits are queued, so a failed allocation leaves
 	// the queue untouched.
 	ID3D12CommandList **d3dLists =
@@ -684,6 +688,9 @@ SPUDRESULT spudgpu_queue_submit(
 			result = SPUDRESULT_API_SPECIFIC_FAILURE;
 	}
 	spudgpu_d3d12___queue_leave(queue);
+	// A signal refused because the device was removed meanwhile.
+	if (result != SPUD_SUCCESS && FAILED(queue->_device->_d3d_device->GetDeviceRemovedReason()))
+		return SPUDRESULT_GPU_DEVICE_LOST;
 	return result;
 }
 void spudgpu_queue_wait_idle(spudgpu_command_queue queue) {

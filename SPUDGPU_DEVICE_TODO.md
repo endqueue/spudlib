@@ -985,6 +985,23 @@ touches the frame loop of every caller.
   callers move one at a time. Proposed: no shim; change the callers in the
   same change, as the version policy allows before 1.0.0.
 
+## A lost device (added 2026-10-30, for a caller's frame wait)
+
+`SPUDRESULT_GPU_DEVICE_LOST` (253): the device is lost, and nothing more
+it runs completes. Returned by `spudgpu_wait_for_fences` and the three
+submissions on Vulkan (`VK_ERROR_DEVICE_LOST`) and D3D12
+(`GetDeviceRemovedReason` asked before and after a fence wait, and around a
+submission; a removed device signals every fence to UINT64_MAX, so a wait
+would otherwise end as if it had succeeded). Never on Metal: Apple Silicon
+has no lost device (`MTLCommandBufferErrorDeviceRemoved` can't occur there,
+deprecated in the macOS 27 SDK), and a command buffer that faults fails
+alone. Written on macOS 2026-10-30 and not compiled: there are no Vulkan or
+D3D12 headers on that machine. Left: compile and run it on Windows (D3D12,
+Vulkan) and Linux (Vulkan); nothing forces a device to be lost, so the
+runs check the build and that nothing else changed. The present and the
+acquire (`void`, and a `UINT32_MAX` index) still can't say they failed for
+this reason: a change of their signatures, not made.
+
 ## Later, not in this change
 
 - **A polled "the adapters changed" call.** Recovery by a new instance is

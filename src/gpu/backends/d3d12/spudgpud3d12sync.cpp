@@ -99,6 +99,11 @@ SPUDRESULT spudgpu_wait_for_fences(
 			return SPUDRESULT_GPU_INVALID_FENCE;
 	}
 
+	// A removed device signals every fence to UINT64_MAX, so a wait on it
+	// returns at once: asked before the wait and after it.
+	if (FAILED(device->_d3d_device->GetDeviceRemovedReason()))
+		return SPUDRESULT_GPU_DEVICE_LOST;
+
 	HANDLE events[MAXIMUM_WAIT_OBJECTS];
 	uint32_t events_created = 0;
 
@@ -136,6 +141,8 @@ SPUDRESULT spudgpu_wait_for_fences(
 		return SPUDRESULT_GPU_FENCE_WAIT_TIMED_OUT;
 	if (result == WAIT_FAILED)
 		return SPUDRESULT_API_SPECIFIC_FAILURE;
+	if (FAILED(device->_d3d_device->GetDeviceRemovedReason()))
+		return SPUDRESULT_GPU_DEVICE_LOST;
 	return SPUD_SUCCESS;
 }
 

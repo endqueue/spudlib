@@ -75,7 +75,7 @@ SPUDRESULT spudgpu_submit_command_lists(
     if (r != VK_SUCCESS) {
         printf("spudgpu: vkQueueSubmit failed (%d)\n", r);
         SPUD_DELETE_ARRAY(allocator, VkCommandBuffer, buffers, cmd_list_count);
-        return SPUDRESULT_API_SPECIFIC_FAILURE;
+        return r == VK_ERROR_DEVICE_LOST ? SPUDRESULT_GPU_DEVICE_LOST : SPUDRESULT_API_SPECIFIC_FAILURE;
     }
     SPUD_DELETE_ARRAY(allocator, VkCommandBuffer, buffers, cmd_list_count);
     return SPUD_SUCCESS;
@@ -554,6 +554,8 @@ SPUDRESULT spudgpu_queue_submit(spudgpu_command_queue queue, const spudgpu_submi
     SPUD_DELETE_ARRAY(allocator, uint64_t, wait_values, wait_count);
     SPUD_DELETE_ARRAY(allocator, VkSemaphore, signal_sems, signal_count);
     SPUD_DELETE_ARRAY(allocator, uint64_t, signal_values, signal_count);
+    if (r == VK_ERROR_DEVICE_LOST)
+        return SPUDRESULT_GPU_DEVICE_LOST;
     return r == VK_SUCCESS ? SPUD_SUCCESS : SPUDRESULT_API_SPECIFIC_FAILURE;
 }
 

@@ -114,6 +114,8 @@ SPUDRESULT spudgpu_wait_for_fences(
     VkResult r = vkWaitSemaphores(device->_logical_device_vk, &info, timeout_ns);
     if (r == VK_TIMEOUT)
         return SPUDRESULT_GPU_FENCE_WAIT_TIMED_OUT;
+    if (r == VK_ERROR_DEVICE_LOST)
+        return SPUDRESULT_GPU_DEVICE_LOST;
     if (r != VK_SUCCESS)
         return SPUDRESULT_API_SPECIFIC_FAILURE;
     return SPUD_SUCCESS;

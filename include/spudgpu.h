@@ -1036,6 +1036,8 @@ SPUDRESULT spudgpu_get_command_queue(
  * @retval SPUDRESULT_GPU_INVALID_COMMAND_QUEUE `queue` is NULL.
  * @retval SPUDRESULT_GPU_INVALID_COMMAND_LIST `cmd_lists` is NULL.
  * @retval SPUDRESULT_ZERO_SIZE `cmd_list_count` is 0.
+ * @retval SPUDRESULT_GPU_DEVICE_LOST The device was lost: nothing is
+ *         submitted.
  * @return Another SPUDRESULT if the backend fails, such as
  *         SPUDRESULT_OUT_OF_MEMORY or SPUDRESULT_API_SPECIFIC_FAILURE.
  */
@@ -1064,6 +1066,8 @@ SPUDRESULT spudgpu_submit_command_lists(
  * @retval SPUDRESULT_GPU_INVALID_COMMAND_LIST `cmd_lists` is NULL.
  * @retval SPUDRESULT_ZERO_SIZE `cmd_list_count` is 0.
  * @retval SPUDRESULT_GPU_INVALID_SWAP_CHAIN `swap_chain` is NULL.
+ * @retval SPUDRESULT_GPU_DEVICE_LOST The device was lost: nothing is
+ *         submitted.
  * @return Another SPUDRESULT if the backend fails, such as
  *         SPUDRESULT_OUT_OF_MEMORY or SPUDRESULT_API_SPECIFIC_FAILURE.
  */
@@ -1141,6 +1145,8 @@ typedef struct spudgpu_submit_desc {
  * @retval SPUDRESULT_STRUCT_UNKNOWN_IN_CHAIN `desc->base.next` is not NULL.
  * @retval SPUDRESULT_GPU_INVALID_COMMAND_LIST `desc->cmd_lists` is NULL.
  * @retval SPUDRESULT_ZERO_SIZE `desc->cmd_list_count` is 0.
+ * @retval SPUDRESULT_GPU_DEVICE_LOST The device was lost: nothing is
+ *         submitted.
  * @return Another SPUDRESULT if the backend fails, such as
  *         SPUDRESULT_OUT_OF_MEMORY or SPUDRESULT_API_SPECIFIC_FAILURE.
  */
@@ -1440,6 +1446,9 @@ SPUDRESULT spudgpu_signal_fence(
  * @retval SPUDRESULT_ZERO_SIZE `fence_count` is 0.
  * @retval SPUDRESULT_DESC_INVALID_PARAMETERS `fence_count` is above 64.
  * @retval SPUDRESULT_GPU_FENCE_WAIT_TIMED_OUT The timeout ran out first.
+ * @retval SPUDRESULT_GPU_DEVICE_LOST The device was lost, before the wait or
+ *         during it: the fences will never reach their values. A wait with
+ *         no limit still ends then.
  * @return Another SPUDRESULT if the backend fails, such as
  *         SPUDRESULT_OUT_OF_MEMORY or SPUDRESULT_API_SPECIFIC_FAILURE.
  */

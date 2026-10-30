@@ -309,6 +309,13 @@ typedef enum SPUDRESULT {
 	/** A fence wait's timeout ran out before the fences reached their
 	 * values. */
 	SPUDRESULT_GPU_FENCE_WAIT_TIMED_OUT                        = 252,
+	/** The device is lost: removed, reset after a hang, or its driver
+	 * stopped. Nothing more it runs completes, and every object made from
+	 * it is only for destroying; a caller that goes on makes a new device.
+	 * Returned by spudgpu_wait_for_fences() and the submissions, on Vulkan
+	 * and D3D12. Never on Metal: a device on Apple Silicon isn't lost (a
+	 * command buffer that faults fails alone, and the device goes on). */
+	SPUDRESULT_GPU_DEVICE_LOST                                 = 253,
 	/** A shader stage the call can't take, or a pipeline desc that names
 	 * both a vertex and a mesh module. */
 	SPUDRESULT_GPU_INVALID_SHADER_STAGE                        = 280,
