@@ -49,7 +49,7 @@ Every module returns the shared `SPUDRESULT` enum (`spudcore.h`, 165 values with
 | SpudInput | `spudinput.h` | `spudinput_` / `SPUDRESULT_SPUDINPUT_*` | GameController (macOS, iOS, iPadOS), evdev (Linux), GameInput (Windows). Not written: XInput (Windows); with no API built in, no instance can be made |
 | SpudCore | `spudcore.h` | `spud_` / `SPUDRESULT` | platform-agnostic |
 | SpudPerf | `spudperf.h` | `spudperf_` | Windows, Linux, Apple |
-| SpudRandom | `spudrandom.h` | `spudrandom_` | `BCryptGenRandom` (Windows), `getrandom` (Linux), `getentropy` (Apple). The operating system's secure random bytes, one call, no state: SpudLib has no generator of its own. Added 2026-10-31; macOS compiled and run (`spudrandom_test`), Windows and Linux written, not compiled |
+| SpudRandom | `spudrandom.h` | `spudrandom_` | `BCryptGenRandom` (Windows), `getrandom` (Linux), `getentropy` (Apple). The operating system's secure random bytes, one call, no state: SpudLib has no generator of its own. Added 2026-10-31; macOS compiled and run (`spudrandom_test`). Run on Windows the same day (Windows 11, `windows-d3d12` and `windows-vulkan`, Debug, Release and `-asan`): its first compile there failed, `bcrypt.h` included before the `windows.h` it needs; fixed, `spudrandom_test` passes. Linux written, not compiled |
 
 SpudGPU dominates the codebase (133 functions across 24 opaque handles) and is where
 most work happens. The others are small, focused translation shims — don't let their

@@ -1,8 +1,13 @@
 #include "spudrandom.h"
 
 #if SPUDLIB_PLATFORM_WIN32
-#include <bcrypt.h>
+/* bcrypt.h needs windows.h's types (NTSTATUS, ULONG) declared before it,
+ * and WIN32_LEAN_AND_MEAN leaves it out of windows.h. */
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
 #include <windows.h>
+#include <bcrypt.h>
 #elif SPUDLIB_PLATFORM_LINUX
 #include <errno.h>
 #include <sys/random.h>
