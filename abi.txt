@@ -927,6 +927,7 @@ fn spudperf_get_monotonic_time_ns uint64_t (void)
 fn spudperf_get_ram_usage void (uint64_t *, uint64_t *)
 fn spudperf_sleep_until_monotonic_ms void (uint64_t)
 fn spudperf_sleep_until_monotonic_ns void (uint64_t)
+fn spudrandom_fill SPUDRESULT (void *, size_t)
 fn spudresult_str const char *(SPUDRESULT)
 [apple,windows] macro SPUDAUDIO_COMPILE_ALSA 0
 [linux] macro SPUDAUDIO_COMPILE_ALSA 1

@@ -17,6 +17,7 @@
 #include "spudmemory.h"
 #include "spudnet.h"
 #include "spudperf.h"
+#include "spudrandom.h"
 #include <stdbool.h>
 #include <stdio.h>
 
@@ -4399,6 +4400,8 @@ int main(void)
 	calls++;
 	spudperf_sleep_until_monotonic_ns((uint64_t){0});
 	unchecked++;
+	calls++;
+	(void)spudrandom_fill((void *){0}, (size_t){0}); // zeroes are valid: asking for no bytes succeeds, as spudrandom.h says
 	calls++;
 	printf("spud_misuse_tests: %d calls with zeroes, %d of them returning nothing to check, %d failure(s)\n", calls, unchecked, failures);
 #if MISUSE_FREED

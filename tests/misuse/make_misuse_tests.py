@@ -39,7 +39,7 @@ LIBRARY = 'SpudLib'
 RESULT = 'SPUDRESULT'
 OK = 'SPUD_SUCCESS'
 OUTPUT = 'spud_misuse_tests'
-HEADERS = ['spudaudio.h', 'spudcore.h', 'spudfiles.h', 'spudgpu.h', 'spudinput.h', 'spudmemory.h', 'spudnet.h', 'spudperf.h']
+HEADERS = ['spudaudio.h', 'spudcore.h', 'spudfiles.h', 'spudgpu.h', 'spudinput.h', 'spudmemory.h', 'spudnet.h', 'spudperf.h', 'spudrandom.h']
 
 # Function name prefixes called only when a macro is set, each with its
 # macro (a part of the library a build may leave out) and the header that
@@ -50,6 +50,7 @@ GUARDED = {
 # Functions zeroes are a valid call for, each with the reason.
 ZEROES_SUCCEED = {
     'spudgpu_destroy_instance': 'destroying NULL succeeds, as spudgpu.h says',
+    'spudrandom_fill': 'asking for no bytes succeeds, as spudrandom.h says',
 }
 
 # Functions not called: zeroes are outside their contract in a way a

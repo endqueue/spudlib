@@ -94,6 +94,7 @@ if(NOT TARGET spudlib)
         include/spudmemory.h
         include/spudnet.h
         include/spudperf.h
+        include/spudrandom.h
         src/net/spudnetshared.h
         src/input/spudinputshared.h
         src/spudcore.c
@@ -102,6 +103,7 @@ if(NOT TARGET spudlib)
         src/spudfiles.c
         src/files/spudfilesshared.h
         src/spudperf.c
+        src/spudrandom.c
         src/spudnet.c
         src/net/spudnethttp.c
         src/net/spudnetwaitset.c
@@ -321,7 +323,7 @@ if(NOT TARGET spudlib)
         target_compile_definitions(spudlib PUBLIC SPUDLIB_PLATFORM_WINDOWS=1)
         # winhttp: SpudNet's HTTP and WebSocket clients. crypt32: their
         # certificate checks against a caller's own roots and pins.
-        target_link_libraries(spudlib PRIVATE shlwapi ws2_32 winhttp crypt32)
+        target_link_libraries(spudlib PRIVATE shlwapi ws2_32 winhttp crypt32 bcrypt)
     elseif (UNIX AND NOT APPLE)
         target_compile_definitions(spudlib PUBLIC SPUDLIB_PLATFORM_LINUX=1)
         # SpudNet's HTTP and WebSocket clients (and its instance): libcurl4-openssl-dev /
@@ -663,6 +665,10 @@ if(NOT TARGET spudlib)
         add_executable(spudperf_test tests/spudperf_test.c)
         target_link_libraries(spudperf_test PRIVATE spudlib)
         add_test(NAME spudperf_test COMMAND spudperf_test)
+
+        add_executable(spudrandom_test tests/spudrandom_test.c)
+        target_link_libraries(spudrandom_test PRIVATE spudlib)
+        add_test(NAME spudrandom_test COMMAND spudrandom_test)
 
         # SpudInput's front end, and whatever gamepads happen to be plugged
         # in. It passes with none, so it is a ctest too.
